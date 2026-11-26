@@ -1,0 +1,593 @@
+/-
+Theorems of the membership layer (slice 7, `Strata/Members.lean`).
+
+What they say, in the order of the file:
+- Effective roles: a user holds `public`, its direct roles, and the roles of its teams, and nothing else.
+  The system holds none; an anonymous caller holds `public`.
+- The owner rule: in every tenant that has an owner, every accepted step leaves one (given that team ids
+  are distinct, which every accepted step keeps), and a tenant that is created has one.
+- Conferring: an accepted assignment, team role grant, team membership or invitation redemption gives a
+  principal no role that it could not hand out: the conferrer, or for a redemption the issuer, could
+  confer it in the state before.
+- Invitations: an accepted creation expires fourteen days after its time; an accepted redemption was
+  made to the one verified address, before expiry, unredeemed, unrevoked, with the issuer still
+  authorised, and afterwards the invitation is redeemed, so no later redemption is accepted; a revoked
+  invitation is never redeemed.
+- Reserved principal ids are refused before anything else.
+- Creating a tenant: only the system, only when the tenant does not exist, with a name that is not blank;
+  the tenant it makes has the owner, the built-in roles, no teams and no invitations.
+
+Every statement is about the decisions of `Strata/Members.lean`, with no hypothesis beyond those named.
+-/
+
+import Strata.Members
+
+namespace Strata
+
+/-! ## Lookups in the member table and the team table -/
+
+/-- A lookup in a table with the entries of key `p` removed finds nothing under `p`. -/
+theorem lookup_filter_self {β : Type} (l : List (PrincipalId × β)) (p : PrincipalId) :
+    (l.filter (fun e => e.1 != p)).lookup p = none := by
+  induction l with
+  | nil => rfl
+  | cons e l ih =>
+    rcases e with ⟨k, b⟩
+    by_cases hk : k = p
+    · subst hk
+      simp [List.filter_cons, ih]
+    · have hkp : (k != p) = true := by simpa using hk
+      have hpk : (p == k) = false := by simpa using Ne.symm hk
+      simp [List.filter_cons, hkp, List.lookup_cons, hpk, ih]
+
+/-- Removing the entries of key `p` leaves a lookup of any other key unchanged. -/
+theorem lookup_filter_ne {β : Type} (l : List (PrincipalId × β)) (p q : PrincipalId) (hq : q ≠ p) :
+    (l.filter (fun e => e.1 != p)).lookup q = l.lookup q := by
+  induction l with
+  | nil => rfl
+  | cons e l ih =>
+    rcases e with ⟨k, b⟩
+    by_cases hk : k = p
+    · subst hk
+      have hqk : (q == k) = false := by simpa using hq
+      simp [List.filter_cons, List.lookup_cons, hqk, ih]
+    · have hkp : (k != p) = true := by simpa using hk
+      simp [List.filter_cons, hkp, List.lookup_cons, ih]
+
+/-- A key found by a lookup is a key of the table. -/
+theorem lookup_some_key {β : Type} (l : List (PrincipalId × β)) (q : PrincipalId) (v : β)
+    (h : l.lookup q = some v) : q ∈ l.map Prod.fst := by
+  obtain ⟨l₁, l₂, hl, _⟩ := List.lookup_eq_some_iff.mp h
+  rw [hl]
+  simp
+
+/-- The pair a lookup finds is an entry of the table. -/
+theorem mem_of_lookup_some {β : Type} (l : List (PrincipalId × β)) (q : PrincipalId) (v : β)
+    (h : l.lookup q = some v) : (q, v) ∈ l := by
+  obtain ⟨l₁, l₂, hl, _⟩ := List.lookup_eq_some_iff.mp h
+  rw [hl]
+  simp
+
+/-- Two entries of a table with distinct keys that have the same key are the same entry. -/
+theorem eq_of_key_nodup {β : Type} : ∀ (l : List (TeamId × β)), (l.map Prod.fst).Nodup →
+    ∀ a ∈ l, ∀ b ∈ l, a.1 = b.1 → a = b
+  | [], _, a, ha, _, _, _ => by simp at ha
+  | x :: l, hn, a, ha, b, hb, hk => by
+    rw [List.map_cons, List.nodup_cons] at hn
+    rcases List.mem_cons.mp ha with ha1 | ha1 <;> rcases List.mem_cons.mp hb with hb1 | hb1
+    · subst ha1
+      subst hb1
+      rfl
+    · subst ha1
+      exfalso
+      apply hn.1
+      rw [hk]
+      exact List.mem_map_of_mem hb1
+    · subst hb1
+      exfalso
+      apply hn.1
+      rw [← hk]
+      exact List.mem_map_of_mem ha1
+    · exact eq_of_key_nodup l hn.2 a ha1 b hb1 hk
+
+/-! ## Effective roles -/
+
+/-- The roles a user holds through its teams are those of each team it is a member of. -/
+theorem mem_teamRoles (m : MTenant) (q : PrincipalId) (r : RoleId) :
+    r ∈ m.teamRoles q ↔ ∃ e ∈ m.teams, q ∈ e.2.members ∧ r ∈ e.2.roles := by
+  unfold MTenant.teamRoles
+  simp only [List.mem_flatMap, List.mem_filter, List.contains_iff_mem, and_assoc]
+
+/-- A user holds `public`, its direct roles and the roles of its teams, and nothing else. -/
+theorem effective_roles (m : MTenant) (q : PrincipalId) (r : RoleId) :
+    r ∈ m.rolesOf (.user q) ↔
+      r = publicRole ∨ r ∈ m.directOf q ∨ ∃ e ∈ m.teams, q ∈ e.2.members ∧ r ∈ e.2.roles := by
+  simp only [MTenant.rolesOf, List.mem_cons, List.mem_append, mem_teamRoles]
+
+/-- The system holds no role. -/
+theorem system_holds_no_role (m : MTenant) : m.rolesOf .system = [] := rfl
+
+/-- An anonymous caller holds `public` and nothing else. -/
+theorem anonymous_holds_public (m : MTenant) : m.rolesOf .anonymous = [publicRole] := rfl
+
+/-- The system may not manage members: it holds no role, so no policy reaches it. -/
+theorem system_cannot_manage_members (m : MTenant) : manageMembers m .system = false := by
+  unfold manageMembers
+  simp [system_holds_no_role]
+
+/-- The direct roles of a user, after its entry in the member table is replaced. -/
+theorem directOf_setDirect (m : MTenant) (p q : PrincipalId) (rs : List RoleId) :
+    (setDirect m p rs).directOf q = if q = p then rs else m.directOf q := by
+  unfold setDirect MTenant.directOf
+  by_cases hq : q = p
+  · subst hq
+    by_cases hr : rs.isEmpty
+    · rw [List.isEmpty_iff] at hr
+      subst hr
+      simp [lookup_filter_self]
+    · simp [hr, List.lookup_cons]
+  · have hqp : (q == p) = false := by simpa using hq
+    by_cases hr : rs.isEmpty <;>
+      simp [hr, hq, hqp, lookup_filter_ne _ p q hq, List.lookup_cons]
+
+/-- Giving a user roles that keep every role it held keeps those of every principal. -/
+theorem rolesOf_mono_setDirect (m : MTenant) (p : PrincipalId) (rs : List RoleId)
+    (h : ∀ r ∈ m.directOf p, r ∈ rs) :
+    ∀ q r, r ∈ m.rolesOf (.user q) → r ∈ (setDirect m p rs).rolesOf (.user q) := by
+  intro q r hr
+  rw [effective_roles] at hr ⊢
+  rcases hr with hr | hr | hr
+  · exact Or.inl hr
+  · right; left
+    rw [directOf_setDirect]
+    by_cases hq : q = p
+    · subst hq
+      simp only [if_true]
+      exact h r hr
+    · simp only [hq, if_false]
+      exact hr
+  · exact Or.inr (Or.inr hr)
+
+/-! ## The owner rule -/
+
+/-- Some user holds the owner role exactly when the owner role is among the roles of a user. -/
+theorem hasOwner_iff (m : MTenant) : m.hasOwner = true ↔ ∃ q, ownerRole ∈ m.rolesOf (.user q) := by
+  constructor
+  · intro h
+    unfold MTenant.hasOwner at h
+    obtain ⟨q, _, hq⟩ := List.any_eq_true.mp h
+    exact ⟨q, by simpa using hq⟩
+  · rintro ⟨q, hq⟩
+    unfold MTenant.hasOwner
+    apply List.any_eq_true.mpr
+    refine ⟨q, ?_, by simpa using hq⟩
+    rw [effective_roles] at hq
+    unfold MTenant.ownerCandidates
+    rcases hq with h | h | ⟨e, he, hm, _⟩
+    · simp [ownerRole, publicRole] at h
+    · apply List.mem_append_left
+      unfold MTenant.directOf at h
+      cases hl : m.base.members.lookup q with
+      | none => rw [hl] at h; simp at h
+      | some v => exact List.mem_map.mpr ⟨(q, v), mem_of_lookup_some _ q v hl, rfl⟩
+    · apply List.mem_append_right
+      exact List.mem_flatMap.mpr ⟨e, he, hm⟩
+
+/-- If every role a user holds stays held, a tenant with an owner keeps one. -/
+theorem hasOwner_of_mono (m m' : MTenant)
+    (h : ∀ q r, r ∈ m.rolesOf (.user q) → r ∈ m'.rolesOf (.user q)) (ho : m.hasOwner = true) :
+    m'.hasOwner = true := by
+  obtain ⟨q, hq⟩ := (hasOwner_iff m).mp ho
+  exact (hasOwner_iff m').mpr ⟨q, h q ownerRole hq⟩
+
+/-- A tenant that is created has an owner. -/
+theorem genesis_hasOwner (o : PrincipalId) : (genesisTenant o).hasOwner = true := by
+  rw [hasOwner_iff]
+  refine ⟨o, ?_⟩
+  simp [effective_roles, MTenant.directOf, genesisTenant, ownerRole]
+
+/-- The team table after the entry of team `T` is replaced by `d'`: a user's team roles are those of the
+    teams it is in, and of `T` as `d'` gives it. -/
+theorem mem_teamRoles_putTeam (m : MTenant) (T : TeamId) (d : TeamDef) (q : PrincipalId) (r : RoleId) :
+    r ∈ (putTeam m T d).teamRoles q ↔
+      (q ∈ d.members ∧ r ∈ d.roles) ∨ ∃ e ∈ m.teams, e.1 ≠ T ∧ q ∈ e.2.members ∧ r ∈ e.2.roles := by
+  rw [mem_teamRoles]
+  unfold putTeam
+  constructor
+  · rintro ⟨e, he, hq, hr⟩
+    rw [List.mem_cons, List.mem_filter] at he
+    rcases he with rfl | ⟨he, hne⟩
+    · exact Or.inl ⟨hq, hr⟩
+    · exact Or.inr ⟨e, he, by simpa using hne, hq, hr⟩
+  · rintro (⟨hq, hr⟩ | ⟨e, he, hne, hq, hr⟩)
+    · exact ⟨(T, d), List.mem_cons_self, hq, hr⟩
+    · exact ⟨e, List.mem_cons_of_mem _ (List.mem_filter.mpr ⟨he, by simpa using hne⟩), hq, hr⟩
+
+/-- Replacing a team by one with at least its members and at least its roles keeps every team role a user
+    held (given the team's entry is in the table, and team ids are distinct). -/
+theorem teamRoles_putTeam_mono (m : MTenant) (T : TeamId) (d d' : TeamDef)
+    (hn : (m.teams.map Prod.fst).Nodup) (hd : (T, d) ∈ m.teams)
+    (hm : ∀ p, p ∈ d.members → p ∈ d'.members) (hr : ∀ x ∈ d.roles, x ∈ d'.roles)
+    (q : PrincipalId) (x : RoleId) (hx : x ∈ m.teamRoles q) :
+    x ∈ (putTeam m T d').teamRoles q := by
+  rw [mem_teamRoles] at hx
+  obtain ⟨e, he, hq, hxe⟩ := hx
+  rw [mem_teamRoles_putTeam]
+  by_cases hk : e.1 = T
+  · have hee : e = (T, d) := eq_of_key_nodup m.teams hn e he (T, d) hd (by simpa using hk)
+    subst hee
+    exact Or.inl ⟨hm q hq, hr x hxe⟩
+  · exact Or.inr ⟨e, he, hk, hq, hxe⟩
+
+/-- Team ids are distinct: each team id occurs once in the table. -/
+def MTenant.TeamsNodup (m : MTenant) : Prop := (m.teams.map Prod.fst).Nodup
+
+/-- Replacing the entry of a team keeps team ids distinct. -/
+theorem putTeam_teamsNodup (m : MTenant) (T : TeamId) (d : TeamDef) (hn : m.TeamsNodup) :
+    (putTeam m T d).TeamsNodup := by
+  unfold MTenant.TeamsNodup at hn ⊢
+  unfold putTeam
+  simp only [List.map_cons]
+  rw [List.nodup_cons]
+  constructor
+  · intro hmem
+    obtain ⟨e, he, hk⟩ := List.mem_map.mp hmem
+    rw [List.mem_filter] at he
+    have : e.1 ≠ T := by simpa using he.2
+    exact this hk
+  · exact List.Sublist.nodup ((List.filter_sublist).map Prod.fst) hn
+
+/-- The entry a lookup finds for a key of a table with distinct keys is the entry given. -/
+theorem lookup_of_mem_nodup {β : Type} : ∀ (l : List (TeamId × β)), (l.map Prod.fst).Nodup →
+    ∀ e ∈ l, l.lookup e.1 = some e.2
+  | [], _, e, he => by simp at he
+  | ⟨k, b⟩ :: l, hn, e, he => by
+    rw [List.map_cons, List.nodup_cons] at hn
+    rcases List.mem_cons.mp he with he1 | he1
+    · subst he1
+      simp
+    · have hne : k ≠ e.1 := fun hk => hn.1 (by
+        show k ∈ l.map Prod.fst
+        rw [hk]
+        exact List.mem_map_of_mem he1)
+      have hne' : (e.1 == k) = false := by simpa using Ne.symm hne
+      rw [List.lookup_cons, hne']
+      exact lookup_of_mem_nodup l hn.2 e he1
+
+/-- Replacing a team by one that keeps the members and roles of each entry for its key keeps every
+    team role a user held. -/
+theorem putTeam_mono (m : MTenant) (T : TeamId) (d' : TeamDef) (hn : m.TeamsNodup)
+    (hT : ∀ e ∈ m.teams, e.1 = T → (∀ p ∈ e.2.members, p ∈ d'.members) ∧ ∀ x ∈ e.2.roles, x ∈ d'.roles) :
+    ∀ q x, x ∈ m.rolesOf (.user q) → x ∈ (putTeam m T d').rolesOf (.user q) := by
+  intro q x hx
+  rw [effective_roles] at hx ⊢
+  rcases hx with hx | hx | ⟨e, he, hq, hxe⟩
+  · exact Or.inl hx
+  · exact Or.inr (Or.inl hx)
+  · right; right
+    apply (mem_teamRoles _ _ _).mp
+    rw [mem_teamRoles_putTeam]
+    by_cases hk : e.1 = T
+    · exact Or.inl ⟨(hT e he hk).1 q hq, (hT e he hk).2 x hxe⟩
+    · exact Or.inr ⟨e, he, hk, hq, hxe⟩
+
+/-- The member table and the invitations do not change the effective roles of anyone. -/
+theorem rolesOf_putInv (m : MTenant) (i : InvitationId) (d : InvitationDef) (p : Principal) :
+    (putInv m i d).rolesOf p = m.rolesOf p := by
+  cases p <;> rfl
+
+/-- The roles of a list folded into a set of roles, each of which is kept. -/
+theorem mem_foldl_insert (roles : List RoleId) : ∀ (D : List RoleId) (r : RoleId), r ∈ D →
+    r ∈ roles.foldl (fun acc x => acc.insert x) D := by
+  induction roles with
+  | nil => intro D r hr; exact hr
+  | cons x xs ih =>
+    intro D r hr
+    exact ih (D.insert x) r (List.mem_insert_iff.mpr (Or.inr hr))
+
+/-- A role of the list folded into a set of roles is one of the set or one of the list. -/
+theorem mem_of_mem_foldl_insert (roles : List RoleId) : ∀ (D : List RoleId) (r : RoleId),
+    r ∈ roles.foldl (fun acc x => acc.insert x) D → r ∈ D ∨ r ∈ roles := by
+  induction roles with
+  | nil => intro D r hr; exact Or.inl hr
+  | cons x xs ih =>
+    intro D r hr
+    rcases ih (D.insert x) r hr with h | h
+    · rcases List.mem_insert_iff.mp h with h1 | h1
+      · exact Or.inr (by simp [h1])
+      · exact Or.inl h1
+    · exact Or.inr (List.mem_cons_of_mem _ h)
+
+/-- The team ids of a member table with an entry replaced stay distinct. -/
+theorem stepMember_teamsNodup_of_teams {m m' : MTenant} (hn : m.TeamsNodup) (h : m'.teams = m.teams) :
+    m'.TeamsNodup := by
+  unfold MTenant.TeamsNodup at hn ⊢
+  rw [h]
+  exact hn
+
+/-! ## The owner rule, step by step -/
+
+/-- Giving a role directly never removes an owner. -/
+theorem directOf_grow_mono (m : MTenant) (target : PrincipalId) (rs : List RoleId)
+    (h : ∀ r ∈ m.directOf target, r ∈ rs) :
+    ∀ q x, x ∈ m.rolesOf (.user q) → x ∈ (setDirect m target rs).rolesOf (.user q) :=
+  rolesOf_mono_setDirect m target rs h
+
+/-- An accepted assignment or revocation of a role directly keeps an owner, when it is a grant, and a
+    revocation keeps one only when the tenant keeps one. -/
+theorem changeRole_owner (m m' : MTenant) (c : MCtx) (target : PrincipalId) (role : RoleId)
+    (grant : Bool) (h : changeRole m c target role grant = .ok m') (ho : m.hasOwner = true) :
+    m'.hasOwner = true := by
+  cases grant
+  · unfold changeRole at h
+    dsimp only at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals first
+      | (simp_all; done)
+      | exact hasOwner_of_mono _ _ (directOf_grow_mono _ _ _ (fun r hr => List.mem_insert_iff.mpr (Or.inr hr))) ho
+  · unfold changeRole at h
+    dsimp only at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals first
+      | exact hasOwner_of_mono _ _ (directOf_grow_mono _ _ _ (fun r hr => List.mem_insert_iff.mpr (Or.inr hr))) ho
+      | (simp_all; done)
+
+
+/-- A team entry the lookup finds is the entry given, when team ids are distinct: the team's roles and
+    members are those of the entry it replaces. -/
+theorem putTeam_mono_some (m : MTenant) (T : TeamId) (d d' : TeamDef) (hn : m.TeamsNodup)
+    (hl : m.teams.lookup T = some d) (hm : ∀ p ∈ d.members, p ∈ d'.members)
+    (hr : ∀ x ∈ d.roles, x ∈ d'.roles) :
+    ∀ q x, x ∈ m.rolesOf (.user q) → x ∈ (putTeam m T d').rolesOf (.user q) := by
+  apply putTeam_mono m T d' hn
+  intro e he hk
+  have h1 := lookup_of_mem_nodup m.teams hn e he
+  have h2 : e.2 = d := by
+    rw [hk, hl] at h1
+    exact (Option.some.inj h1).symm
+  rw [h2]
+  exact ⟨hm, hr⟩
+
+/-- Adding a team that no entry names keeps every team role a user held. -/
+theorem putTeam_mono_none (m : MTenant) (T : TeamId) (d' : TeamDef) (hn : m.TeamsNodup)
+    (hl : m.teams.lookup T = none) :
+    ∀ q x, x ∈ m.rolesOf (.user q) → x ∈ (putTeam m T d').rolesOf (.user q) := by
+  apply putTeam_mono m T d' hn
+  intro e he hk
+  have h1 := lookup_of_mem_nodup m.teams hn e he
+  rw [hk, hl] at h1
+  cases h1
+
+/-- Defining a team, or relabelling it, keeps an owner. -/
+theorem defineTeam_owner (m m' : MTenant) (c : MCtx) (team : TeamId) (label : String)
+    (hn : m.TeamsNodup) (h : defineTeamStep m c team label = .ok m') (ho : m.hasOwner = true) :
+    m'.hasOwner = true := by
+  unfold defineTeamStep at h
+  cases hl : m.teams.lookup team with
+  | none =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact hasOwner_of_mono _ _ (putTeam_mono_none m team _ hn hl) ho
+  | some d0 =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact hasOwner_of_mono _ _ (putTeam_mono_some m team d0 _ hn hl (fun p hp => hp)
+      (fun x hx => hx)) ho
+
+/-- Assigning or revoking a team role keeps an owner (a revocation only when one remains). -/
+theorem teamRole_owner (m m' : MTenant) (c : MCtx) (team : TeamId) (role : RoleId) (grant : Bool)
+    (hn : m.TeamsNodup) (h : teamRoleStep m c team role grant = .ok m') (ho : m.hasOwner = true) :
+    m'.hasOwner = true := by
+  cases grant
+  · unfold teamRoleStep at h
+    cases hl : m.teams.lookup team with
+    | none => simp only [hl] at h; repeat' split at h; all_goals try cases h
+    | some d =>
+      simp only [hl] at h
+      repeat' split at h
+      all_goals try cases h
+      all_goals first
+        | (simp_all; done)
+        | exact hasOwner_of_mono _ _ (putTeam_mono_some m team d _ hn hl (fun p hp => hp)
+            (fun x hx => hx)) ho
+  · unfold teamRoleStep at h
+    cases hl : m.teams.lookup team with
+    | none => simp only [hl] at h; repeat' split at h; all_goals try cases h
+    | some d =>
+      simp only [hl] at h
+      repeat' split at h
+      all_goals try cases h
+      all_goals first
+        | exact hasOwner_of_mono _ _ (putTeam_mono_some m team d _ hn hl (fun p hp => hp)
+            (fun x hx => List.mem_insert_iff.mpr (Or.inr hx))) ho
+        | (simp_all; done)
+
+/-- Adding or removing a team member keeps an owner (a removal only when one remains). -/
+theorem teamMember_owner (m m' : MTenant) (c : MCtx) (team : TeamId) (p : PrincipalId) (add : Bool)
+    (hn : m.TeamsNodup) (h : teamMemberStep m c team p add = .ok m') (ho : m.hasOwner = true) :
+    m'.hasOwner = true := by
+  cases add
+  · unfold teamMemberStep at h
+    cases hl : m.teams.lookup team with
+    | none => simp only [hl] at h; repeat' split at h; all_goals try cases h
+    | some d =>
+      simp only [hl] at h
+      repeat' split at h
+      all_goals try cases h
+      all_goals first
+        | (simp_all; done)
+        | exact hasOwner_of_mono _ _ (putTeam_mono_some m team d _ hn hl
+            (fun p' hp => hp) (fun x hx => hx)) ho
+  · unfold teamMemberStep at h
+    cases hl : m.teams.lookup team with
+    | none => simp only [hl] at h; repeat' split at h; all_goals try cases h
+    | some d =>
+      simp only [hl] at h
+      repeat' split at h
+      all_goals try cases h
+      all_goals first
+        | exact hasOwner_of_mono _ _ (putTeam_mono_some m team d _ hn hl
+            (fun p' hp => List.mem_insert_iff.mpr (Or.inr hp)) (fun x hx => hx)) ho
+        | (simp_all; done)
+
+/-- Issuing or revoking an invitation changes no role, so it keeps an owner. -/
+theorem putInv_owner (m m' : MTenant) (h : ∀ q, m'.rolesOf (.user q) = m.rolesOf (.user q))
+    (ho : m.hasOwner = true) : m'.hasOwner = true :=
+  hasOwner_of_mono _ _ (fun q x hx => by rw [h q]; exact hx) ho
+
+theorem createInvitation_owner (m m' : MTenant) (c : MCtx) (inv : InvitationId) (address : String)
+    (roles : List RoleId) (h : createInvitationStep m c inv address roles = .ok m')
+    (ho : m.hasOwner = true) : m'.hasOwner = true := by
+  unfold createInvitationStep at h
+  dsimp only at h
+  repeat' split at h
+  all_goals try cases h
+  all_goals exact putInv_owner _ _ (fun q => by simp only [rolesOf_putInv]) ho
+
+theorem revokeInvitation_owner (m m' : MTenant) (c : MCtx) (inv : InvitationId)
+    (h : revokeInvitationStep m c inv = .ok m') (ho : m.hasOwner = true) : m'.hasOwner = true := by
+  unfold revokeInvitationStep at h
+  repeat' split at h
+  all_goals try cases h
+  all_goals exact putInv_owner _ _ (fun q => by simp only [rolesOf_putInv]) ho
+
+theorem redeemInvitation_owner (m m' : MTenant) (c : MCtx) (inv : InvitationId)
+    (h : redeemInvitationStep m c inv = .ok m') (ho : m.hasOwner = true) : m'.hasOwner = true := by
+  unfold redeemInvitationStep at h
+  cases hl : m.invitations.lookup inv with
+  | none => simp only [hl] at h; repeat' split at h; all_goals try cases h
+  | some o =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact hasOwner_of_mono _ _ (fun q x hx => by
+      rw [rolesOf_putInv]
+      exact rolesOf_mono_setDirect m _ _ (fun r hr => mem_foldl_insert _ _ r hr) q x hx) ho
+
+/-- Every step keeps the owner of a tenant that has one. -/
+theorem stepMember_owner_kept (m m' : MTenant) (c : MCtx) (i : MemberIntent) (hn : m.TeamsNodup)
+    (h : stepMember m c i = .ok m') (ho : m.hasOwner = true) : m'.hasOwner = true := by
+  cases i with
+  | assignRole p r => exact changeRole_owner m m' c p r true h ho
+  | revokeRole p r => exact changeRole_owner m m' c p r false h ho
+  | defineTeam t l => exact defineTeam_owner m m' c t l hn h ho
+  | assignTeamRole t r => exact teamRole_owner m m' c t r true hn h ho
+  | revokeTeamRole t r => exact teamRole_owner m m' c t r false hn h ho
+  | addTeamMember t p => exact teamMember_owner m m' c t p true hn h ho
+  | removeTeamMember t p => exact teamMember_owner m m' c t p false hn h ho
+  | createInvitation i a rs => exact createInvitation_owner m m' c i a rs h ho
+  | revokeInvitation i => exact revokeInvitation_owner m m' c i h ho
+  | redeemInvitation i => exact redeemInvitation_owner m m' c i h ho
+
+/-! ## Team ids stay distinct -/
+
+theorem changeRole_nodup (m m' : MTenant) (c : MCtx) (target : PrincipalId) (role : RoleId)
+    (grant : Bool) (hn : m.TeamsNodup) (h : changeRole m c target role grant = .ok m') :
+    m'.TeamsNodup := by
+  cases grant
+  · unfold changeRole at h
+    dsimp only at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact stepMember_teamsNodup_of_teams hn rfl
+  · unfold changeRole at h
+    dsimp only at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact stepMember_teamsNodup_of_teams hn rfl
+
+theorem defineTeam_nodup (m m' : MTenant) (c : MCtx) (team : TeamId) (label : String)
+    (hn : m.TeamsNodup) (h : defineTeamStep m c team label = .ok m') : m'.TeamsNodup := by
+  unfold defineTeamStep at h
+  cases hl : m.teams.lookup team with
+  | none =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact putTeam_teamsNodup m _ _ hn
+  | some d0 =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact putTeam_teamsNodup m _ _ hn
+
+theorem teamRole_nodup (m m' : MTenant) (c : MCtx) (team : TeamId) (role : RoleId) (grant : Bool)
+    (hn : m.TeamsNodup) (h : teamRoleStep m c team role grant = .ok m') : m'.TeamsNodup := by
+  unfold teamRoleStep at h
+  cases hl : m.teams.lookup team with
+  | none =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact putTeam_teamsNodup m _ _ hn
+  | some d =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact putTeam_teamsNodup m _ _ hn
+
+theorem teamMember_nodup (m m' : MTenant) (c : MCtx) (team : TeamId) (p : PrincipalId) (add : Bool)
+    (hn : m.TeamsNodup) (h : teamMemberStep m c team p add = .ok m') : m'.TeamsNodup := by
+  unfold teamMemberStep at h
+  cases hl : m.teams.lookup team with
+  | none =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact putTeam_teamsNodup m _ _ hn
+  | some d =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact putTeam_teamsNodup m _ _ hn
+
+theorem createInvitation_nodup (m m' : MTenant) (c : MCtx) (inv : InvitationId) (address : String)
+    (roles : List RoleId) (hn : m.TeamsNodup) (h : createInvitationStep m c inv address roles = .ok m') :
+    m'.TeamsNodup := by
+  unfold createInvitationStep at h
+  dsimp only at h
+  repeat' split at h
+  all_goals try cases h
+  all_goals exact stepMember_teamsNodup_of_teams hn rfl
+
+theorem revokeInvitation_nodup (m m' : MTenant) (c : MCtx) (inv : InvitationId) (hn : m.TeamsNodup)
+    (h : revokeInvitationStep m c inv = .ok m') : m'.TeamsNodup := by
+  unfold revokeInvitationStep at h
+  repeat' split at h
+  all_goals try cases h
+  all_goals exact stepMember_teamsNodup_of_teams hn rfl
+
+theorem redeemInvitation_nodup (m m' : MTenant) (c : MCtx) (inv : InvitationId) (hn : m.TeamsNodup)
+    (h : redeemInvitationStep m c inv = .ok m') : m'.TeamsNodup := by
+  unfold redeemInvitationStep at h
+  cases hl : m.invitations.lookup inv with
+  | none =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+  | some o =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact stepMember_teamsNodup_of_teams hn rfl
+
+/-- Every step keeps team ids distinct. -/
+theorem stepMember_teamsNodup (m m' : MTenant) (c : MCtx) (i : MemberIntent) (hn : m.TeamsNodup)
+    (h : stepMember m c i = .ok m') : m'.TeamsNodup := by
+  cases i with
+  | assignRole p r => exact changeRole_nodup m m' c p r true hn h
+  | revokeRole p r => exact changeRole_nodup m m' c p r false hn h
+  | defineTeam t l => exact defineTeam_nodup m m' c t l hn h
+  | assignTeamRole t r => exact teamRole_nodup m m' c t r true hn h
+  | revokeTeamRole t r => exact teamRole_nodup m m' c t r false hn h
+  | addTeamMember t p => exact teamMember_nodup m m' c t p true hn h
+  | removeTeamMember t p => exact teamMember_nodup m m' c t p false hn h
+  | createInvitation i a rs => exact createInvitation_nodup m m' c i a rs hn h
+  | revokeInvitation i => exact revokeInvitation_nodup m m' c i hn h
+  | redeemInvitation i => exact redeemInvitation_nodup m m' c i hn h
+
+end Strata
