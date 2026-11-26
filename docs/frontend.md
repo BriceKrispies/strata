@@ -658,6 +658,29 @@ came from the server in separate ciphertexts, so the second can be deleted witho
   subset, declared with `font-display: swap`; the `@fontsource-variable/*` packages leave. A build
   check fails when the bundle contains a module from `node_modules`.
 
+## Tenant scripts in the browser sandbox
+
+The owner's decision (D-FE-14) lets a tenant run near-arbitrary scripts, in the browser and nowhere
+else. NG-3 and D-506 say so for the server: tenant code runs in no platform process.
+
+- **What runs.** A tenant script is a WebAssembly module; a JavaScript engine compiled to
+  WebAssembly covers JavaScript. It runs in a dedicated worker inside a sandboxed iframe on its own
+  origin, under `default-src 'none'`. The iframe and worker have no network, timers, DOM, storage or
+  browser API.
+- **What it can call.** Only the browser kernel's imports: read the view data already shown to the
+  person (after the read rules have redacted it); return a UI tree of design-system components, which
+  the kernel validates and renders; propose an intent, which the server decides with the person's own
+  permissions; and a small per-script state.
+- **Limits.** A memory cap, an instruction fuel budget enforced by instrumenting the module when it
+  loads, a hard timeout that terminates the worker, and an output size cap. A script that overruns one
+  is stopped and the page keeps working.
+- **No markup from scripts.** The kernel draws the page from a closed vocabulary of DOM operations
+  (WG-5677), so script output cannot inject markup, script or style. The platform's own interfaces
+  still render from definitions (D-204, K-12). The backend kernel never sees a script.
+
+The requirements are fe-020 to fe-024 (the browser sandbox's boundary is b-13). They are planned
+under milestone 6 and are not yet checked by the gate.
+
 ## Testing
 
 ### The kernel runs the uiScenarios in Node
