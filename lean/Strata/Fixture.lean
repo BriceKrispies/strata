@@ -64,6 +64,32 @@ def partSchema : Schema :=
    (5, { ty := .bool, required := false,
          default := .cmp .eq .principal (.lit (.str "p100")) })]
 
+/-- The third object type, "ticket" (id `4`), which carries the fixture's workflow (slice 8): `1` the
+    state, a string that a new ticket starts `open` (its default); `2` an optional integer, the votes the
+    guards read; `3` an optional string, the note that a transition writes. The id `3` is left to the
+    scenario that names an unknown type. -/
+def ticketSchema : Schema :=
+  [(1, { ty := .str, required := false, default := .lit (.str "open") }),
+   (2, { ty := .int, required := false }),
+   (3, { ty := .str, required := false })]
+
+/-- The workflow of the tickets (slice 8), over field `1`: an open ticket is shipped when it has a vote
+    (`closed`, the note `shipped`); a closed ticket may be reopened; an open ticket with no votes is
+    archived and its votes are set to `0`; a closed ticket is archived, but a transition whose assignment
+    cannot be evaluated (a string compared to an integer) refuses it; an open ticket is escalated with
+    nine votes, which a writer may not write (the record it would be is over the writers' limit). -/
+def ticketWorkflow : Workflow :=
+  { field := 1, initial := ["open"],
+    transitions :=
+      [ { source := "open", target := "closed", guard := some (.cmp .ge (.field .new 2) (.lit (.int 1))),
+          set := [(3, .lit (.str "shipped"))] },
+        { source := "closed", target := "open" },
+        { source := "open", target := "archived", guard := some (.isNull (.field .old 2)),
+          set := [(2, .lit (.int 0))] },
+        { source := "closed", target := "archived",
+          set := [(3, .cmp .lt .principal (.lit (.int 0)))] },
+        { source := "open", target := "escalated", set := [(2, .lit (.int 9))] } ] }
+
 /-- The role of an editor in the fixture (the kernel's `editor`). -/
 def editorRole : RoleId := 2
 
@@ -88,13 +114,21 @@ def fixturePolicies : List Policy :=
       condition := some (.isNull .principal) },
     -- Slice 7: an editor may manage the tenant's members (`editors_manage_members`), so a manager who
     -- is not the owner is in the fixture: it may confer the roles whose powers it holds.
-    { role := editorRole, resource := .members, actions := [.manage] } ]
+    { role := editorRole, resource := .members, actions := [.manage] },
+    -- Slice 8: the tickets. An editor may do everything to them; a writer may read and create them and
+    -- change or delete the ones it created whose votes are at most five (so an assignment that sets nine
+    -- votes makes the update one the writer may not make, which the authorisation of the result refuses).
+    { role := editorRole, resource := .object 4, actions := [.read, .create, .update, .delete] },
+    { role := writerRole, resource := .object 4, actions := [.read, .create] },
+    { role := writerRole, resource := .object 4, actions := [.update, .delete],
+      condition := some (.and ownRecord (.cmp .le (.field .new 2) (.lit (.int 5)))) } ]
 
-/-- The two object types every scenario starts from, each tenant with an owner, an editor and two
-    writers. The size limits are the kernel's. -/
+/-- The object types every scenario starts from, each tenant with an owner, an editor and two writers.
+    Type `4` (the tickets, with the workflow) is part of the fixture too. The size limits are the kernel's. -/
 def initialTenant (n : Nat) : Tenant :=
   { types := [(1, { schema := itemSchema, constraints := itemConstraints }),
-               (2, { schema := partSchema, constraints := partConstraints })],
+               (2, { schema := partSchema, constraints := partConstraints }),
+               (4, { schema := ticketSchema, workflows := [ticketWorkflow] })],
     members := [(n * 100, [ownerRole]), (n * 100 + 1, [editorRole]),
                 (n * 100 + 2, [writerRole]), (n * 100 + 3, [writerRole])],
     grants := [],
@@ -109,6 +143,7 @@ def initialTenant (n : Nat) : Tenant :=
 def fieldsOf (ty : TypeId) : List FieldId :=
   if ty = 1 then [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
   else if ty = 2 then [1, 2, 3, 4, 5]
+  else if ty = 4 then [1, 2, 3]
   else []
 
 def initialWorld : World := fun x =>
@@ -119,9 +154,9 @@ theorem initialWorld_records (x : TenantId) (t : Tenant) (h : initialWorld x = s
     ∀ e ∈ t.types, e.2.records = [] := by
   unfold initialWorld initialTenant at h
   split at h
-  · cases h; intro e he; simp at he; rcases he with rfl | rfl <;> rfl
+  · cases h; intro e he; simp at he; rcases he with rfl | rfl | rfl <;> rfl
   · split at h
-    · cases h; intro e he; simp at he; rcases he with rfl | rfl <;> rfl
+    · cases h; intro e he; simp at he; rcases he with rfl | rfl | rfl <;> rfl
     · cases h
 
 end Strata

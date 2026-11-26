@@ -2020,3 +2020,73 @@ op 1 100 invite 3 s:z@y 2,3 @100
 op 2 100 assign 100 2
 op 2 200 assign 100 2
 end
+scenario h-a-new-ticket-starts-open
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 create 1=s:open 3=s:x
+end
+scenario h-a-new-ticket-cannot-start-closed
+op 1 100 type 4 create 1=s:closed
+op 1 100 type 4 create 2=i:1
+end
+scenario h-a-new-ticket-must-name-a-state
+op 1 100 type 4 create 1=n
+op 1 100 type 4 create 1=s:OPEN
+end
+scenario h-a-ticket-with-a-vote-ships
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 1=s:open
+end
+scenario h-a-ticket-without-a-vote-does-not-ship
+op 1 100 type 4 create 2=i:0
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 2=i:1 1=s:closed
+end
+scenario h-a-guard-that-cannot-be-read-refuses
+op 1 100 type 4 create
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 1=s:archived
+end
+scenario h-an-undeclared-state-is-refused
+op 1 100 type 4 create
+op 1 100 type 4 patch 1 1=s:bogus
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 1=s:escalated
+op 1 100 type 4 patch 1 1=s:open
+end
+scenario h-a-transition-writes-its-assignments
+op 1 100 type 4 create
+op 1 100 type 4 patch 1 1=s:archived
+end
+scenario h-a-closed-ticket-reopens-without-a-guard
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 1=s:open
+end
+scenario h-an-assignment-that-cannot-be-evaluated-refuses-the-update
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 1=s:closed
+op 1 100 type 4 patch 1 1=s:archived
+end
+scenario h-a-writer-may-not-write-what-an-assignment-makes-it
+op 1 102 type 4 create 2=i:1
+op 1 102 type 4 patch 1 1=s:escalated
+op 1 101 type 4 patch 1 1=s:escalated
+end
+scenario h-the-version-is-checked-before-the-transition
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 v=5 1=s:bogus
+op 1 100 type 4 patch 1 v=1 1=s:bogus
+end
+scenario h-a-patch-that-keeps-the-state-needs-no-transition
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 patch 1 2=i:4
+end
+scenario h-a-replacement-that-drops-the-state-is-refused
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 update 1 2=i:4
+end
+scenario h-deleting-a-ticket-needs-no-transition
+op 1 100 type 4 create 2=i:1
+op 1 100 type 4 delete 1
+end

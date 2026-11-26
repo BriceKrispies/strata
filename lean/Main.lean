@@ -272,11 +272,14 @@ def membershipLines (id : Nat) (t : Tenant) : List String :=
 
 /-- The tenant: its counter and the default type's required fields and records, then each other
     object type's required fields and records, marked with its id. Then its membership, when it is
-    not the one the fixture starts a tenant with (always for tenant 3, which only a creation makes). -/
+    not the one the fixture starts a tenant with (always for tenant 3, which only a creation makes).
+    The tickets (type `4`, slice 8) are printed only while they hold a record, so the state of every
+    scenario that does not create one is printed as before. -/
 def showTenant (id : Nat) (t : Tenant) : List String :=
   let d : ObjType := (t.typ? 1).getD { schema := [] }
   let header := s!"tenant {id} next={t.nextId} required={requiredOf d}"
-  let others := sortBy (fun (e : TypeId × ObjType) => e.1) (t.types.filter (fun e => e.1 != 1))
+  let others := sortBy (fun (e : TypeId × ObjType) => e.1)
+    (t.types.filter (fun e => e.1 != 1 && (e.1 != 4 || !e.2.records.isEmpty)))
   header :: recordLines "" d ++
     (others.flatMap fun e => s!"type {e.1} required={requiredOf e.2}" :: recordLines s!"type {e.1} " e.2) ++
     (if id == 3 || membershipLines id t != membershipLines id (initialTenant id) then membershipLines id t

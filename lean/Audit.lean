@@ -983,3 +983,29 @@ import Strata
 #print axioms Strata.Codec.fix_err_unknownRole
 #print axioms Strata.Codec.fix_err_lastOwner
 #print axioms Strata.Codec.fix_err_tenantExists
+
+-- Slice 8: workflows (`Strata/Workflows.lean`)
+#print axioms Strata.create_ok_initials
+#print axioms Strata.create_workflow_initial
+#print axioms Strata.create_non_initial_refused
+#print axioms Strata.fireOne_declared
+#print axioms Strata.fireOne_keeps
+#print axioms Strata.fireAll_fires
+#print axioms Strata.update_changed_fired
+#print axioms Strata.update_undeclared_refused
+#print axioms Strata.update_writes_fired
+#print axioms Strata.str_of_clearFields
+#print axioms Strata.clearRef_statesOk
+#print axioms Strata.stepTenant_preserves_states
+#print axioms Strata.step_preserves_states
+#print axioms Strata.update_raises_version
+#print axioms Strata.update_writes_patched
+#print axioms Strata.update_keeps_unnamed
+#print axioms Strata.update_ok_parts
+#print axioms Strata.fireAll_plain
+#print axioms Strata.fireOne_version
+#print axioms Strata.fireAll_nodup
+#print axioms Strata.evalSets_keys
+#print axioms Strata.applySets_get_mem
+#print axioms Strata.wf_lookup_filter_none
+#print axioms Strata.lookup_filter_of_ne
