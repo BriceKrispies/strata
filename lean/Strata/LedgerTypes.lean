@@ -13,8 +13,8 @@ types in `ModelBase.lean`.
 Abstractions, listed in the slice 13 review note: an owner is a person (`PrincipalId`) or a pool
 (a number), and an account is named by its owner, unit and scope, where the kernel names it by a hash
 of those. Units are numbers, and a time is an integer count of milliseconds, the kernel's `Timestamp`.
-The header's `opened_at`, the hash chain (`head_hash`, `previous_hash`, `hash`) and the transaction of
-an entry are not held: the model decides no transaction, and the hashes are the kernel's own check.
+The header's `opened_at` and the hash chain (`head_hash`, `previous_hash`, `hash`) are not held: the hashes
+are the kernel's own check. The transaction of an entry is held as the canonical text of its request.
 -/
 
 namespace Strata

@@ -4000,6 +4000,317 @@ theorem expireLedgerT_sound {t t' : Tenant} {p : Principal} {now : Int} {u : Nat
 
 end Strata
 
+/-! ## Slice 13: the transaction (balance rule, atomicity, conservation per unit, soundness) -/
+
+namespace Strata
+
+/-- The amounts of the entries of the journal that are in unit `u`. -/
+def unitTotal (L : LedgerState) (u : Nat) : Int := ((L.journal.filter (fun e => e.unit == u)).map (fun e => e.amount)).sum
+
+theorem postDynamic_events {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {txn : Option String} {evs : List LedgerPosted} (h : postDynamic t actor now L q txn = .ok (L', evs)) :
+    evs = [] ∨ ∃ ev : LedgerPosted, evs = [ev] ∧ ev.unit = q.unit ∧ ev.amount = q.amount := by
+  unfold postDynamic at h
+  simp only [] at h
+  repeat' split at h
+  all_goals first
+    | (cases h; done)
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, rfl⟩ := h
+       first
+         | exact Or.inl rfl
+         | exact Or.inr ⟨_, rfl, rfl, rfl⟩)
+
+/-- One posting either changes nothing and emits nothing (a replay), or appends one entry of its unit and amount and
+    emits one event of that unit and amount. -/
+theorem postOne_cases {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {txn : Option String} {evs : List LedgerPosted} (h : postOne t actor now L q txn = .ok (L', evs)) :
+    (evs = [] ∧ L' = L) ∨
+      (∃ (ev : LedgerPosted) (entry : LedgerEntry), evs = [ev] ∧ ev.unit = q.unit ∧ ev.amount = q.amount ∧
+        L'.journal = L.journal ++ [entry] ∧ entry.unit = q.unit ∧ entry.amount = q.amount) := by
+  by_cases hne : evs = []
+  · left
+    refine ⟨hne, ?_⟩
+    unfold postOne at h
+    cases hs : postStaticErr t actor q with
+    | some e => rw [hs] at h; cases h
+    | none => rw [hs] at h; exact postDynamic_replay h hne
+  · right
+    have hev : ∃ ev : LedgerPosted, evs = [ev] ∧ ev.unit = q.unit ∧ ev.amount = q.amount := by
+      unfold postOne at h
+      cases hs : postStaticErr t actor q with
+      | some e => rw [hs] at h; cases h
+      | none =>
+        rw [hs] at h
+        rcases postDynamic_events h with h1 | h1
+        · exact absurd h1 hne
+        · exact h1
+    obtain ⟨ev, hev1, hev2, hev3⟩ := hev
+    have hne' : evs ≠ [] := hne
+    unfold postOne at h
+    cases hs : postStaticErr t actor q with
+    | some e => rw [hs] at h; cases h
+    | none =>
+      rw [hs] at h
+      simp only [] at h
+      obtain ⟨acct, entry, -, -, -, heu, -, hea, hj, -, -⟩ := postDynamic_state h hne'
+      exact ⟨ev, entry, hev1, hev2, hev3, hj, heu, hea⟩
+
+/-- The legs a transaction's postings carry: the unit and amount of each leg, in order. -/
+theorem txPostingsFrom_ua (tx : LedgerTx) (n : Nat) (ls : List LedgerLeg) :
+    (txPostingsFrom tx n ls).map (fun q => (q.unit, q.amount)) = ls.map (fun l => (l.unit, l.amount)) := by
+  induction ls generalizing n with
+  | nil => rfl
+  | cons l ls ih => simp [txPostingsFrom, legPosting, ih]
+
+/-- One posting moves the total of each unit by the amounts of the events it emits in that unit. -/
+theorem postOne_unit_step {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {txn : Option String} {evs : List LedgerPosted} (h : postOne t actor now L q txn = .ok (L', evs)) (u : Nat) :
+    unitTotal L' u = unitTotal L u + ((evs.filter (fun e => e.unit == u)).map (fun e => e.amount)).sum := by
+  rcases postOne_cases h with ⟨h1, h2⟩ | ⟨ev, entry, h1, h2, h3, h4, h5, h6⟩
+  · subst h1; subst h2; simp
+  · subst h1
+    simp only [unitTotal, h4, List.filter_append, List.map_append, List.sum_append]
+    by_cases hu : q.unit == u
+    · have hu' : q.unit = u := by simpa using hu
+      simp [hu, h2, h3, h5, h6, hu']
+    · have hu' : ¬ q.unit = u := by simpa using hu
+      simp [hu, h2, h3, h5, h6, hu']
+
+/-- The legs a transaction posts, as the `foldlM` of `txLegs` runs over them. -/
+theorem txFold_total (t : Tenant) (actor : Principal) (now : Int) (txn : Option String) :
+    ∀ (ps : List LedgerPosting) (acc : LedgerState × List LedgerPosted × Nat) (r : LedgerState × List LedgerPosted × Nat),
+      List.foldlM (fun (acc : LedgerState × List LedgerPosted × Nat) (q : LedgerPosting) =>
+        (postOne t actor now acc.1 q txn).map
+          (fun r => (r.1, acc.2.1 ++ r.2, acc.2.2 + (if r.2.isEmpty then 1 else 0)))) acc ps = .ok r →
+      (∀ u, unitTotal r.1 u - ((r.2.1.filter (fun e => e.unit == u)).map (fun e => e.amount)).sum =
+        unitTotal acc.1 u - ((acc.2.1.filter (fun e => e.unit == u)).map (fun e => e.amount)).sum) ∧
+      (acc.2.2 ≤ r.2.2 ∧ r.2.2 ≤ acc.2.2 + ps.length) ∧
+      (r.2.2 = acc.2.2 → r.2.1.map (fun e => (e.unit, e.amount)) =
+        acc.2.1.map (fun e => (e.unit, e.amount)) ++ ps.map (fun q => (q.unit, q.amount))) ∧
+      (r.2.2 = acc.2.2 + ps.length → r.2.1 = acc.2.1) := by
+  intro ps
+  induction ps with
+  | nil =>
+    intro acc r h
+    simp only [List.foldlM, pure, Except.pure, Except.ok.injEq] at h
+    subst h
+    simp
+  | cons q qs ih =>
+    intro acc r h
+    simp only [List.foldlM_cons] at h
+    cases hp : postOne t actor now acc.1 q txn with
+    | error e => simp [hp, Except.map, Except.bind, bind] at h
+    | ok x =>
+      simp only [hp, Except.map, Except.bind, bind] at h
+      obtain ⟨ih1, ⟨ib1, ib2⟩, ih3, ih4⟩ := ih _ r h
+      have hstep := postOne_unit_step hp
+      rcases postOne_cases hp with ⟨hx1, hx2⟩ | ⟨ev, entry, hx1, hx2, hx3, hx4, hx5, hx6⟩
+      · have hE : x.2 = [] := hx1
+        simp only [hE, List.isEmpty_nil, if_true, List.append_nil] at ih1 ib1 ib2 ih3 ih4
+        refine ⟨?_, ⟨by omega, by simp only [List.length_cons]; omega⟩, ?_, ?_⟩
+        · intro u
+          rw [ih1 u, hstep u, hE]
+          simp
+        · intro hr
+          exfalso
+          omega
+        · intro hr
+          apply ih4
+          simp only [List.length_cons] at hr
+          omega
+      · have hE : x.2 = [ev] := hx1
+        simp only [hE, List.isEmpty_cons, Bool.false_eq_true, if_false, List.append_assoc] at ih1 ib1 ib2 ih3 ih4
+        refine ⟨?_, ⟨by omega, by simp only [List.length_cons]; omega⟩, ?_, ?_⟩
+        · intro u
+          rw [ih1 u, hstep u, hE]
+          simp <;> omega
+        · intro hr
+          have := ih3 (by omega)
+          simp only [List.map_append, List.map_cons, List.map_nil, List.cons_append, List.nil_append, hx2, hx3] at this ⊢
+          simpa [List.append_assoc] using this
+        · intro hr
+          exfalso
+          simp only [List.length_cons] at hr
+          omega
+
+end Strata
+
+namespace Strata
+
+/-- What an accepted transaction establishes about its request: every check of the intent passed, and its legs were
+    posted, each as a replay or none as a replay. -/
+theorem postTxCore_ok_form {t : Tenant} {actor : Principal} {now : Int} {tx : LedgerTx}
+    {r : LedgerState × List LedgerPosted} (h : postTxCore t actor now tx = .ok r) :
+    t.holdsCap actor ledgerCapPost = true ∧ txHeaderOk actor tx = true ∧ ¬ ledgerMaxLegs < tx.legs.length ∧
+    ¬ tx.legs.length < 2 ∧ txBalanced tx = true ∧ (tx.reason == transferReason → transferOk t tx = true) ∧
+    ∃ (L' : LedgerState) (evs : List LedgerPosted) (replays : Nat),
+      txLegs t actor now tx = .ok (L', evs, replays) ∧ r = (L', evs) ∧
+      (replays = 0 ∨ replays = tx.legs.length) := by
+  unfold postTxCore at h
+  repeat' split at h
+  all_goals first
+    | (cases h; done)
+    | skip
+  simp only [Except.ok.injEq] at h
+  subst h
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, _, _, _, ‹_›, rfl, ?_⟩
+  · simpa using ‹¬(!t.holdsCap actor ledgerCapPost) = true›
+  · simpa using ‹¬(!txHeaderOk actor tx) = true›
+  · simpa using ‹¬decide (ledgerMaxLegs < tx.legs.length) = true›
+  · simpa using ‹¬decide (tx.legs.length < 2) = true›
+  · simpa using ‹¬(!txBalanced tx) = true›
+  · intro hr
+    have := ‹¬(tx.reason == transferReason && !transferOk t tx) = true›
+    simp only [hr, Bool.true_and, Bool.not_eq_true', Bool.not_eq_false'] at this
+    simpa using this
+  · have := ‹¬(_ != 0 && _ != tx.legs.length) = true›
+    simp only [Bool.and_eq_true, bne_iff_ne, ne_eq, not_and, Decidable.not_not] at this
+    exact Decidable.or_iff_not_imp_left.mpr this
+
+/-- A balanced transaction nets to zero in every unit, including a unit none of its legs names. -/
+theorem unitSum_zero_of_balanced (tx : LedgerTx) (hb : txBalanced tx = true) (u : Nat) : unitSum tx.legs u = 0 := by
+  by_cases hu : u ∈ tx.legs.map (fun l => l.unit)
+  · have := List.all_eq_true.mp hb u hu
+    simpa using this
+  · have : tx.legs.filter (fun l => l.unit == u) = [] := by
+      rw [List.filter_eq_nil_iff]
+      intro l hl
+      have : l.unit ≠ u := fun heq => hu (List.mem_map.mpr ⟨l, hl, heq⟩)
+      simpa using this
+    simp [unitSum, this]
+
+/-- The balance rule of a transaction (LDG-2903, LDG-2914): an accepted transaction names at least two and at most the
+    most legs, and the amounts of its legs sum to zero in every unit. -/
+theorem postTx_balanced {t : Tenant} {actor : Principal} {now : Int} {tx : LedgerTx}
+    {r : LedgerState × List LedgerPosted} (h : postTxCore t actor now tx = .ok r) :
+    2 ≤ tx.legs.length ∧ tx.legs.length ≤ ledgerMaxLegs ∧ ∀ u, unitSum tx.legs u = 0 := by
+  obtain ⟨-, -, h3, h4, h5, -⟩ := postTxCore_ok_form h
+  exact ⟨by omega, by omega, unitSum_zero_of_balanced tx h5⟩
+
+/-- Events that carry the units and amounts of the legs carry their sums. -/
+theorem sum_events_of_pairs (es : List LedgerPosted) (u : Nat) :
+    ∀ (ls : List LedgerLeg), es.map (fun e => (e.unit, e.amount)) = ls.map (fun l => (l.unit, l.amount)) →
+      ((es.filter (fun e => e.unit == u)).map (fun e => e.amount)).sum = unitSum ls u := by
+  induction es with
+  | nil =>
+    intro ls h
+    cases ls with
+    | nil => simp [unitSum]
+    | cons l ls => simp at h
+  | cons e es ih =>
+    intro ls h
+    cases ls with
+    | nil => simp at h
+    | cons l ls =>
+      simp only [List.map_cons, List.cons.injEq, Prod.mk.injEq] at h
+      obtain ⟨⟨h1, h2⟩, h3⟩ := h
+      have := ih ls h3
+      simp only [unitSum, List.filter_cons, h1, h2] at this ⊢
+      by_cases hu : l.unit == u
+      · simp [hu, h2, this]
+      · simp [hu, this]
+
+/-- Conservation per unit (LDG-2903): an accepted transaction leaves the total of every unit of the journal as it was.
+    The legs add entries that net to zero in each unit, or, for a retry, none at all. -/
+theorem postTx_unit_conservation {t : Tenant} {actor : Principal} {now : Int} {tx : LedgerTx}
+    {L' : LedgerState} {evs : List LedgerPosted} (h : postTxCore t actor now tx = .ok (L', evs)) (u : Nat) :
+    unitTotal L' u = unitTotal t.ledger u := by
+  obtain ⟨-, -, -, -, hbal, -, L2, evs2, n2, hl, hr, hn⟩ := postTxCore_ok_form h
+  simp only [Prod.mk.injEq] at hr
+  obtain ⟨rfl, rfl⟩ := hr
+  have hfold : List.foldlM (fun (acc : LedgerState × List LedgerPosted × Nat) (q : LedgerPosting) =>
+      (postOne t actor now acc.1 q (some (txnId tx))).map
+        (fun r => (r.1, acc.2.1 ++ r.2, acc.2.2 + (if r.2.isEmpty then 1 else 0))))
+      (t.ledger, [], 0) (txPostings tx) = .ok (L', evs, n2) := hl
+  obtain ⟨hA, -, hC, hD⟩ := txFold_total t actor now (some (txnId tx)) (txPostings tx) _ _ hfold
+  have hA' := hA u
+  simp only [List.filter_nil, List.map_nil, List.sum_nil, Int.sub_zero] at hA'
+  have hlen : (txPostings tx).length = tx.legs.length := by
+    have := congrArg List.length (txPostingsFrom_ua tx 0 tx.legs)
+    simpa [txPostings] using this
+  rcases hn with hn | hn
+  · have hC' := hC (by simpa using hn)
+    simp only [List.map_nil, List.nil_append, txPostings, txPostingsFrom_ua] at hC'
+    have := sum_events_of_pairs evs u tx.legs hC'
+    rw [unitSum_zero_of_balanced tx hbal u] at this
+    omega
+  · have hD' := hD (by simpa [hlen] using hn)
+    subst hD'
+    simpa using hA'
+
+/-- A refused leg refuses the whole transaction: when the checks of the intent pass, the legs before one are accepted
+    and that leg is refused on the state they leave, the intent is refused with the leg's refusal, whatever legs
+    follow (LDG-2904). -/
+theorem postTx_atomic {t : Tenant} {actor : Principal} {now : Int} {tx : LedgerTx}
+    {ps₁ ps₂ : List LedgerPosting} {q : LedgerPosting} {e : Err} {L₁ : LedgerState} {evs₁ : List LedgerPosted} {n₁ : Nat}
+    (hcap : t.holdsCap actor ledgerCapPost = true) (hhdr : txHeaderOk actor tx = true)
+    (hmax : ¬ ledgerMaxLegs < tx.legs.length) (hmin : ¬ tx.legs.length < 2) (hbal : txBalanced tx = true)
+    (htr : (tx.reason == transferReason) = true → transferOk t tx = true)
+    (hps : txPostings tx = ps₁ ++ q :: ps₂)
+    (h₁ : List.foldlM (fun (acc : LedgerState × List LedgerPosted × Nat) (x : LedgerPosting) =>
+        (postOne t actor now acc.1 x (some (txnId tx))).map
+          (fun r => (r.1, acc.2.1 ++ r.2, acc.2.2 + (if r.2.isEmpty then 1 else 0))))
+        (t.ledger, [], 0) ps₁ = .ok (L₁, evs₁, n₁))
+    (hq : postOne t actor now L₁ q (some (txnId tx)) = .error e) :
+    postTxCore t actor now tx = .error e := by
+  have hlegs : txLegs t actor now tx = .error e := by
+    unfold txLegs
+    rw [hps, List.foldlM_append, h₁]
+    simp [List.foldlM_cons, hq, Except.map, Except.bind, bind]
+  unfold postTxCore
+  have htr' : (tx.reason == transferReason && !transferOk t tx) = false := by
+    by_cases hr : (tx.reason == transferReason) = true
+    · simp [hr, htr hr]
+    · have hr' : (tx.reason == transferReason) = false := by simpa using hr
+      simp [hr']
+  have hmax' : decide (ledgerMaxLegs < tx.legs.length) = false := by simpa using hmax
+  have hmin' : decide (tx.legs.length < 2) = false := by simpa using hmin
+  simp [hcap, hhdr, hmax', hmin', hbal, htr', hlegs]
+
+theorem txFold_sound (t : Tenant) (actor : Principal) (now : Int) (txn : Option String) :
+    ∀ (ps : List LedgerPosting) (acc : LedgerState × List LedgerPosted × Nat) (r : LedgerState × List LedgerPosted × Nat),
+      List.foldlM (fun (acc : LedgerState × List LedgerPosted × Nat) (q : LedgerPosting) =>
+        (postOne t actor now acc.1 q txn).map
+          (fun r => (r.1, acc.2.1 ++ r.2, acc.2.2 + (if r.2.isEmpty then 1 else 0)))) acc ps = .ok r →
+      LedgerSound acc.1 → LedgerSound r.1 := by
+  intro ps
+  induction ps with
+  | nil =>
+    intro acc r h hs
+    simp only [List.foldlM, pure, Except.pure, Except.ok.injEq] at h
+    subst h; exact hs
+  | cons q qs ih =>
+    intro acc r h hs
+    simp only [List.foldlM_cons] at h
+    cases hp : postOne t actor now acc.1 q txn with
+    | error e => simp [hp, Except.map, Except.bind, bind] at h
+    | ok x =>
+      simp only [hp, Except.map, Except.bind, bind] at h
+      exact ih _ r h (postOne_sound hp hs)
+
+/-- An accepted `PostLedgerTransaction` leaves the ledger sound when it was. -/
+theorem postTxCore_sound {t : Tenant} {actor : Principal} {now : Int} {tx : LedgerTx}
+    {L' : LedgerState} {evs : List LedgerPosted} (h : postTxCore t actor now tx = .ok (L', evs))
+    (hs : LedgerSound t.ledger) : LedgerSound L' := by
+  obtain ⟨-, -, -, -, -, -, L2, evs2, n2, hl, hr, -⟩ := postTxCore_ok_form h
+  simp only [Prod.mk.injEq] at hr
+  obtain ⟨rfl, rfl⟩ := hr
+  exact txFold_sound t actor now (some (txnId tx)) (txPostings tx) _ _ hl hs
+
+/-- An accepted `PostLedgerTransaction` leaves the tenant's ledger sound when it was. -/
+theorem postLedgerTxT_sound {t t' : Tenant} {p : Principal} {now : Int} {tx : LedgerTx}
+    (h : postLedgerTxT t p now tx = .ok t') (hs : LedgerSound t.ledger) : LedgerSound t'.ledger := by
+  unfold postLedgerTxT at h
+  cases hc : postTxCore t p now tx with
+  | error e => simp [hc, Except.map] at h
+  | ok r =>
+    simp only [hc, Except.map, Except.ok.injEq] at h
+    subst h
+    exact postTxCore_sound hc hs
+
+end Strata
+
 /-! Axioms of the slice 13 theorems: only propext, Classical.choice and Quot.sound. -/
 #print axioms Strata.postOne_total
 #print axioms Strata.ledger_post_atomic
@@ -4043,3 +4354,21 @@ end Strata
 #print axioms Strata.ledgerSound_empty
 #print axioms Strata.postLedgerT_sound
 #print axioms Strata.expireLedgerT_sound
+
+/-! Axioms of the slice 13 transaction theorems. -/
+#print axioms Strata.postDynamic_events
+#print axioms Strata.postOne_cases
+#print axioms Strata.txPostingsFrom_ua
+#print axioms Strata.postOne_unit_step
+#print axioms Strata.txFold_total
+#print axioms Strata.postTxCore_ok_form
+#print axioms Strata.unitSum_zero_of_balanced
+#print axioms Strata.postTx_balanced
+#print axioms Strata.sum_events_of_pairs
+#print axioms Strata.postTx_unit_conservation
+#print axioms Strata.postTx_atomic
+#print axioms Strata.txFold_sound
+#print axioms Strata.postTxCore_sound
+#print axioms Strata.postLedgerTxT_sound
+#print axioms Strata.postLedgerTxT_ok_shape
+#print axioms Strata.postLedgerTxT_ok_auth

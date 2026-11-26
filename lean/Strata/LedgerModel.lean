@@ -19,6 +19,9 @@ The kernel's ledger (`crates/kernel/src/ledger.rs`, `ledger_expiry.rs`, `ledger_
 - `expireCore` is the intent `ExpireLedger`: the system or `ledger-configure`; a unit with an expiry; a cutoff
   whose buckets have all ended their life; then, for each account of the unit with a bucket started at or before
   the cutoff (at most 100 accounts), one debit for each such bucket.
+- `postTxCore` is the intent `PostLedgerTransaction`: `ledger-post` is held, the header is complete, at most 64 legs
+  and at least two, every unit netting to zero, a transfer permitted; then each leg is a posting on the state the
+  earlier legs leave, keyed `<key>:<n>` and naming the transaction; a retry replays every leg or none.
 - `balance` is the read of one account's balance (`ledger::read_balance`): the reach of the reader (`ledger-read`,
   a ledger policy of a role it holds, or ownership), the unit, a ledger policy that permits the account, and the
   account's header or, for one's own, zero.
@@ -398,7 +401,13 @@ def legPosting (tx : LedgerTx) (n : Nat) (leg : LedgerLeg) : LedgerPosting :=
   { owner := leg.owner, unit := leg.unit, amount := leg.amount, key := tx.key ++ ":" ++ toString n,
     reason := tx.reason, corrects := none, scope := leg.scope }
 
-def txPostings (tx : LedgerTx) : List LedgerPosting := tx.legs.mapIdx (fun n leg => legPosting tx n leg)
+/-- The postings of the legs from leg number `n` on. -/
+def txPostingsFrom (tx : LedgerTx) : Nat → List LedgerLeg → List LedgerPosting
+  | _, [] => []
+  | n, leg :: legs => legPosting tx n leg :: txPostingsFrom tx (n + 1) legs
+
+/-- The postings of the legs of a transaction, in order. -/
+def txPostings (tx : LedgerTx) : List LedgerPosting := txPostingsFrom tx 0 tx.legs
 
 /-- The header records who (a person), what, under which key and which correlation (LDG-2906). The correlation of
     an intent is always set by the harness, as by the kernel's context. -/
