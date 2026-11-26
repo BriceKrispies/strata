@@ -622,20 +622,19 @@ platform value, then the default, each only where its level is open. Covered by 
 operations and reads, and the `h-setting-*` scenarios); not covered: schema changes that define or remove
 settings, the platform level's values, timestamps and declared types, and the reference form of `allowed`.
 
-### Ledger (`ledger::decide_intent`, `post_after`, `ledger_expiry::decide`)
+### Ledger (`ledger::decide_intent`, `post_after`, `ledger_expiry::decide`, `ledger::read_balance`)
 
-Not covered; slice 13. `PostLedger`: lacks `ledger-post` (`Unauthorized`); no postings or more
-than 8 (`InvalidIntent`); then each posting on the state the earlier ones leave, the first
-refusal refusing all: undeclared unit, owner not a member, undeclared pool (`UnknownRecord`); a
-zero or oversized amount, a bad idempotency key, an oversized reason or scope (`InvalidIntent`);
-a key already used with the same posting is replayed with no change, with a different posting
-refused (`VersionConflict`); a bad correction target or a balance out of range
-(`InvalidIntent`); a floor, cap or period cap crossed while not moving toward it
-(`ConstraintViolated`). Accepted: the account's balance, period totals and buckets, an appended
-entry, `LedgerEntryPosted`. `ExpireLedger`: not the system and lacks `ledger-configure`
-(`Unauthorized`); a unit without expiry, or a cutoff whose buckets are still alive
-(`InvalidIntent`); accepted: up to 100 accounts' expired buckets debited. Ledger reads: reach by
-`ledger-read`, ledger policies or ownership (`Unauthorized`, `UnknownRecord`, `LimitExceeded`).
+Covered in the model (slice 13, `lean/Strata/LedgerTypes.lean` for the data, `lean/Strata/LedgerModel.lean` for the decisions, the theorems in the slice 13 section of `lean/Audit.lean`). The kernel's check order is kept, and the decision is one function of the state, the intent and the time the intent carries.
+
+`PostLedger`, in the kernel's order: `ledger-post` is held (`Unauthorized`); one to eight postings (`InvalidIntent`); then each posting on the state the earlier ones leave, the first refusal refusing all: the unit is declared and the owner is a member or a declared pool (`NotFound`, the kernel's `UnknownRecord`); an adjustment or a reversal to one's own account is refused (`SelfAction`, `ADM-1629`); the amount is non-zero and within `2^53 - 1` (`InvalidIntent`); the key is 1 to 128 bytes and does not use the expiry prefix (`InvalidIntent`); the reason and the scope are within their bounds (`InvalidIntent`); a key already recorded on the account is a replay when the amount, the reason and the correction are the same, and `VersionConflict` otherwise; a correction names an entry the account holds (`InvalidIntent`); the balance stays within the bound (`InvalidIntent`); a floor or a cap crossed while not moving toward it is `ConstraintViolated`, and so is a cap per period exceeded by an addition (a reversal under an additions-only cap is not counted). Accepted: the account's header (balance, sequence number, the credits of the four calendar periods, the buckets of expiring credit when the unit expires credit), the appended entry, and one `LedgerEntryPosted` event; a replay writes nothing and emits no event.
+
+`ExpireLedger`: the system or `ledger-configure` (`Unauthorized`); a unit with an expiry (`InvalidIntent`); a cutoff no later than the one whose buckets have all ended their life (`InvalidIntent`); then, for each account of the unit with a bucket started at or before the cutoff, at most one hundred accounts, one debit of each such bucket, keyed `expiry:<start>`, with the reason `expiry`, and one event each.
+
+Ledger reads (`read_balance`): the reach of the reader is everything when it holds `ledger-read` and no ledger policy of its roles bounds it, what the policies of its roles permit when one does, and its own account when it owns it; otherwise `Unauthorized`. A unit that is not declared, and an account the reader may not see or that does not exist, are `NotFound`; an own account that does not exist reads as zero at sequence zero.
+
+Theorems (`lean/Audit.lean`, the slice 13 section): `postOne_total` (an accepted posting moves the total of the journal by the amount of its event, and a replay by nothing); `ledger_post_atomic` (a posting refused on the state the earlier postings leave refuses the whole intent, whatever follows); `ledger_replay_unchanged` (a posting accepted on a state is replayed with no change on the state it leaves); `expireAccount_debits_due` (every entry of an expiry debits one of the account's buckets that started at or before the cutoff, and is keyed by that bucket's start); `expireCore_total` (an accepted expiry moves the total of the journal by the credit its events report); `read_refused_when_unpermitted` (a reader that may not read an account is refused).
+
+Not covered: the per-step floor and cap theorem (an accepted posting leaves no balance below its floor or above its cap unless it moves toward the bound); the frame lemma (a posting leaves every other account's balance as it was); `PostLedgerTransaction` (balanced transactions of two or more legs, `ledger_transaction.rs`); reversals as operations (`reverse_after`, WG-5598); pool trees and ranked listings; entry listings and their pages; ledger policies beyond the conjunction of the three atoms (owner is the reader, unit, scope); the schema changes that declare units, pools and limits (the fixture declares them, as the settings' definitions are declared); the kernel's hash chain of entries; the operations and automations that post. The differential run compares every refusal and the state the kernel holds for the postings and expiries it generates, within the restrictions of the slice 13 review note.
 
 ### Operations, triggers, automations (`operations::invoke`, `triggers::after_decision`)
 
@@ -703,7 +702,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | 10 (done, with the proof gaps of the slice 10 review notes) | Reads: visibility, field read rules, record reads, named queries (filter, order, pages) (`lean/Strata/Reads.lean`), text search (`lean/Strata/Search.lean`) and aggregates (`lean/Strata/Aggregates.lean`) are in the model, with the executable versions (`lean/Strata/Impl/Read.lean`, `Impl/Search.lean`, `Impl/Aggregates.lean`), the harness and the generator; the codec of the read declarations is not, and the sum, minimum, maximum and top-list equations over rows are not proved | 5, 6 |
 | 11 (part a done in the model: the envelope, define and remove field, define and remove object type, the validity predicate with its concrete rules, the strict and lax checks, all in `lean/Strata/SchemaChange.lean`; not yet: the intent in `step`, retype with value migration, role and other entity kinds, the events, the executable kernels, the codec of the change list, the harness and the generator restriction, and the evolution model's acceptance as the rule for breaking changes) | 3 to 8 |
 | **12 (done)** | Settings: definitions in the fixture (the platform's `member_names` is built in), the intent `writeSetting` decided in the kernel's check order with one `SettingChanged` event, resolution as a read (`lean/Strata/Settings.lean`); the executable kernels, the codec (intent tag 9 and the tenant's three lists) and the Rust mirror, the harness, the generator and the `h-setting-*` scenarios cover them (see the slice 12 review note) | 6, 7 |
-| 13 | Ledger | 6 |
+| **13 (done, with the gaps of the slice 13 review note)** | Ledger: the posting and expiry intents, the balance reads, the fixture ledger, the theorems (`lean/Strata/LedgerModel.lean`, the slice 13 review note) | 6 |
 | 14 | Operations | 1 to 8, 13 |
 | 15 | Triggers and automations | 6, 9 |
 | 16 | Segments | 5, 9, 15 |
@@ -1564,6 +1563,25 @@ section of `lean/Audit.lean`.
   are not compiled or run here; `to_run` lists them. `expected.txt` is not updated, so the new `h-setting-*` outcomes
   are written by `bless_fixtures` from the model, and the first run of the correspondence test is the comparison with
   the kernel.
+
+### Slice 13 review note: what was abstracted
+
+Slice 13 is the ledger. The data are in `lean/Strata/LedgerTypes.lean`, the decisions in `lean/Strata/LedgerModel.lean`, the intents `postLedger` and `expireLedger` in `lean/Strata/Model.lean`, the theorems in the slice 13 section of `lean/Audit.lean`, the codecs in `lean/Strata/Codec/Boundary.lean`, and the executable kernels, the working set and the fixture in `lean/Strata/Impl/`, `lean/Strata/WorkingSet.lean` and `lean/Strata/Fixture.lean`.
+
+- **Accounts are named by their parts.** An account is its owner, unit and scope; the kernel names it by a hash of those (`account_id`), which the model does not compute. Owners are numbers: a person's number, or a pool's. Units and pools are numbers, and the harness prints them so.
+- **The hash chain is not held.** The entries' `previous_hash` and `hash`, the header's `head_hash`, and `opened_at` are the kernel's own integrity check; no decision reads them. The transaction of an entry is absent, since `PostLedgerTransaction` is not modelled.
+- **Time is carried in the intent.** As the member intents carry theirs, `postLedger` and `expireLedger` carry `now` (the kernel's context time). Times are integers of milliseconds.
+- **Calendar periods are computed as the kernel computes them**, in integers (`periodStart`, `shiftPeriods`, `expiryCutoff`), for the hour, the day, the week starting on Monday, and the calendar month, all in UTC.
+- **Credits are exact naturals.** The kernel saturates the credits of a period at `u64::MAX`; the model does not. A saturated credit is above every cap the kernel can hold, so every refusal is the same; the printed credits are not in the harness output.
+- **Order of the accounts in one expiry.** The kernel takes the due accounts of an expiry in the order of their oldest bucket and then of their account id (a hash). The model takes them in the order of their oldest bucket and then of their position in the account list. These agree when at most one account is due at a cutoff, which is the restriction the generator keeps: unit `3` (the expiring unit) is posted only by one person, and the harness scenarios hold one due account. The batch limit of one hundred accounts is stated and proved, not exercised.
+- **Ledger policies are a conjunction of three atoms** (the reader is the owner, the unit is a number, the scope is a text). The kernel's conditions may also disjoin and may read the entry's fields; a balance read does not evaluate those, so they are not modelled. The kernel's `bounded` and `account_permitted` are modelled as stated in `ledger_policy.rs`.
+- **Limits are fixture data.** The unit limits and the account limits are held in the initial tenants, as the settings' definitions are. The schema changes that declare or change them (`DeclareLedgerUnit`, `DeclareLedgerPool`, `SetLedgerLimit`, `RemoveLedgerDefinition`) are not modelled, so an intent cannot declare a unit.
+- **The fixture declares, and the event sequence is unchanged.** Tenants `t1` and `t2` hold `fixtureLedgerDecls`: units `1` (cap `1000`), `2` (floor `0`) and `3` (expiry: month, two periods), and pool `1`. The Rust harness sets them directly on the initial tenants, without a schema batch, so no event and no revision is added: a schema batch would emit `SchemaChanged` events that the model does not produce.
+- **Errors.** `SelfAction` is a new `Err` (`self_action`, tag `20`). `NotFound` is the kernel's `UnknownRecord`, and `VersionConflict` is also the kernel's idempotency mismatch.
+
+What is proved, and what is not. The theorems are stated over the model, not the kernel, and listed in the gap table above. The per-step floor and cap theorem and the frame lemma are not proved: the floor and cap rules are decided by `floorErr` and `capErr` and are compared by the differential run, but no theorem states them. The conservation theorem is over the total of the journal, not the per-account balances; the per-account statement (each balance is the sum of its entries) is not proved either. `PostLedgerTransaction` is not modelled.
+
+What was checked. `lake build` builds the library and the executable with no `sorry` and no new axiom; `lake env lean Audit.lean` prints only `propext`, `Classical.choice` and `Quot.sound` for the new theorems. `strata_model`, with `--impl` and `--indexed`, prints the same text on `fixtures/scenarios.txt`, and the outcome lines of every existing scenario are those of `expected.txt`. The Rust sides (codec, harness, generator, coverage) are written by reading and are not compiled or run here; the `to_run` list gives the commands and their expected results. `expected.txt` is not updated, so the new `h-ledger-*` outcomes are written by the blessing run from the model.
 
 ## What covers the rest
 
