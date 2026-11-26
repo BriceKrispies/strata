@@ -4709,6 +4709,44 @@
       ]
     },
     {
+      "id": "clear-breaks",
+      "description": "rules.rs constraint_breaks (WG-5664): whether some constraint of the object type fails on the record a delete would leave, once its set-null references are cleared: false, or an evaluation error, fails; null and true do not. The record is checked as the constraint loop checks it: record and new the candidate, old none, no parameters.",
+      "params": [
+        {
+          "name": "object",
+          "type": "object-type-def"
+        },
+        {
+          "name": "candidate",
+          "type": "record"
+        },
+        {
+          "name": "who",
+          "type": "principal"
+        },
+        {
+          "name": "now",
+          "type": "timestamp"
+        },
+        {
+          "name": "roles",
+          "type": "set<role-id>"
+        }
+      ],
+      "returns": "bool",
+      "let": [
+        {
+          "name": "scope-new",
+          "expr": "call record-scope(candidate)"
+        },
+        {
+          "name": "env",
+          "expr": "expr-env{record: scope-new, old: null, new: scope-new, param: {}, now: value.time(now), principal: call principal-value(who), has_role: roles}"
+        }
+      ],
+      "body": "fold(c in values(object.constraints), acc = false, acc || (match eval(tenant-rule-language, c.expr, env) { Ok(r) => match r { bool(b) => !b, _ => false }, Err(_) => true }))"
+    },
+    {
       "id": "constraint-checks",
       "description": "rules.rs validate_record, constraint loop: each constraint of the object type (in id order) is evaluated with record and new the candidate, old the stored record, no parameters; false fails with ConstraintViolated, an evaluation error with Evaluation, anything else passes. texts holds the printed form of each constraint expression (the kernel writes it with Display); see the report of WG-4937.",
       "params": [
@@ -21468,9 +21506,13 @@
         {
           "name": "firsts",
           "expr": "fold(h in sortBy(h2 in sortBy(h1 in scan.hits, h1.record.id), h2.record.object), acc = [], if any(a in acc, a.record.object == h.record.object && a.record.id == h.record.id) then acc else concat(acc, [h]))"
+        },
+        {
+          "name": "checked",
+          "expr": "fold(h in firsts, dr = scan.draft, if (match get(d2.tenant.schema.objects, h.record.object) { Some(rdef) => call clear-breaks(rdef, call cleared-record(h.record, scan.hits, target, d2.ctx.now), d2.ctx.principal, d2.ctx.now, call roles-of(d2.tenant, d2.ctx.principal)), None => false }) then fail(call draft-reject(concat(dr.evidence, [check{rule: format('constraint:{}', h.record.object), passed: false, detail: format('{} {} would violate a constraint once cleared', h.record.object, h.record.id)}]), error-kind.constraint-violated, format('{} {} would violate a constraint when {} {} is deleted', h.record.object, h.record.id, object, id))) else dr)"
         }
       ],
-      "body": "let d3 = scan.draft in decided{draft: draft{tenant: d3.tenant, ctx: d3.ctx, coverage: d3.coverage, ops: concat(concat(d3.ops, map(h in firsts, delta-op.put-record(call cleared-record(h.record, scan.hits, target, d3.ctx.now)))), [delta-op.delete-record{object, id}]), events: concat(concat(d3.events, map(h in firsts, event-body.record-updated{before: h.record, after: call cleared-record(h.record, scan.hits, target, d3.ctx.now)})), [event-body.record-deleted{before: old}]), effects: d3.effects, evidence: d3.evidence, next-record: d3.next-record}, output: output.deleted{object, id}}",
+      "body": "let d3 = checked in decided{draft: draft{tenant: d3.tenant, ctx: d3.ctx, coverage: d3.coverage, ops: concat(concat(d3.ops, map(h in firsts, delta-op.put-record(call cleared-record(h.record, scan.hits, target, d3.ctx.now)))), [delta-op.delete-record{object, id}]), events: concat(concat(d3.events, map(h in firsts, event-body.record-updated{before: h.record, after: call cleared-record(h.record, scan.hits, target, d3.ctx.now)})), [event-body.record-deleted{before: old}]), effects: d3.effects, evidence: d3.evidence, next-record: d3.next-record}, output: output.deleted{object, id}}",
       "examples": [
         {
           "description": "behaviour.rs deleting_a_referenced_record_clears_set_null_references: one update for the cleared note, one delete.",
