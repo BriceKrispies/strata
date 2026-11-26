@@ -16655,7 +16655,7 @@
     },
     {
       "id": "create-record",
-      "description": "transition.rs create_record: the object type, the defaults (defaults), the candidate (the next record id, version 1, created by the user or no one, created and updated now), authorisation of Create with the candidate as new, the initial workflow states, then validate-record against the tenant's schema; accepted, it is a PutRecord, a RecordCreated event and the next record id moves on.",
+      "description": "transition.rs create_record: the object type, the permission to create asked before the defaults (may-attempt, or require with no record when no policy could allow it: WG-5665), the defaults (defaults), the candidate (the next record id, version 1, created by the user or no one, created and updated now), authorisation of Create with the candidate as new, the initial workflow states, then validate-record against the tenant's schema; accepted, it is a PutRecord, a RecordCreated event and the next record id moves on.",
       "params": [
         {
           "name": "d",
@@ -16678,20 +16678,24 @@
           "expr": "try call object-def(d, object, action.create)"
         },
         {
+          "name": "gate",
+          "expr": "if call may-attempt(d.tenant, d.ctx.principal, action.create, resource.object(object)) then d else try call require(d, action.create, resource.object(object), subject{})"
+        },
+        {
           "name": "c",
-          "expr": "d.ctx"
+          "expr": "gate.ctx"
         },
         {
           "name": "filled",
-          "expr": "try call defaults(def, fields, c.principal, c.now, d.tenant, d.evidence)"
+          "expr": "try call defaults(def, fields, c.principal, c.now, gate.tenant, gate.evidence)"
         },
         {
           "name": "candidate",
-          "expr": "record{id: d.next-record, object, version: 1, created-by: match c.principal { user(id) => id, _ => null }, created-at: c.now, updated-at: c.now, fields: filled.values}"
+          "expr": "record{id: gate.next-record, object, version: 1, created-by: match c.principal { user(id) => id, _ => null }, created-at: c.now, updated-at: c.now, fields: filled.values}"
         },
         {
           "name": "d1",
-          "expr": "try call require(draft{tenant: d.tenant, ctx: d.ctx, coverage: d.coverage, ops: d.ops, events: d.events, effects: d.effects, evidence: filled.evidence, next-record: d.next-record}, action.create, resource.object(object), subject{new: candidate})"
+          "expr": "try call require(draft{tenant: gate.tenant, ctx: gate.ctx, coverage: gate.coverage, ops: gate.ops, events: gate.events, effects: gate.effects, evidence: filled.evidence, next-record: gate.next-record}, action.create, resource.object(object), subject{new: candidate})"
         },
         {
           "name": "d2",

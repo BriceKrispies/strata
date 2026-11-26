@@ -907,11 +907,14 @@ fn create_record(
     }
     let ctx = draft.ctx;
     // The permission comes before the defaults (WG-5665): a caller whom no grant or policy could
-    // allow to create on this type is refused `unauthorized` whether or not a default would fail.
-    // A caller who could create still gets the full decision on the record below, after the
-    // defaults, as before.
+    // allow to create on this type is refused before any default is evaluated. The refusal is the
+    // one the record decision below gives such a caller, produced by the same `require`, with no
+    // record: when no policy applies, its checks and message do not depend on the record, so the
+    // error and its evidence are the same whichever way the caller is refused. A caller who could
+    // create still gets the full decision on the record, after the defaults, as before.
     let target = Resource::Object(object.clone());
     if !may_attempt(draft.tenant, &ctx.principal, Action::Create, &target) {
+        draft.require(Action::Create, &target, Subject::default())?;
         return Err(draft.reject(
             ErrorKind::Unauthorized,
             format!("{:?} may not Create {target:?}", ctx.principal),
