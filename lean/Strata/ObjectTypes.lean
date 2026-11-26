@@ -88,11 +88,12 @@ theorem create_refs_resolve (t t' : Tenant) (p : Principal) (ty : TypeId) (fs : 
 /-- The references of a record updated in a tenant resolve in the types they name, if the update
     is accepted. -/
 theorem update_refs_resolve (t t' : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
-    (fs : Fields) (ev : Option Nat) (o : ObjType) (old : Record) (ho : t.typ? ty = some o)
+    (fs : Fields) (ev : Option Nat) (o : ObjType) (old : Record) (hpl : t.Plain)
+    (ho : t.typ? ty = some o)
     (hl : o.records.lookup id = some old)
     (h : stepTenant t p (.update ty id fs ev) = .ok t') :
     refsOk t.env o.schema (patched old fs) = true := by
-  obtain ⟨hP, -, -⟩ := update_ok_parts ho hl h
+  obtain ⟨hP, -, -⟩ := update_ok_parts hpl ho hl h
   exact (problem_none hP).2
 
 /-- **Dangling writes are refused across types.** A create whose record holds a reference that
@@ -114,13 +115,13 @@ theorem write_refused_dangling_across_types (t : Tenant) (p : Principal) (ty : T
 /-- **Dangling updates are refused across types.** An update whose patched record holds a
     reference that does not name a record of the type its field names is never accepted. -/
 theorem update_refused_dangling_across_types (t : Tenant) (p : Principal) (ty : TypeId)
-    (id : RecordId) (fs : Fields) (ev : Option Nat) (o : ObjType) (old : Record)
+    (id : RecordId) (fs : Fields) (ev : Option Nat) (o : ObjType) (old : Record) (hpl : t.Plain)
     (ho : t.typ? ty = some o) (hl : o.records.lookup id = some old)
     (fv : FieldId × Val) (hfv : fv ∈ (patched old fs).fields) (d : FieldDef)
     (hd : o.schema.lookup fv.1 = some d) (hbad : fv.2.resolves t.env d.ty = false) :
     ∀ t', stepTenant t p (.update ty id fs ev) ≠ .ok t' := by
   intro t' h
-  have hr := update_refs_resolve t t' p ty id fs ev o old ho hl h
+  have hr := update_refs_resolve t t' p ty id fs ev o old hpl ho hl h
   unfold refsOk at hr
   have hall := (List.all_eq_true.mp hr) fv hfv
   rw [hd] at hall

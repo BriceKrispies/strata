@@ -75,6 +75,7 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
       | .error _ => .error .evaluation
       | .ok r =>
         if !canCreate t p ty r then .error .unauthorized
+        else if !initialsOk o.workflows r then .error .workflowViolation
         else
           match problem t.limits o.schema o.uniques true t.env o.records t.nextId r with
           | some e => .error e
@@ -95,14 +96,23 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
         if !canUpdate t p ty old r then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else
-          match problem t.limits o.schema o.uniques true t.env o.records id r with
-          | some e => .error e
-          | none =>
-            match constraintProblem (writeEnv p r (some old)) o.constraints with
-            | some e => .error e
-            | none =>
-              let rs' := o.records.map (fun q => if q.1 == id then (q.1, r) else q)
-              .ok (t.putType ty { o with records := rs' })
+          -- The workflows (slice 8): a changed state takes a declared transition, whose assignments are
+          -- written; a write that the assignments changed is authorised again, as the record it now is.
+          match fireAll p old r o.workflows with
+          | .error e => .error e
+          | .ok r' =>
+            if !(sameFields r.fields r'.fields || canUpdate t p ty old r') then .error .unauthorized
+            else
+              match problem t.limits o.schema o.uniques true t.env o.records id r' with
+              | some e => .error e
+              | none =>
+                if !statesOk o.workflows r' then .error .workflowViolation
+                else
+                  match constraintProblem (writeEnv p r' (some old)) o.constraints with
+                  | some e => .error e
+                  | none =>
+                    let rs' := o.records.map (fun q => if q.1 == id then (q.1, r') else q)
+                    .ok (t.putType ty { o with records := rs' })
   | .delete ty id ev =>
     match t.typ? ty with
     | none => .error (unknownType t p ty .delete)
@@ -316,6 +326,14 @@ def World.WF (w : World) : Prop :=
 
 def World.RefsOk (w : World) : Prop :=
   ∀ x t, w x = some t → t.RefsOk
+
+/-- Workflow states (slice 8): every stored record holds, in each workflow field of its type that holds a
+    string, one of the states of that workflow. -/
+def Tenant.StatesOk (t : Tenant) : Prop :=
+  ∀ T o, t.typ? T = some o → ∀ q ∈ o.records, statesOk o.workflows q.2 = true
+
+def World.StatesOk (w : World) : Prop :=
+  ∀ x t, w x = some t → t.StatesOk
 
 /-! ## Constraints as an invariant (slice 5) -/
 

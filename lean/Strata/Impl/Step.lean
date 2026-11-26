@@ -85,6 +85,7 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
       | .error _ => .error .evaluation
       | .ok r =>
         if !canCreateI t p ty r then .error .unauthorized
+        else if !initialsOk o.workflows r then .error .workflowViolation
         else
           match problemI t.limits o.schema o.uniques true t.slotsOf o.slots t.nextId r with
           | some e => .error e
@@ -105,12 +106,19 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
         if !canUpdateI t p ty old r then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else
-          match problemI t.limits o.schema o.uniques true t.slotsOf o.slots id r with
-          | some e => .error e
-          | none =>
-            match constraintProblem (writeEnv p r (some old)) o.constraints with
-            | some e => .error e
-            | none => .ok (t.putType ty { o with slots := setSlot o.slots id (some r) })
+          match fireAll p old r o.workflows with
+          | .error e => .error e
+          | .ok r' =>
+            if !(sameFields r.fields r'.fields || canUpdateI t p ty old r') then .error .unauthorized
+            else
+              match problemI t.limits o.schema o.uniques true t.slotsOf o.slots id r' with
+              | some e => .error e
+              | none =>
+                if !statesOk o.workflows r' then .error .workflowViolation
+                else
+                  match constraintProblem (writeEnv p r' (some old)) o.constraints with
+                  | some e => .error e
+                  | none => .ok (t.putType ty { o with slots := setSlot o.slots id (some r') })
   | .delete ty id ev =>
     match t.typ? ty with
     | none => .error (unknownTypeI t p ty .delete)
@@ -286,6 +294,7 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
       simp [stepTenantI, stepTenant, hty, hty', unknownTypeI_eq, Except.map]
     | some o =>
       have hty' : t.abs.typ? ty = some o.abs := by rw [typ?_abs, hty]; rfl
+      have hw : o.abs.workflows = o.workflows := rfl
       have hsz := hinv ty o hty
       by_cases hA : (!canAttemptCreate t.abs p ty) = true
       · simp [stepTenantI, stepTenant, hty, hty', canAttemptCreateI_eq, hA, Except.map]
@@ -306,21 +315,24 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
           canAttemptCreateI_eq, hA', if_false, Bool.false_eq_true]
         by_cases hc : (!canCreate t.abs p ty r) = true
         · simp [hc, Except.map]
-        · simp only [hc, if_false, Bool.false_eq_true, hp]
-          cases hq : problemI t.limits o.schema o.uniques true t.slotsOf o.slots t.nextId r with
-          | some e => simp [Except.map]
-          | none =>
-            cases hk : constraintProblem (writeEnv p r none) o.constraints with
-            | some e =>
-              have hk' : constraintProblem (writeEnv p r none) o.abs.constraints = some e := hk
-              simp [hk', Except.map]
+        · simp only [hc, if_false, Bool.false_eq_true]
+          by_cases hi : (!initialsOk o.workflows r) = true
+          · simp [hi, hw, Except.map]
+          · simp only [hi, hw, if_false, Bool.false_eq_true, hp]
+            cases hq : problemI t.limits o.schema o.uniques true t.slotsOf o.slots t.nextId r with
+            | some e => simp [Except.map]
             | none =>
-              have hk' : constraintProblem (writeEnv p r none) o.abs.constraints = none := hk
-              simp only [hk', Except.map]
-              congr 1
-              simp only [ITenant.putType, ITenant.abs, putTypeI_abs, Tenant.putType]
-              congr 2
-              simp only [IObj.abs, absSlots_push, size_padTo _ _ hsz, absSlots_padTo]
+              cases hk : constraintProblem (writeEnv p r none) o.constraints with
+              | some e =>
+                have hk' : constraintProblem (writeEnv p r none) o.abs.constraints = some e := hk
+                simp [hk', Except.map]
+              | none =>
+                have hk' : constraintProblem (writeEnv p r none) o.abs.constraints = none := hk
+                simp only [hk', Except.map]
+                congr 1
+                simp only [ITenant.putType, ITenant.abs, putTypeI_abs, Tenant.putType]
+                congr 2
+                simp only [IObj.abs, absSlots_push, size_padTo _ _ hsz, absSlots_padTo]
   | update ty id fs ev =>
     cases hty : t.typ? ty with
     | none =>
@@ -328,6 +340,7 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
       simp [stepTenantI, stepTenant, hty, hty', unknownTypeI_eq, Except.map]
     | some o =>
       have hty' : t.abs.typ? ty = some o.abs := by rw [typ?_abs, hty]; rfl
+      have hw : o.abs.workflows = o.workflows := rfl
       have hl : o.abs.records.lookup id = getRec o.slots id := lookup_absSlots o.slots id
       cases hg : getRec o.slots id with
       | none =>
@@ -335,33 +348,42 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
         rfl
       | some old =>
         have hslot := getRec_some o.slots id old hg
-        have hp : problem t.abs.limits o.abs.schema o.abs.uniques true t.abs.env o.abs.records
-            id (patched old fs) =
-            problemI t.limits o.schema o.uniques true t.slotsOf o.slots id (patched old fs) :=
-          problemI_abs t o id (patched old fs)
+        have hpr : ∀ r', problem t.abs.limits o.abs.schema o.abs.uniques true t.abs.env o.abs.records
+            id r' = problemI t.limits o.schema o.uniques true t.slotsOf o.slots id r' :=
+          fun r' => problemI_abs t o id r'
         simp only [stepTenantI, stepTenant, hty, hty', hg, hl, canUpdateI_eq]
         by_cases hc : (!canUpdate t.abs p ty old (patched old fs)) = true
         · simp [hc, Except.map]
         · by_cases hv : versionClash ev old = true
           · simp [hc, hv, Except.map]
-          · simp only [hc, hv, if_false, Bool.false_eq_true, hp]
-            cases hq : problemI t.limits o.schema o.uniques true t.slotsOf o.slots id
-                (patched old fs) with
-            | some e => simp [Except.map]
-            | none =>
-              cases hk : constraintProblem (writeEnv p (patched old fs) (some old)) o.constraints with
-              | some e =>
-                have hk' : constraintProblem (writeEnv p (patched old fs) (some old)) o.abs.constraints
-                    = some e := hk
-                simp [hk', Except.map]
-              | none =>
-                have hk' : constraintProblem (writeEnv p (patched old fs) (some old)) o.abs.constraints
-                    = none := hk
-                simp only [hk', Except.map]
-                congr 1
-                simp only [ITenant.putType, ITenant.abs, putTypeI_abs, Tenant.putType]
-                congr 2
-                simp only [IObj.abs, setSlot, absSlots_setIfInBounds _ _ _ _ hslot]
+          · simp only [hc, hv, if_false, Bool.false_eq_true]
+            cases hF : fireAll p old (patched old fs) o.workflows with
+            | error e => simp [hF, hw, Except.map]
+            | ok r' =>
+              simp only [hF, hw, Bool.false_eq_true, if_false, canUpdateI_eq]
+              by_cases hs : (!(sameFields (patched old fs).fields r'.fields ||
+                  canUpdate t.abs p ty old r')) = true
+              · simp [hs, Except.map]
+              · simp only [hs, if_false, Bool.false_eq_true, hpr]
+                cases hq : problemI t.limits o.schema o.uniques true t.slotsOf o.slots id r' with
+                | some e => simp [Except.map]
+                | none =>
+                  by_cases hsOk : (!statesOk o.workflows r') = true
+                  · simp [hsOk, Except.map]
+                  · simp only [hsOk, if_false, Bool.false_eq_true]
+                    cases hk : constraintProblem (writeEnv p r' (some old)) o.constraints with
+                    | some e =>
+                      have hk' : constraintProblem (writeEnv p r' (some old)) o.abs.constraints
+                          = some e := hk
+                      simp [hk', Except.map]
+                    | none =>
+                      have hk' : constraintProblem (writeEnv p r' (some old)) o.abs.constraints
+                          = none := hk
+                      simp only [hk', Except.map]
+                      congr 1
+                      simp only [ITenant.putType, ITenant.abs, putTypeI_abs, Tenant.putType]
+                      congr 2
+                      simp only [IObj.abs, setSlot, absSlots_setIfInBounds _ _ _ _ hslot]
   | delete ty id ev =>
     cases hty : t.typ? ty with
     | none =>

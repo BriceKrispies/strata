@@ -77,6 +77,7 @@ structure TypeHead where
   schema : Schema
   uniques : List (List FieldId) := []
   constraints : List Expr := []
+  workflows : List Workflow := []
 
 /-- The structural part of a tenant: its object types' schemas and constraints, and its members.
     The records and the counter are keys of their own, because every commit changes them. -/
@@ -93,11 +94,12 @@ structure Header where
   invitations : List (InvitationId × InvitationDef) := []
 
 def TypeHead.ofObj (o : ObjType) : TypeHead :=
-  { schema := o.schema, uniques := o.uniques, constraints := o.constraints }
+  { schema := o.schema, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows }
 
 /-- An object type with the given structure and records. -/
 def TypeHead.withRecords (hh : TypeHead) (rs : Records) : ObjType :=
-  { schema := hh.schema, uniques := hh.uniques, constraints := hh.constraints, records := rs }
+  { schema := hh.schema, uniques := hh.uniques, constraints := hh.constraints,
+    workflows := hh.workflows, records := rs }
 
 def _root_.Strata.Tenant.header (t : Tenant) : Header :=
   { types := t.types.map (fun e => (e.1, TypeHead.ofObj e.2)), members := t.members,
@@ -361,6 +363,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
       | .error _ => .error .evaluation
       | .ok r =>
         if !canCreate h.asTenant p ty r then .error .unauthorized
+        else if !initialsOk o.workflows r then .error .workflowViolation
         else
           match problemVia h.limits o.schema o.uniques true (fun T id => (look T id).isSome)
               (tableOf all ty) n r with
@@ -380,13 +383,21 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
         if !canUpdate h.asTenant p ty old r then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else
-          match problemVia h.limits o.schema o.uniques true (fun T id => (look T id).isSome)
-              (tableOf all ty) id r with
-          | some e => .error e
-          | none =>
-            match constraintProblem (writeEnv p r (look ty id)) o.constraints with
-            | some e => .error e
-            | none => .ok (.replace ty id r)
+          match fireAll p old r o.workflows with
+          | .error e => .error e
+          | .ok r' =>
+            if !(sameFields r.fields r'.fields || canUpdate h.asTenant p ty old r') then
+              .error .unauthorized
+            else
+              match problemVia h.limits o.schema o.uniques true (fun T id => (look T id).isSome)
+                  (tableOf all ty) id r' with
+              | some e => .error e
+              | none =>
+                if !statesOk o.workflows r' then .error .workflowViolation
+                else
+                  match constraintProblem (writeEnv p r' (look ty id)) o.constraints with
+                  | some e => .error e
+                  | none => .ok (.replace ty id r')
   | .delete ty id ev =>
     match h.types.lookup ty with
     | none => .error (unknownType h.asTenant p ty .delete)
@@ -410,7 +421,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
       | none => .error .invalidSchema
       | some o =>
         let types' := putTypeList (assembleTypes h all) ty
-          { schema := makeRequired o.schema f, uniques := o.uniques, constraints := o.constraints,
+          { schema := makeRequired o.schema f, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows,
             records := tableOf all ty }
         if schemaChangeRefused h.limits (scopedTypes types' (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
         else .ok (.schema ty { schema := makeRequired o.schema f, uniques := o.uniques })
@@ -426,7 +437,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
           if d.ty.isList then .error .invalidSchema
           else
             let types' := putTypeList (assembleTypes h all) ty
-              { schema := makeUnique o.schema f, uniques := o.uniques, constraints := o.constraints,
+              { schema := makeUnique o.schema f, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows,
                 records := tableOf all ty }
             if schemaChangeRefused h.limits (scopedTypes types' (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
             else .ok (.schema ty { schema := makeUnique o.schema f, uniques := o.uniques })
@@ -440,7 +451,7 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
         else if dupFields (tableOf all ty) fs then .error .uniqueViolated
         else
           let types' := putTypeList (assembleTypes h all) ty
-            { schema := o.schema, uniques := o.uniques ++ [fs], constraints := o.constraints,
+            { schema := o.schema, uniques := o.uniques ++ [fs], constraints := o.constraints, workflows := o.workflows,
               records := tableOf all ty }
           if schemaChangeRefused h.limits (scopedTypes types' [ty]) true then .error .migrationRejected
           else .ok (.schema ty { schema := o.schema, uniques := o.uniques ++ [fs] })
@@ -630,13 +641,16 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
         | error e => simp [TypeHead.ofObj, hT, hN, hA, Except.map]
         | ok r =>
           by_cases hc : canCreate t p ty r = true
-          · cases hk : problemVia t.limits o.schema o.uniques true
-                (fun T id => Records.has (t.env T) id) o.records t.nextId r with
-            | none =>
-              cases hC : constraintProblem (writeEnv p r none) o.constraints with
-              | none => simp [TypeHead.ofObj, hT, hN, hA, hc, hk, hC, Delta.apply, Tenant.modType, Except.map]
-              | some e => simp [TypeHead.ofObj, hT, hN, hA, hc, hk, hC, Except.map]
-            | some e => simp [TypeHead.ofObj, hT, hN, hA, hc, hk, Except.map]
+          · by_cases hw : initialsOk o.workflows r = true
+            · cases hk : problemVia t.limits o.schema o.uniques true
+                  (fun T id => Records.has (t.env T) id) o.records t.nextId r with
+              | none =>
+                cases hC : constraintProblem (writeEnv p r none) o.constraints with
+                | none => simp [TypeHead.ofObj, hT, hN, hA, hc, hw, hk, hC, Delta.apply, Tenant.modType, Except.map]
+                | some e => simp [TypeHead.ofObj, hT, hN, hA, hc, hw, hk, hC, Except.map]
+              | some e => simp [TypeHead.ofObj, hT, hN, hA, hc, hw, hk, Except.map]
+            · have hw' : initialsOk o.workflows r = false := by simpa using hw
+              simp [TypeHead.ofObj, hT, hN, hA, hc, hw', Except.map]
           · simp [TypeHead.ofObj, hT, hN, hA, hc, Except.map]
       · have hA' : canAttemptCreate t p ty = false := by simpa using hA
         simp [TypeHead.ofObj, hT, hA', Except.map]
@@ -654,14 +668,24 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
         · by_cases hv : versionClash ev old = true
           · simp [TypeHead.ofObj, hT, hl, hc, hv, Except.map, Tenant.recordAt]
           · have hv' : versionClash ev old = false := by simpa using hv
-            cases hk : problemVia t.limits o.schema o.uniques true
-                (fun T id => Records.has (t.env T) id) o.records
-                id (patched old fs) with
-            | none =>
-              cases hC : constraintProblem (writeEnv p (patched old fs) (some old)) o.constraints with
-              | none => simp [TypeHead.ofObj, hT, hl, hc, hv', hk, hrec, hC, Delta.apply, Tenant.modType, Tenant.recordAt, Except.map]
-              | some e => simp [TypeHead.ofObj, hT, hl, hc, hv', hk, hrec, hC, Except.map, Tenant.recordAt]
-            | some e => simp [TypeHead.ofObj, hT, hl, hc, hv', hk, Except.map, Tenant.recordAt]
+            cases hF : fireAll p old (patched old fs) o.workflows with
+            | error e => simp [TypeHead.ofObj, hT, hl, hc, hv', hF, Except.map, Tenant.recordAt]
+            | ok r' =>
+              by_cases hs : (sameFields (patched old fs).fields r'.fields ||
+                  canUpdate t p ty old r') = true
+              · cases hk : problemVia t.limits o.schema o.uniques true
+                    (fun T id => Records.has (t.env T) id) o.records id r' with
+                | none =>
+                  by_cases hsO : statesOk o.workflows r' = true
+                  · cases hC : constraintProblem (writeEnv p r' (some old)) o.constraints with
+                    | none => simp [TypeHead.ofObj, hT, hl, hc, hv', hF, hs, hk, hsO, hrec, hC, Delta.apply, Tenant.modType, Tenant.recordAt, Except.map]
+                    | some e => simp [TypeHead.ofObj, hT, hl, hc, hv', hF, hs, hk, hsO, hrec, hC, Except.map, Tenant.recordAt]
+                  · have hsO' : statesOk o.workflows r' = false := by simpa using hsO
+                    simp [TypeHead.ofObj, hT, hl, hc, hv', hF, hs, hk, hsO', Except.map, Tenant.recordAt]
+                | some e => simp [TypeHead.ofObj, hT, hl, hc, hv', hF, hs, hk, Except.map, Tenant.recordAt]
+              · have hs' : (sameFields (patched old fs).fields r'.fields ||
+                    canUpdate t p ty old r') = false := by simpa using hs
+                simp [TypeHead.ofObj, hT, hl, hc, hv', hF, hs', Except.map, Tenant.recordAt]
         · simp [TypeHead.ofObj, hT, hl, hc, Except.map, Tenant.recordAt]
   | delete ty id ev =>
     simp only [decideTenant, stepTenant, header_types_lookup, unknownType_header,
@@ -716,6 +740,7 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
               Bool.false_eq_true, ite_false, if_false, Bool.not_true]
             by_cases hs : schemaChangeRefused t.limits (scopedTypes (putTypeList t.types ty
                 { schema := makeUnique o.schema f, uniques := o.uniques, constraints := o.constraints,
+                  workflows := o.workflows,
                   records := o.records })
                 (ty :: fieldTargets o.schema f))
                 strict = true
@@ -736,7 +761,7 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
           · simp [hd, Except.map]
           · simp only [hd, Bool.false_eq_true, ite_false, if_false]
             by_cases hs : schemaChangeRefused t.limits (scopedTypes (putTypeList t.types ty
-                { schema := o.schema, uniques := o.uniques ++ [fs], constraints := o.constraints,
+                { schema := o.schema, uniques := o.uniques ++ [fs], constraints := o.constraints, workflows := o.workflows,
                   records := o.records }) [ty]) true = true
             · split <;> split <;> simp_all [Except.map, Tenant.putType]
             · simp [hs, Except.map, Delta.apply, Tenant.modType, hT, Tenant.putType]

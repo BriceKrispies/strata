@@ -904,11 +904,11 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
       cases hL : o.records.lookup id with
       | none => simp [stepTenant, hT, hL, missingRecord] at h
       | some old =>
-        obtain ⟨hP, -, ht⟩ := update_ok_parts hT hL h
+        obtain ⟨r, -, -, hP, -, -, ht⟩ := update_ok_parts_gen hT hL h
         subst ht
         have hinc : ∀ k x, Records.has (t.env k) x = true →
             Records.has ((t.putType ty { o with records := o.records.map (fun q =>
-              if q.1 == id then (q.1, patched old fs) else q) }).env k) x = true := by
+              if q.1 == id then (q.1, r) else q) }).env k) x = true := by
           intro k x hx
           rw [env_putType t ty o _ hT k]
           by_cases hk : k == ty
@@ -922,7 +922,7 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
             exact hx
           · rw [if_neg hk]; exact hx
         have hnew : ∀ q ∈ ({ o with records := o.records.map (fun q =>
-            if q.1 == id then (q.1, patched old fs) else q) } : ObjType).records,
+            if q.1 == id then (q.1, r) else q) } : ObjType).records,
             q ∈ o.records ∨ refsOk t.env o.schema q.2 = true := by
           intro q hq
           obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq

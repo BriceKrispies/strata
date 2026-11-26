@@ -44,6 +44,11 @@ theorem create_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
       simp only [hr]
       by_cases hca : canCreateI core p ty r = true
       · simp only [hca, Bool.not_true, if_false, Bool.false_eq_true]
+        by_cases hw : (!initialsOk o.workflows r) = true
+        · simp only [hw, if_true]
+          exact good_error _ _
+        have hw' : (!initialsOk o.workflows r) = false := by simpa using hw
+        simp only [hw', if_false, Bool.false_eq_true]
         have hp := problemX_eq ⟨core, ux, cx, rx⟩ hok ty o hty core.limits true core.nextId r
         dsimp only at hp
         rw [hp]
@@ -103,22 +108,37 @@ theorem update_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
         · simp only [hv, if_true]
           exact good_error _ _
         · simp only [hv, if_false, Bool.false_eq_true]
-          have hp := problemX_eq ⟨core, ux, cx, rx⟩ hok ty o hty core.limits true id (patched old fs)
+          cases hF : fireAll p old (patched old fs) o.workflows with
+          | error e => simp only [hF]; exact good_error _ _
+          | ok r' =>
+          simp only [hF]
+          by_cases hs : (!(sameFields (patched old fs).fields r'.fields ||
+              canUpdateI core p ty old r')) = true
+          · simp only [hs, if_true]
+            exact good_error _ _
+          have hs' : (!(sameFields (patched old fs).fields r'.fields ||
+              canUpdateI core p ty old r')) = false := by simpa using hs
+          simp only [hs', if_false, Bool.false_eq_true]
+          have hp := problemX_eq ⟨core, ux, cx, rx⟩ hok ty o hty core.limits true id r'
           dsimp only at hp
           rw [hp]
-          cases hq : problemI core.limits o.schema o.uniques true core.slotsOf o.slots id
-              (patched old fs) with
+          cases hq : problemI core.limits o.schema o.uniques true core.slotsOf o.slots id r' with
           | some e => exact good_error _ e
           | none =>
             simp only []
-            cases hk : constraintProblem (writeEnv p (patched old fs) (some old)) o.constraints with
+            by_cases hsO : (!statesOk o.workflows r') = true
+            · simp only [hsO, if_true]
+              exact good_error _ _
+            have hsO' : (!statesOk o.workflows r') = false := by simpa using hsO
+            simp only [hsO', if_false, Bool.false_eq_true]
+            cases hk : constraintProblem (writeEnv p r' (some old)) o.constraints with
             | some e => simp only [hk]; exact good_error _ e
             | none =>
             simp only [hk]
             have hsz := hinv ty o hty
             have hlt := lt_of_getRec _ _ _ hg
             have hmod := ITenant.modifyType_eq core ty
-              (fun o' => { o' with slots := setSlot o'.slots id (some (patched old fs)) }) o hty
+              (fun o' => { o' with slots := setSlot o'.slots id (some r') }) o hty
             refine ⟨?_, fun e x' h => (by cases h), ?_⟩
             · simp only [Except.mapError, Except.map, XTenant.reindex]
               rw [hmod]
@@ -127,9 +147,9 @@ theorem update_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
               subst hy
               rw [hmod]
               refine XTenant.ok_reindex ⟨core, ux, cx, rx⟩ _ ty id o (some old)
-                (some (patched old fs)) hok ?_ hty hg ?_
-              · exact cc_putType core ty id (some (patched old fs)) o
-                  { o with slots := setSlot o.slots id (some (patched old fs)) } hty rfl rfl
+                (some r') hok ?_ hty hg ?_
+              · exact cc_putType core ty id (some r') o
+                  { o with slots := setSlot o.slots id (some r') } hty rfl rfl
                   (fun i hi => by rw [getRec_setSlot _ _ _ hlt]; simp [hi])
                   (by rw [getRec_setSlot _ _ _ hlt]; simp only [if_true])
               · exact inv_putType core ty _ core.nextId (Nat.le_refl _)

@@ -107,6 +107,7 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
       | .error _ => .error (.evaluation, ⟨core, ux, cx, rx⟩)
       | .ok r =>
         if !canCreateI core p ty r then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
+        else if !initialsOk o.workflows r then .error (.workflowViolation, ⟨core, ux, cx, rx⟩)
         else
           match problemX core.limits o.schema o.uniques true core.slotsOf ux cx ty core.nextId r with
           | some e => .error (e, ⟨core, ux, cx, rx⟩)
@@ -133,17 +134,25 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
         if !canUpdateI core p ty old r then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
         else if versionClash ev old then .error (.versionConflict, ⟨core, ux, cx, rx⟩)
         else
-          match problemX core.limits o.schema o.uniques true core.slotsOf ux cx ty id r with
-          | some e => .error (e, ⟨core, ux, cx, rx⟩)
-          | none =>
-            match constraintProblem (writeEnv p r (some old)) o.constraints with
-            | some e => .error (e, ⟨core, ux, cx, rx⟩)
-            | none =>
-              let sch := o.schema
-              let us := o.uniques
-              .ok (XTenant.reindex
-                (core.modifyType ty (fun o => { o with slots := setSlot o.slots id (some r) }))
-                ux cx rx ty id sch us (some old) (some r))
+          match fireAll p old r o.workflows with
+          | .error e => .error (e, ⟨core, ux, cx, rx⟩)
+          | .ok r' =>
+            if !(sameFields r.fields r'.fields || canUpdateI core p ty old r') then
+              .error (.unauthorized, ⟨core, ux, cx, rx⟩)
+            else
+              match problemX core.limits o.schema o.uniques true core.slotsOf ux cx ty id r' with
+              | some e => .error (e, ⟨core, ux, cx, rx⟩)
+              | none =>
+                if !statesOk o.workflows r' then .error (.workflowViolation, ⟨core, ux, cx, rx⟩)
+                else
+                  match constraintProblem (writeEnv p r' (some old)) o.constraints with
+                  | some e => .error (e, ⟨core, ux, cx, rx⟩)
+                  | none =>
+                    let sch := o.schema
+                    let us := o.uniques
+                    .ok (XTenant.reindex
+                      (core.modifyType ty (fun o => { o with slots := setSlot o.slots id (some r') }))
+                      ux cx rx ty id sch us (some old) (some r'))
   | .delete ty id ev =>
     match core.typ? ty with
     | none => .error (unknownTypeI core p ty .delete, ⟨core, ux, cx, rx⟩)

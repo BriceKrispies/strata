@@ -221,6 +221,7 @@ def showErr : Err → String
   | .unknownRole => "unknown_role"
   | .lastOwner => "last_owner"
   | .tenantExists => "tenant_exists"
+  | .workflowViolation => "workflow_violation"
 
 /-- Insertion sort on a key; the lists here are a handful of elements. -/
 def sortBy {α : Type} (key : α → Nat) : List α → List α

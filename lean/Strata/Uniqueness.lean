@@ -890,7 +890,7 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : Principal) (i : Inten
       cases hL : o.records.lookup id with
       | none => simp [stepTenant, hty, hL, missingRecord] at h
       | some old =>
-        obtain ⟨-, -, ht⟩ := update_ok_parts hty hL h
+        obtain ⟨r, hF, -, -, -, -, ht⟩ := update_ok_parts_gen hty hL h
         subst ht
         refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
         by_cases hTy : T = ty
@@ -906,7 +906,7 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : Principal) (i : Inten
             have hold : (old.fields.map Prod.fst).Nodup := by
               have hm : (id, old) ∈ o.records := lookup_mem hL
               exact hr (id, old) hm
-            exact patch_nodup fs old.fields hold
+            exact fireAll_nodup (patch_nodup fs old.fields hold) hF
           · simp only [hid, if_false] at hmap
             rw [← hmap]
             exact hr q₀ hq₀
@@ -1101,7 +1101,7 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : Principal) (i : Intent)
       cases hL : o.records.lookup id with
       | none => simp [stepTenant, hty, hL, missingRecord] at h
       | some old =>
-        obtain ⟨hP, -, ht⟩ := update_ok_parts hty hL h
+        obtain ⟨r, -, -, hP, -, -, ht⟩ := update_ok_parts_gen hty hL h
         subst ht
         intro T o' hT' q₁ hq₁ q₂ hq₂ hne
         by_cases hTy : T = ty
@@ -1142,7 +1142,7 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : Principal) (i : Intent)
 theorem create_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId) (o : ObjType)
     (fs : Fields) (ht : w c.tenant = some t) (ho : t.typ? ty = some o)
     (r : Record) (hc : canCreate t c.principal ty r = true)
-    (hN : newRecord o.schema c.principal fs = .ok r)
+    (hN : newRecord o.schema c.principal fs = .ok r) (hw : initialsOk o.workflows r = true)
     (hfree : problem t.limits o.schema o.uniques false t.env o.records t.nextId
       r = none)
     (hclash : (∃ fd ∈ o.schema, fd.2.unique = true ∧ ∃ q ∈ o.records, q.1 ≠ t.nextId ∧
@@ -1153,13 +1153,15 @@ theorem create_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId
     step w (.create ty fs) c = .error .uniqueViolated ∧
       ∀ w', step w (.create ty fs) c ≠ .ok w' := by
   have hs : step w (.create ty fs) c = .error .uniqueViolated := by
-    simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, ho, hN, hc, canCreate_attempt _ _ _ _ hc, problem_uniq_refusal hfree hclash]
+    simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, ho, hN, hc, hw, canCreate_attempt _ _ _ _ hc, problem_uniq_refusal hfree hclash]
   exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
 
 theorem update_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId) (o : ObjType)
     (id : RecordId) (fs : Fields) (old : Record) (ev : Option Nat)
     (ht : w c.tenant = some t) (ho : t.typ? ty = some o) (hl : o.records.lookup id = some old)
     (hcan : canUpdate t c.principal ty old (patched old fs) = true) (hv : versionClash ev old = false)
+    (hwf : fireAll c.principal old (patched old fs) o.workflows = .ok (patched old fs))
+    (hst : statesOk o.workflows (patched old fs) = true)
     (hfree : problem t.limits o.schema o.uniques false t.env o.records id (patched old fs) = none)
     (hclash : (∃ fd ∈ o.schema, fd.2.unique = true ∧ ∃ q ∈ o.records, q.1 ≠ id ∧
         agreeOn [fd.1] (patched old fs).fields q.2.fields = true) ∨
@@ -1169,7 +1171,7 @@ theorem update_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId
     step w (.update ty id fs ev) c = .error .uniqueViolated ∧
       ∀ w', step w (.update ty id fs ev) c ≠ .ok w' := by
   have hs : step w (.update ty id fs ev) c = .error .uniqueViolated := by
-    simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, ho, hl, hcan, hv, problem_uniq_refusal hfree hclash]
+    simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, ho, hl, hcan, hv, hwf, hst, sameFields, problem_uniq_refusal hfree hclash]
   exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
 
 theorem define_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (ty : TypeId)

@@ -260,7 +260,8 @@ theorem stepI_inv (w : IWorld) (i : Intent) (c : Ctx) (w' : IWorld) (hw : w.Inv)
 
 /-- An implementation object type with no records. -/
 def IObj.ofEmpty (o : ObjType) : IObj :=
-  { schema := o.schema, uniques := o.uniques, slots := #[], constraints := o.constraints }
+  { schema := o.schema, uniques := o.uniques, slots := #[], constraints := o.constraints,
+    workflows := o.workflows }
 
 /-- A tenant with no records, as the implementation starts it: every slot array empty. -/
 def ITenant.ofEmpty (t : Tenant) : ITenant :=

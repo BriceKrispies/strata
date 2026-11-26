@@ -339,7 +339,7 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : Principal) (i : Intent)
       cases hL : o.records.lookup id with
       | none => simp [stepTenant, hT, hL, missingRecord] at h
       | some old =>
-        obtain ⟨hP, -, ht⟩ := update_ok_parts hT hL h
+        obtain ⟨r, -, -, hP, -, -, ht⟩ := update_ok_parts_gen hT hL h
         subst ht
         constructor
         · intro T o' hT' q hq

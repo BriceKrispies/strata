@@ -85,11 +85,11 @@ theorem fix_record : encRecord { owner := some 4, version := 1, fields := [(2, .
     (one: user 7 with role 0), the grants (none), the policies (none), next id, limits, then (slice 7)
     the roles (two: `owner` and `public`), the teams (none) and the invitations (none). -/
 theorem fix_tenant : encTenant fxTenant =
-    [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
+    [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
       2, 0, 1, 0, 0] := by
   simp +decide only [fxTenant, encTenant, encTenantBody, encIso, encPair, encList, encTypeEntry,
     encMember, encGrantEntry, encPolicy, encOpt, encTeamEntry, encInvitationEntry, ownerRole, publicRole,
-    encObjType, encSchemaEntry, encFieldDef, encTy, encBool, encExpr, encVal, encLimits, encNat_small,
+    encObjType, encWorkflow, encSchemaEntry, encFieldDef, encTy, encBool, encExpr, encVal, encLimits, encNat_small,
     encNat_big, tag, List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil,
     List.cons_append, List.nil_append, Nat.reduceMod, Nat.reduceAdd, Nat.reduceDiv, Nat.reduceLT]
 
@@ -115,12 +115,12 @@ def fxTenantM : Tenant :=
     `ab`, members `[7]`, roles `[2]`) and one invitation (id 9, address `a@b`, roles `[2]`, issuer 7,
     expiry 300 as two bytes, no redeemer, revoker 7). -/
 theorem fix_tenant_members : encTenant fxTenantM =
-    [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
+    [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
       3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1, 7] := by
   simp +decide only [fxTenantM, fxTenant, encTenant, encTenantBody, encIso, encPair, encList, encTypeEntry,
     encMember, encGrantEntry, encPolicy, encOpt, encTeamEntry, encInvitationEntry, encTeamDef,
     encInvitationDef, encStr, ownerRole, publicRole,
-    encObjType, encSchemaEntry, encFieldDef, encTy, encBool, encExpr, encVal, encLimits, encNat_small,
+    encObjType, encWorkflow, encSchemaEntry, encFieldDef, encTy, encBool, encExpr, encVal, encLimits, encNat_small,
     encNat_big, tag, List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil,
     List.cons_append, List.nil_append, Nat.reduceMod, Nat.reduceAdd, Nat.reduceDiv, Nat.reduceLT,
     String.toUTF8_eq_toByteArray, String.size_toByteArray]
@@ -207,7 +207,7 @@ theorem fix_result_error : encResult (.error .unauthorized) = [0, 1] := by
   simp +decide only [encResult, encErr, tag, List.cons_append, List.nil_append]
 
 theorem fix_result_ok : encResult (.ok fxTenant) =
-    [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
+    [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16,
       2, 0, 1, 0, 0] := by
   simp +decide only [encResult, fix_tenant, tag, List.cons_append]
 

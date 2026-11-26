@@ -134,11 +134,12 @@ theorem constraint_first_failure (env : ExprEnv) (c : Expr) (cs : List Expr)
 theorem create_constraint_refused (t : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
     (o : ObjType) (ho : t.typ? ty = some o) (r : Record)
     (hN : newRecord o.schema p fs = .ok r) (hc : canCreate t p ty r = true)
+    (hw : initialsOk o.workflows r = true)
     (hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId r = none)
     (e : Err) (he : constraintProblem (writeEnv p r none) o.constraints = some e) :
     stepTenant t p (.create ty fs) = .error e ∧ ∀ t', stepTenant t p (.create ty fs) ≠ .ok t' := by
   have hs : stepTenant t p (.create ty fs) = .error e := by
-    simp [stepTenant, ho, hN, hc, canCreate_attempt _ _ _ _ hc, hP, he]
+    simp [stepTenant, ho, hN, hc, hw, canCreate_attempt _ _ _ _ hc, hP, he]
   exact ⟨hs, fun t' h => by rw [hs] at h; cases h⟩
 
 /-- An update whose structural checks pass is refused by a constraint that fails on the record it
@@ -146,13 +147,16 @@ theorem create_constraint_refused (t : Tenant) (p : Principal) (ty : TypeId) (fs
 theorem update_constraint_refused (t : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
     (fs : Fields) (ev : Option Nat) (o : ObjType) (old : Record) (ho : t.typ? ty = some o)
     (hl : o.records.lookup id = some old) (hcan : canUpdate t p ty old (patched old fs) = true)
-    (hv : versionClash ev old = false) (hP : problem t.limits o.schema o.uniques true t.env
+    (hv : versionClash ev old = false)
+    (hwf : fireAll p old (patched old fs) o.workflows = .ok (patched old fs))
+    (hst : statesOk o.workflows (patched old fs) = true)
+    (hP : problem t.limits o.schema o.uniques true t.env
       o.records id (patched old fs) = none)
     (e : Err) (he : constraintProblem (writeEnv p (patched old fs) (some old)) o.constraints = some e) :
     stepTenant t p (.update ty id fs ev) = .error e ∧
       ∀ t', stepTenant t p (.update ty id fs ev) ≠ .ok t' := by
   have hs : stepTenant t p (.update ty id fs ev) = .error e := by
-    simp [stepTenant, ho, hl, hcan, hv, hP, he]
+    simp [stepTenant, ho, hl, hcan, hv, hwf, hst, sameFields, hP, he]
   exact ⟨hs, fun t' h => by rw [hs] at h; cases h⟩
 
 /-- A create by a caller whom nothing could allow to create on the type is refused `unauthorized`,
@@ -335,7 +339,7 @@ theorem stepTenant_preserves_satisfied (t t' : Tenant) (p : Principal) (i : Inte
       cases hL : o.records.lookup id with
       | none => simp [stepTenant, hT, hL, missingRecord] at h
       | some old =>
-        obtain ⟨hP, hC, ht⟩ := update_ok_parts hT hL h
+        obtain ⟨r, -, -, hP, -, hC, ht⟩ := update_ok_parts_gen hT hL h
         subst ht
         intro T o' hT' q hq
         by_cases hTy : T = ty
@@ -346,9 +350,9 @@ theorem stepTenant_preserves_satisfied (t t' : Tenant) (p : Principal) (i : Inte
           by_cases hid : (q₀.1 == id) = true
           · simp only [hid, if_true] at hmap
             rw [← hmap]
-            show constraintProblem (storedEnv (patched old fs)) o.constraints = none
-            have hcongr := constraintProblem_congr (writeEnv p (patched old fs) (some old))
-              (storedEnv (patched old fs)) rfl rfl o.constraints (fun c hc => hst T o hT c hc)
+            show constraintProblem (storedEnv (r)) o.constraints = none
+            have hcongr := constraintProblem_congr (writeEnv p (r) (some old))
+              (storedEnv (r)) rfl rfl o.constraints (fun c hc => hst T o hT c hc)
             rw [← hcongr]
             exact hC
           · simp only [hid, if_false] at hmap

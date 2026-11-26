@@ -510,6 +510,9 @@ inductive Err where
   | lastOwner
   /-- A `CreateTenant` for a tenant that exists (slice 7). -/
   | tenantExists
+  /-- A record's workflow field is not an initial state on a create, or an update changes it without a
+      declared transition whose guard is true, or leaves it a state that is not one (slice 8). -/
+  | workflowViolation
   deriving DecidableEq, Repr
 
 /-- The first constraint that fails on the record, in the order given: `false` is
@@ -699,6 +702,87 @@ def clearRef (schema : Schema) (t : TypeId) (id : RecordId) (r : Record) : Recor
     { r with fields := clearFields schema t id r.fields, version := r.version + 1 }
   else r
 
+/-! ## Workflows (slice 8)
+
+A workflow names a string field of an object type, the states the field may start in and the
+transitions between states (the kernel's `WorkflowDef`, without its id). A create must start the field
+in an initial state. An update whose patch changes the field must take it along a transition from the
+old state to the new one whose guard is true; the transition's assignments are then written to the
+record; the result is authorised again when they changed it, and it must hold one of the states. The
+decisions are the kernel's `transition::create_record` and `update_record`, and the state check is
+`rules::validate_record`'s. -/
+
+/-- A transition: from one state to another, when its guard holds (absent, it always does), with
+    assignments that give fields of the record new values, each an expression read in the environment
+    of the update. A `null` removes the field. The fields assigned are distinct. -/
+structure WfTransition where
+  source : String
+  target : String
+  guard : Option Expr := none
+  set : List (FieldId × Expr) := []
+  deriving Repr
+
+/-- A workflow over one field of an object type. -/
+structure Workflow where
+  field : FieldId
+  /-- The states a new record may start in. -/
+  initial : List String
+  transitions : List WfTransition := []
+  deriving Repr
+
+/-- Every state the workflow names: its initial states and both ends of its transitions. -/
+def Workflow.states (w : Workflow) : List String :=
+  w.initial ++ w.transitions.flatMap (fun tr => [tr.source, tr.target])
+
+/-- A new record's workflow field is one of the initial states. Any other value, or none, refuses the
+    create (the kernel's first workflow check on a create). -/
+def wfInitialOk (w : Workflow) (r : Record) : Bool :=
+  match r.fields.get w.field with
+  | .str s => decide (s ∈ w.initial)
+  | _ => false
+
+/-- A new record starts in an initial state of every workflow of its type. -/
+def initialsOk (ws : List Workflow) (r : Record) : Bool :=
+  ws.all (fun w => wfInitialOk w r)
+
+/-- A stored record's workflow field, when it holds a string, holds one of the states of the workflow
+    (the kernel's `validate_record` checks string values only). -/
+def wfStateOk (w : Workflow) (r : Record) : Bool :=
+  match r.fields.get w.field with
+  | .str s => decide (s ∈ w.states)
+  | _ => true
+
+/-- Every workflow of the type holds its state in the record. -/
+def statesOk (ws : List Workflow) (r : Record) : Bool :=
+  ws.all (fun w => wfStateOk w r)
+
+/-- A guard holds when it is absent, or evaluates to `true`: `false`, `null` and an evaluation error do
+    not hold (the kernel's `holds`). -/
+def guardHolds (env : ExprEnv) : Option Expr → Bool
+  | none => true
+  | some c => match evalExpr env c with
+    | .ok (.bool true) => true
+    | _ => false
+
+/-- The first transition, in the order given, that takes the state `was` to the state `becomes` and whose
+    guard holds (the kernel's search of a workflow's transitions). -/
+def findTransition (env : ExprEnv) (was becomes : Val) : List WfTransition → Option WfTransition
+  | [] => none
+  | tr :: trs =>
+    if was == .str tr.source && becomes == .str tr.target && guardHolds env tr.guard then some tr
+    else findTransition env was becomes trs
+
+/-- The new values of a transition's assignments, each read in the environment; an error in any of them
+    is an error of the transition (the kernel evaluates them all before it writes any). -/
+def evalSets (env : ExprEnv) : List (FieldId × Expr) → Except Unit (List (FieldId × Val))
+  | [] => .ok []
+  | (f, e) :: es =>
+    match evalExpr env e with
+    | .error _ => .error ()
+    | .ok v => match evalSets env es with
+      | .error _ => .error ()
+      | .ok vs => .ok ((f, v) :: vs)
+
 /-! ## Object types and the tenant -/
 
 /-- One object type of a tenant: its schema, its composite unique constraints and its records. -/
@@ -710,6 +794,8 @@ structure ObjType where
   /-- The constraints of the type, in the kernel's order (by constraint id): each must not be
       `false` on a record of the type, checked after every other check of a write (slice 5). -/
   constraints : List Expr := []
+  /-- The workflows over the type, in the kernel's order (slice 8). -/
+  workflows : List Workflow := []
   deriving Repr
 
 /-! ## Membership: teams, invitations and the roles a schema defines (slice 7)
@@ -1008,6 +1094,40 @@ def newRecord (schema : Schema) (p : Principal) (fs : Fields) : Except Unit Reco
 /-- The record an accepted update writes: patched, one version on. -/
 def patched (old : Record) (ps : Fields) : Record :=
   { owner := old.owner, version := old.version + 1, fields := old.fields.patch ps }
+
+/-- The record with each assignment written in turn (`Fields.set`: a `null` removes the field). -/
+def applySets (r : Record) (as : List (FieldId × Val)) : Record :=
+  as.foldl (fun c fv => { c with fields := Fields.set c.fields fv }) r
+
+/-- One workflow, against the stored record `old` and the candidate `cand` the update has built so far
+    (slice 8). When the field has the same state on both, nothing is checked. Otherwise a transition
+    from the old state to the new one whose guard holds must exist (`workflowViolation` if not), and its
+    assignments are applied (an evaluation error in one of them is `evaluation`). The guard and the
+    assignments read the stored record as `record` and `old`, the candidate as `new`, and the acting
+    principal. -/
+def fireOne (p : Principal) (old cand : Record) (w : Workflow) : Except Err Record :=
+  let was := old.fields.get w.field
+  let becomes := cand.fields.get w.field
+  if was == becomes then .ok cand
+  else
+    let env : ExprEnv :=
+      { record := some old, old := some old, new := some cand, principal := p.userId? }
+    match findTransition env was becomes w.transitions with
+    | none => .error .workflowViolation
+    | some tr => match evalSets env tr.set with
+      | .error _ => .error .evaluation
+      | .ok as => .ok (applySets cand as)
+
+/-- Every workflow of the type, in the order given, against the stored record and the candidate. -/
+def fireAll (p : Principal) (old cand : Record) : List Workflow → Except Err Record
+  | [] => .ok cand
+  | w :: ws => match fireOne p old cand w with
+    | .error e => .error e
+    | .ok c => fireAll p old c ws
+
+/-- Two field lists hold the same values: every field either names has the same value in both. -/
+def sameFields (fs gs : Fields) : Bool :=
+  (fs.map Prod.fst ++ gs.map Prod.fst).all (fun f => fs.get f == gs.get f)
 
 /-- The intent names a version and the record is at another. -/
 def versionClash : Option Nat → Record → Bool

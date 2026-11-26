@@ -8,6 +8,7 @@ lemmas below state those premises, so that the properties about the records an a
 writes can be proved from them without repeating the decision.
 -/
 import Strata.Model
+import Strata.WorkflowLemmas
 
 namespace Strata
 
@@ -29,39 +30,76 @@ theorem create_ok_parts {t t' : Tenant} {p : Principal} {ty : TypeId} {fs : Fiel
     simp only [hN] at h
     split at h
     · cases h
-    · cases hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId r with
-      | some e => simp [hP] at h
-      | none =>
-        simp only [hP] at h
-        cases hC : constraintProblem (writeEnv p r none) o.constraints with
-        | some e => simp [hC] at h
+    · split at h
+      · cases h
+      · cases hP : problem t.limits o.schema o.uniques true t.env o.records t.nextId r with
+        | some e => simp [hP] at h
         | none =>
-          simp only [hC] at h
-          exact ⟨r, rfl, hP, hC, (Except.ok.inj h).symm⟩
+          simp only [hP] at h
+          cases hC : constraintProblem (writeEnv p r none) o.constraints with
+          | some e => simp [hC] at h
+          | none =>
+            simp only [hC] at h
+            exact ⟨r, rfl, hP, hC, (Except.ok.inj h).symm⟩
 
-/-- An accepted update writes the stored record patched, the structural checks and the constraints
-    pass on it, and the tenant has it in place of the stored one. -/
-theorem update_ok_parts {t t' : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
+/-- An accepted update writes the stored record patched and then the workflows' assignments (slice 8).
+    The workflows leave a record that is authorised again when they changed it, and the structural
+    checks, the workflow states and the constraints pass on the record written. -/
+theorem update_ok_parts_gen {t t' : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
     {fs : Fields} {ev : Option Nat} {o : ObjType} {old : Record} (ho : t.typ? ty = some o)
     (hl : o.records.lookup id = some old) (h : stepTenant t p (.update ty id fs ev) = .ok t') :
-    problem t.limits o.schema o.uniques true t.env o.records id (patched old fs) = none ∧
-      constraintProblem (writeEnv p (patched old fs) (some old)) o.constraints = none ∧
+    ∃ r, fireAll p old (patched old fs) o.workflows = .ok r ∧
+      (sameFields (patched old fs).fields r.fields = true ∨ canUpdate t p ty old r = true) ∧
+      problem t.limits o.schema o.uniques true t.env o.records id r = none ∧
+      statesOk o.workflows r = true ∧
+      constraintProblem (writeEnv p r (some old)) o.constraints = none ∧
       t' = t.putType ty { o with records := o.records.map (fun q =>
-        if q.1 == id then (q.1, patched old fs) else q) } := by
+        if q.1 == id then (q.1, r) else q) } := by
   simp only [stepTenant, ho, hl] at h
   split at h
   · cases h
   · split at h
     · cases h
-    · cases hP : problem t.limits o.schema o.uniques true t.env o.records id (patched old fs) with
-      | some e => simp [hP] at h
-      | none =>
-        simp only [hP] at h
-        cases hC : constraintProblem (writeEnv p (patched old fs) (some old)) o.constraints with
-        | some e => simp [hC] at h
-        | none =>
-          simp only [hC] at h
-          exact ⟨rfl, rfl, (Except.ok.inj h).symm⟩
+    · cases hF : fireAll p old (patched old fs) o.workflows with
+      | error e => simp [hF] at h
+      | ok r =>
+        simp only [hF] at h
+        split at h
+        · cases h
+        · rename_i hR
+          cases hP : problem t.limits o.schema o.uniques true t.env o.records id r with
+          | some e => simp [hP] at h
+          | none =>
+            simp only [hP] at h
+            split at h
+            · cases h
+            · rename_i hS
+              cases hC : constraintProblem (writeEnv p r (some old)) o.constraints with
+              | some e => simp [hC] at h
+              | none =>
+                simp only [hC] at h
+                refine ⟨r, rfl, ?_, hP, ?_, hC, (Except.ok.inj h).symm⟩
+                · by_cases hs : sameFields (patched old fs).fields r.fields = true
+                  · exact Or.inl hs
+                  · exact Or.inr (by simpa [hs] using hR)
+                · simpa using hS
+
+/-- An accepted update on a tenant with no assignment writes the stored record patched (the workflow
+    checks decide, and leave the record as it is), the structural checks and the constraints pass on it,
+    and the tenant has it in place of the stored one. -/
+theorem update_ok_parts {t t' : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
+    {fs : Fields} {ev : Option Nat} {o : ObjType} {old : Record} (hpl : t.Plain)
+    (ho : t.typ? ty = some o)
+    (hl : o.records.lookup id = some old) (h : stepTenant t p (.update ty id fs ev) = .ok t') :
+    problem t.limits o.schema o.uniques true t.env o.records id (patched old fs) = none ∧
+      constraintProblem (writeEnv p (patched old fs) (some old)) o.constraints = none ∧
+      t' = t.putType ty { o with records := o.records.map (fun q =>
+        if q.1 == id then (q.1, patched old fs) else q) } := by
+  obtain ⟨r, hF, -, hP, -, hC, ht⟩ := update_ok_parts_gen ho hl h
+  have hr : r = patched old fs :=
+    fireAll_plain o.workflows r (fun w hw tr htr => hpl ty o ho w hw tr htr) hF
+  subst hr
+  exact ⟨hP, hC, ht⟩
 
 /-! ## Defaults of a create -/
 

@@ -116,9 +116,10 @@ theorem lookup_map_replace (rs : Records) (id : RecordId) (r : Record) :
 
 /-! ## The records after a write -/
 
-/-- The record an accepted update writes is the stored one patched, one version on. -/
+/-- The record an accepted update writes is the stored one patched, one version on, when the type has no
+    workflow assignment (`Tenant.Plain`; slice 8 writes the assignments too, see `Strata/Workflows.lean`). -/
 theorem update_writes_patched (t t' : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
-    (ps : Fields) (ev : Option Nat) (old : Record) (hl : t.recordAt ty id = some old)
+    (ps : Fields) (ev : Option Nat) (old : Record) (hpl : t.Plain) (hl : t.recordAt ty id = some old)
     (h : stepTenant t p (.update ty id ps ev) = .ok t') :
     t'.recordAt ty id = some (patched old ps) := by
   unfold Tenant.recordAt at hl ⊢
@@ -127,27 +128,43 @@ theorem update_writes_patched (t t' : Tenant) (p : Principal) (ty : TypeId) (id 
   | some o =>
     rw [hT] at hl
     have hL : o.records.lookup id = some old := by simpa using hl
-    simp only [stepTenant, hT, hL] at h
-    repeat' split at h
-    all_goals try cases h
+    obtain ⟨-, -, ht⟩ := update_ok_parts hpl hT hL h
+    subst ht
     rw [typ?_putType_self t ty o _ hT]
     show List.lookup id (o.records.map (fun q => if q.1 == id then (q.1, patched old ps) else q)) = some (patched old ps)
     rw [lookup_map_replace, hL]
     rfl
 
-/-- A field an accepted update does not name keeps its values. -/
+/-- A field an accepted update does not name keeps its values (with no workflow assignment). -/
 theorem update_keeps_unnamed (t t' : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
-    (ps : Fields) (ev : Option Nat) (old : Record) (f : FieldId) (hl : t.recordAt ty id = some old)
+    (ps : Fields) (ev : Option Nat) (old : Record) (f : FieldId) (hpl : t.Plain)
+    (hl : t.recordAt ty id = some old)
     (hf : f ∉ ps.map Prod.fst) (h : stepTenant t p (.update ty id ps ev) = .ok t') :
     ∃ r, t'.recordAt ty id = some r ∧ r.fields.valuesOf f = old.fields.valuesOf f :=
-  ⟨_, update_writes_patched t t' p ty id ps ev old hl h, patch_keeps_unnamed f ps old.fields hf⟩
+  ⟨_, update_writes_patched t t' p ty id ps ev old hpl hl h, patch_keeps_unnamed f ps old.fields hf⟩
 
-/-- An accepted update raises the record's version by exactly one: versions strictly increase. -/
+/-- An accepted update raises the record's version by exactly one: versions strictly increase. The
+    workflows change fields, never the version, so this holds for every tenant. -/
 theorem update_raises_version (t t' : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
     (ps : Fields) (ev : Option Nat) (old : Record) (hl : t.recordAt ty id = some old)
     (h : stepTenant t p (.update ty id ps ev) = .ok t') :
-    ∃ r, t'.recordAt ty id = some r ∧ r.version = old.version + 1 ∧ old.version < r.version :=
-  ⟨_, update_writes_patched t t' p ty id ps ev old hl h, rfl, Nat.lt_succ_self _⟩
+    ∃ r, t'.recordAt ty id = some r ∧ r.version = old.version + 1 ∧ old.version < r.version := by
+  unfold Tenant.recordAt at hl ⊢
+  cases hT : t.typ? ty with
+  | none => rw [hT] at hl; cases hl
+  | some o =>
+    rw [hT] at hl
+    have hL : o.records.lookup id = some old := by simpa using hl
+    obtain ⟨r, hF, -, -, -, -, ht⟩ := update_ok_parts_gen hT hL h
+    subst ht
+    have hv : r.version = old.version + 1 := by
+      have := fireAll_version hF
+      simpa [patched] using this
+    refine ⟨r, ?_, hv, by omega⟩
+    rw [typ?_putType_self t ty o _ hT]
+    show List.lookup id (o.records.map (fun q => if q.1 == id then (q.1, r) else q)) = some r
+    rw [lookup_map_replace, hL]
+    rfl
 
 /-- An accepted delete rewrites every other record that refers to the deleted one, of any type: the
     references cleared and the version one on. -/
@@ -260,9 +277,10 @@ theorem problem_none_within {L : Limits} {schema : Schema} {us : List (List Fiel
     fields are checked. -/
 theorem create_refused_over_record_bound (t : Tenant) (p : Principal) (ty : TypeId) (fs : Fields)
     (o : ObjType) (ho : t.typ? ty = some o) (r : Record)
-    (hN : newRecord o.schema p fs = .ok r) (hc : canCreate t p ty r = true) (hs : t.limits.maxRecord < r.size) :
+    (hN : newRecord o.schema p fs = .ok r) (hc : canCreate t p ty r = true)
+    (hw : initialsOk o.workflows r = true) (hs : t.limits.maxRecord < r.size) :
     stepTenant t p (.create ty fs) = .error .limitExceeded := by
-  simp [stepTenant, ho, hN, hc, canCreate_attempt _ _ _ _ hc, problem, hs]
+  simp [stepTenant, ho, hN, hc, hw, canCreate_attempt _ _ _ _ hc, problem, hs]
 
 /-- Every record an accepted create writes is within the record bound and holds no value over the
     string or list bound. -/
@@ -274,12 +292,13 @@ theorem create_within_limits (t t' : Tenant) (p : Principal) (ty : TypeId) (fs :
   exact ⟨r, hN, problem_none_within hP⟩
 
 theorem update_within_limits (t t' : Tenant) (p : Principal) (ty : TypeId) (id : RecordId)
-    (ps : Fields) (ev : Option Nat) (o : ObjType) (old : Record) (ho : t.typ? ty = some o)
+    (ps : Fields) (ev : Option Nat) (o : ObjType) (old : Record) (hpl : t.Plain)
+    (ho : t.typ? ty = some o)
     (hl : o.records.lookup id = some old)
     (h : stepTenant t p (.update ty id ps ev) = .ok t') :
     (patched old ps).size ≤ t.limits.maxRecord ∧
       ∀ fv ∈ (patched old ps).fields, fv.2.overLimit t.limits = false := by
-  obtain ⟨hP, -, -⟩ := update_ok_parts ho hl h
+  obtain ⟨hP, -, -⟩ := update_ok_parts hpl ho hl h
   exact problem_none_within hP
 
 end Strata

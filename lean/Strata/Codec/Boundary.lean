@@ -59,9 +59,9 @@ theorem lawful_onDelete : Lawful encOnDelete decOnDelete := by
         repeat' split at h
         all_goals first | omega | simp at h
 
-/-- The kernel's errors: eighteen tags, no payload. `unknownObject` is tag `11`,
+/-- The kernel's errors: nineteen tags, no payload. `unknownObject` is tag `11`,
     `constraintViolated` `12` and `evaluation` `13`; slice 7 adds `invalidIntent` `14`,
-    `unknownRole` `15`, `lastOwner` `16` and `tenantExists` `17`. -/
+    `unknownRole` `15`, `lastOwner` `16` and `tenantExists` `17`; slice 8 adds `workflowViolation` `18`. -/
 def encErr : Err → Bytes
   | .noTenant => [tag 0]
   | .unauthorized => [tag 1]
@@ -81,6 +81,7 @@ def encErr : Err → Bytes
   | .unknownRole => [tag 15]
   | .lastOwner => [tag 16]
   | .tenantExists => [tag 17]
+  | .workflowViolation => [tag 18]
 
 def decErr : Dec Err := fun bs =>
   match bs with
@@ -105,6 +106,7 @@ def decErr : Dec Err := fun bs =>
     | 15 => some (.unknownRole, r)
     | 16 => some (.lastOwner, r)
     | 17 => some (.tenantExists, r)
+    | 18 => some (.workflowViolation, r)
     | _ => none
 
 theorem lawful_err : Lawful encErr decErr := by
@@ -118,9 +120,9 @@ theorem lawful_err : Lawful encErr decErr := by
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
           b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨
           b.toNat = 10 ∨ b.toNat = 11 ∨ b.toNat = 12 ∨ b.toNat = 13 ∨ b.toNat = 14 ∨
-          b.toNat = 15 ∨ b.toNat = 16 ∨ b.toNat = 17 ∨ 18 ≤ b.toNat by omega)
+          b.toNat = 15 ∨ b.toNat = 16 ∨ b.toNat = 17 ∨ b.toNat = 18 ∨ 19 ≤ b.toNat by omega)
         with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk |
-          hk | hk
+          hk | hk | hk
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 0 hk]
@@ -175,6 +177,9 @@ theorem lawful_err : Lawful encErr decErr := by
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 17 hk]
+      · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encErr, byte_eq_tag b 18 hk]
       · simp only [decErr] at h
         repeat' split at h
         all_goals first | omega | simp at h
@@ -1168,21 +1173,63 @@ def decRecordEntry : Dec (RecordId × Record) := decPair decNat decRecord
 theorem lawful_recordEntry : Lawful encRecordEntry decRecordEntry :=
   lawful_pair lawful_nat lawful_record
 
-/-- An object type: its schema, its composite constraints, its records, then its constraints. -/
+/-- A field assigned by a transition: the field id, then the expression that gives its value. -/
+def encFieldExpr : FieldId × Expr → Bytes := encPair encNat encExpr
+
+def decFieldExpr : Dec (FieldId × Expr) := decPair decNat decExpr
+
+theorem lawful_fieldExpr : Lawful encFieldExpr decFieldExpr :=
+  lawful_pair lawful_nat lawful_expr
+
+/-- A transition of a workflow (slice 8): its source state, its target state, its guard (an option), then
+    its assignments. -/
+def encWfTransition : WfTransition → Bytes :=
+  encIso (encPair encStr (encPair encStr (encPair (encOpt encExpr) (encList encFieldExpr))))
+    (fun tr => (tr.source, tr.target, tr.guard, tr.set))
+
+def decWfTransition : Dec WfTransition :=
+  decIso (decPair decStr (decPair decStr (decPair (decOpt decExpr) (decList decFieldExpr))))
+    (fun p => { source := p.1, target := p.2.1, guard := p.2.2.1, set := p.2.2.2 })
+
+theorem lawful_wfTransition : Lawful encWfTransition decWfTransition :=
+  lawful_iso (lawful_pair lawful_str (lawful_pair lawful_str
+      (lawful_pair (lawful_opt lawful_expr) (lawful_list lawful_fieldExpr))))
+    (fun tr => by cases tr; rfl) (fun _ => rfl)
+
+/-- A workflow (slice 8): its field, its initial states, then its transitions. -/
+def encWorkflow : Workflow → Bytes :=
+  encIso (encPair encNat (encPair (encList encStr) (encList encWfTransition)))
+    (fun w => (w.field, w.initial, w.transitions))
+
+def decWorkflow : Dec Workflow :=
+  decIso (decPair decNat (decPair (decList decStr) (decList decWfTransition)))
+    (fun p => { field := p.1, initial := p.2.1, transitions := p.2.2 })
+
+theorem lawful_workflow : Lawful encWorkflow decWorkflow :=
+  lawful_iso (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_str)
+      (lawful_list lawful_wfTransition)))
+    (fun w => by cases w; rfl) (fun _ => rfl)
+
+/-- An object type: its schema, its composite constraints, its records, its constraints, then its
+    workflows (slice 8). -/
 def encObjType : ObjType → Bytes :=
   encIso (encPair (encList encSchemaEntry)
-    (encPair (encList (encList encNat)) (encPair (encList encRecordEntry) (encList encExpr))))
-    (fun o => (o.schema, o.uniques, o.records, o.constraints))
+    (encPair (encList (encList encNat))
+      (encPair (encList encRecordEntry) (encPair (encList encExpr) (encList encWorkflow)))))
+    (fun o => (o.schema, o.uniques, o.records, o.constraints, o.workflows))
 
 def decObjType : Dec ObjType :=
   decIso (decPair (decList decSchemaEntry)
-      (decPair (decList (decList decNat)) (decPair (decList decRecordEntry) (decList decExpr))))
-    (fun p => { schema := p.1, uniques := p.2.1, records := p.2.2.1, constraints := p.2.2.2 })
+      (decPair (decList (decList decNat))
+        (decPair (decList decRecordEntry) (decPair (decList decExpr) (decList decWorkflow)))))
+    (fun p => { schema := p.1, uniques := p.2.1, records := p.2.2.1, constraints := p.2.2.2.1,
+                workflows := p.2.2.2.2 })
 
 theorem lawful_objType : Lawful encObjType decObjType :=
   lawful_iso (lawful_pair (lawful_list lawful_schemaEntry)
       (lawful_pair (lawful_list (lawful_list lawful_nat))
-        (lawful_pair (lawful_list lawful_recordEntry) (lawful_list lawful_expr))))
+        (lawful_pair (lawful_list lawful_recordEntry)
+          (lawful_pair (lawful_list lawful_expr) (lawful_list lawful_workflow)))))
     (fun o => by cases o; rfl) (fun _ => rfl)
 
 /-- A type of the tenant: its id, then the object type. -/
