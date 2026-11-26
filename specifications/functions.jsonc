@@ -12123,7 +12123,7 @@
     },
     {
       "id": "workflow-problems",
-      "description": "schema.rs TenantSchema::problems, one workflow: an unknown object type (nothing else is checked), a field that is unknown or not a string, no initial state, and per transition a guard and each set expression (in field order) that does not check, and a set field the type does not declare.",
+      "description": "schema.rs TenantSchema::problems, one workflow: an unknown object type (nothing else is checked), a field that is unknown or not a string, no initial state, and per transition a guard and each set expression (in field order) that does not check, a set field the type does not declare, and a set field that is a workflow field of the type (the field of this workflow or of another; a transition may not assign one, null included: refused at definition).",
       "params": [
         {
           "name": "schema",
@@ -12145,7 +12145,7 @@
           "expr": "format('workflow {}', workflow.id)"
         }
       ],
-      "body": "match get(schema.objects, workflow.object) { None => [format('{}: unknown object type {}', at, workflow.object)], Some(o) => let env = expr-check-env{fields: call field-shapes(o.fields), params: [], roles} in concat(concat(match get(o.fields, workflow.field) { Some(f) => match f.ty { str => [], _ => [format('{}: field {} is not a string', at, workflow.field)] }, None => [format('{}: unknown field {}', at, workflow.field)] }, if workflow.initial == [] then [format('{}: no initial state', at)] else []), fold(t in workflow.transitions, ps = [], concat(concat(ps, match t.guard { Some(g) => match check(tenant-rule-language, g, env) { Ok(_) => [], Err(e) => [format('{}.{}: guard: {}', at, t.name, e)] }, None => [] }), fold(k in keys(t.set), qs = [], concat(concat(qs, if get(o.fields, k) == null then [format('{}.{}: sets unknown field {}', at, t.name, k)] else []), match get(t.set, k) { Some(e2) => match check(tenant-rule-language, e2, env) { Ok(_) => [], Err(e) => [format('{}.{}: set {}: {}', at, t.name, k, e)] }, None => [] }))))) }",
+      "body": "match get(schema.objects, workflow.object) { None => [format('{}: unknown object type {}', at, workflow.object)], Some(o) => let env = expr-check-env{fields: call field-shapes(o.fields), params: [], roles} in concat(concat(match get(o.fields, workflow.field) { Some(f) => match f.ty { str => [], _ => [format('{}: field {} is not a string', at, workflow.field)] }, None => [format('{}: unknown field {}', at, workflow.field)] }, if workflow.initial == [] then [format('{}: no initial state', at)] else []), fold(t in workflow.transitions, ps = [], concat(concat(ps, match t.guard { Some(g) => match check(tenant-rule-language, g, env) { Ok(_) => [], Err(e) => [format('{}.{}: guard: {}', at, t.name, e)] }, None => [] }), fold(k in keys(t.set), qs = [], concat(concat(concat(qs, if get(o.fields, k) == null then [format('{}.{}: sets unknown field {}', at, t.name, k)] else []), if k == workflow.field || any(v in values(schema.workflows), v.object == workflow.object && v.field == k) then [format('{}.{}: sets {}, a workflow field of {}: a transition may not assign it', at, t.name, k, workflow.object)] else []), match get(t.set, k) { Some(e2) => match check(tenant-rule-language, e2, env) { Ok(_) => [], Err(e) => [format('{}.{}: set {}: {}', at, t.name, k, e)] }, None => [] }))))) }",
       "examples": [
         {
           "args": {
@@ -12243,6 +12243,7 @@
             "workflow w: no initial state",
             "workflow w.go: guard: undeclared parameter p",
             "workflow w.go: sets unknown field colour",
+            "workflow w.go: sets rank, a workflow field of note: a transition may not assign it",
             "workflow w.go: set rank: unknown field nope"
           ]
         },
@@ -12267,6 +12268,82 @@
           },
           "result": [
             "workflow w: unknown field mood"
+          ]
+        },
+        {
+          "description": "A transition may not assign a workflow field of its type: here the status field of the note_status workflow of the schema.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-4"
+            },
+            "roles": [
+              "editor",
+              "owner",
+              "public",
+              "writer"
+            ],
+            "workflow": {
+              "id": "w2",
+              "object": "note",
+              "field": "body",
+              "initial": [
+                "x"
+              ],
+              "transitions": [
+                {
+                  "name": "go",
+                  "from": "x",
+                  "to": "y",
+                  "set": {
+                    "status": {
+                      "lit": {
+                        "str": "draft"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "result": [
+            "workflow w2.go: sets status, a workflow field of note: a transition may not assign it"
+          ]
+        },
+        {
+          "description": "A transition may not assign null to a workflow field: here the field of its own workflow.",
+          "args": {
+            "schema": {
+              "fixture": "fx-tenant-schema-4"
+            },
+            "roles": [
+              "editor",
+              "owner",
+              "public",
+              "writer"
+            ],
+            "workflow": {
+              "id": "w3",
+              "object": "note",
+              "field": "body",
+              "initial": [
+                "x"
+              ],
+              "transitions": [
+                {
+                  "name": "clear",
+                  "from": "x",
+                  "to": "y",
+                  "set": {
+                    "body": {
+                      "lit": "null"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "result": [
+            "workflow w3.clear: sets body, a workflow field of note: a transition may not assign it"
           ]
         }
       ]

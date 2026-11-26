@@ -508,10 +508,13 @@ def World.WF (w : World) : Prop :=
 def World.RefsOk (w : World) : Prop :=
   ∀ x t, w x = some t → t.RefsOk
 
-/-- Workflow states (slice 8): every stored record holds, in each workflow field of its type that holds a
-    string, one of the states of that workflow. -/
+/-- Workflow states (slice 8): every stored record holds, in each workflow field of its type, a string that is
+    one of the states of that workflow. A field that holds no string (absent, or `null`) is not a state: the
+    transitions never leave one (`statesOk` checks a string, and a definition may not assign a workflow
+    field, see `Tenant.WfDefs` in `Strata/Workflows.lean`). -/
 def Tenant.StatesOk (t : Tenant) : Prop :=
-  ∀ T o, t.typ? T = some o → ∀ q ∈ o.records, statesOk o.workflows q.2 = true
+  ∀ T o, t.typ? T = some o → ∀ q ∈ o.records, statesOk o.workflows q.2 = true ∧
+    ∀ w ∈ o.workflows, ∃ s, q.2.fields.get w.field = .str s
 
 def World.StatesOk (w : World) : Prop :=
   ∀ x t, w x = some t → t.StatesOk

@@ -991,6 +991,10 @@ import Strata
 #print axioms Strata.fireOne_declared
 #print axioms Strata.fireOne_keeps
 #print axioms Strata.fireAll_fires
+#print axioms Strata.fireAll_keeps
+#print axioms Strata.fireAll_present
+#print axioms Strata.clearRef_present
+#print axioms Strata.get_clearFields_str
 #print axioms Strata.update_changed_fired
 #print axioms Strata.update_undeclared_refused
 #print axioms Strata.update_writes_fired

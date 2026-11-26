@@ -519,6 +519,19 @@ impl TenantSchemaExt for TenantSchema {
                             transition.name
                         ));
                     }
+                    // A transition may not assign a workflow field of its type, of this workflow or
+                    // another, and `null` included (the model's WfDefined rule): a workflow field
+                    // changes only by its patch, and a changed one has a transition that took it.
+                    if self
+                        .workflows
+                        .values()
+                        .any(|other| other.object == workflow.object && other.field == *field)
+                    {
+                        problems.push(format!(
+                            "{at}.{}: sets {field}, a workflow field of {}: a transition may not assign it",
+                            transition.name, workflow.object
+                        ));
+                    }
                     if let Err(e) = expr::check(value, &env) {
                         problems.push(format!("{at}.{}: set {field}: {e}", transition.name));
                     }
