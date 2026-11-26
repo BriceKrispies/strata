@@ -49,6 +49,8 @@ import Strata.Codec.Boundary
 import Strata.Codec.Fixtures
 import Strata.Workflows
 import Strata.Reads
+import Strata.Search
+import Strata.Aggregates
 
 import Strata.ObjectTypes
 
@@ -68,6 +70,8 @@ import Strata.Impl.XSchema
 import Strata.Impl.XWorld
 import Strata.Impl.Transition
 import Strata.Impl.Read
+import Strata.Impl.Search
+import Strata.Impl.Aggregates
 import Strata.EventProofs
 import Strata.Fixture
 import Strata.Bench

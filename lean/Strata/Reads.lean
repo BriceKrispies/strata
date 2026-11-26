@@ -35,21 +35,48 @@ abbrev FieldRules := List (TypeId × FieldId × Expr)
 /-- A named query is identified by its name. -/
 abbrev QueryId := String
 
+/-- The kinds of aggregate the model has (the kernel's `AggregateKind`, without `average` and without a
+    second group field, which the fixture does not use; see the slice 10 review note). -/
+inductive AggKind where
+  | count
+  | sum
+  | minimum
+  | maximum
+  | top
+  deriving DecidableEq, Repr
+
+/-- An aggregate a named query declares (the kernel's `AggregateDef`): its kind, the field it reads
+    (absent for a count), the field it groups by (absent for one group), the length of a top list, the
+    order of a top list (descending when `true`), and the most records it may examine. -/
+structure AggDef where
+  kind : AggKind
+  field : Option FieldId := none
+  groupBy : Option FieldId := none
+  n : Option Nat := none
+  descending : Bool := false
+  scanBound : Nat
+  deriving Repr
+
 /-- A named query (the kernel's `QueryDef`, in its scan form): the records of one object type that
     `filter` holds of on their redacted copy, sorted by the order keys (a field and whether it is
-    descending), then by id, and paged. `limit` is the default page size. -/
+    descending), then by id, and paged. `limit` is the default page size. `declared` are the fields a
+    request may filter an aggregate on, and `aggregates` the aggregates the query declares, by id. -/
 structure QueryDef where
   ty : TypeId
   params : List String := []
   filter : Option Expr := none
   order : List (FieldId × Bool) := []
   limit : Option Nat := none
+  declared : List FieldId := []
+  aggregates : List (String × AggDef) := []
   deriving Repr
 
-/-- The read declarations of a tenant's schema. -/
+/-- The read declarations of a tenant's schema. `searchable` lists, for each object type, the fields its
+    search index holds (the kernel's `searchable`). -/
 structure ReadSpec where
   rules : FieldRules := []
   queries : List (QueryId × QueryDef) := []
+  searchable : List (TypeId × List FieldId) := []
   deriving Repr
 
 /-- The errors a read can give (the kernel's `LimitExceeded`, `UnknownObject`, `UnknownQuery` and
@@ -317,6 +344,17 @@ def rowOf (t : Tenant) (rs : FieldRules) (p : Principal) (ty : TypeId) (id : Rec
   match t.recordAt ty id with
   | some r => if t.canRead p ty r then some (id, redact rs p ty r) else none
   | none => none
+
+/-- Where the records a search or an aggregate reads come from: the records of each object type, and who may
+    read a stored record of a type. A spec tenant gives `Src.ofTenant`; the executable tenant gives its
+    slots (`Strata/Impl/Search.lean`, `Strata/Impl/Aggregates.lean`). -/
+structure Src where
+  recs : TypeId → Records
+  canRead : Principal → TypeId → Record → Bool
+
+/-- The source of a spec tenant: its records and its read decision. -/
+def Src.ofTenant (t : Tenant) : Src :=
+  { recs := t.recordsOf, canRead := fun p ty r => t.canRead p ty r }
 
 /-! ## Record reads -/
 

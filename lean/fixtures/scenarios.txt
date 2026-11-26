@@ -2295,3 +2295,96 @@ read 2 999 query items_by_rank
 read 1 200 query items_by_rank
 read 1 200 records 1 1
 end
+scenario h-search-visible-and-hidden-fields
+op 1 100 create 1=s:oak-tree 2=i:5 3=b:1 7=l:s:red,s:blue 10=s:Hidden
+op 1 100 create 1=s:elm 2=i:9 3=b:0 7=l:s:green 10=s:pine
+op 1 100 create 1=s:oakwood 2=i:7 3=b:1 10=s:shown
+op 1 100 type 4 create 2=i:2 3=s:urgent
+op 1 100 type 4 create 2=i:0 3=s:quiet
+read 1 100 search * oak
+read 1 100 search * pine
+read 1 100 search * shown
+read 1 100 search * hidden
+read 1 100 search * red blue
+read 1 100 search * open
+read 1 100 search * urgent
+read 1 100 search * quiet
+read 1 102 search * oak
+read 1 101 search * pine
+read 1 anon search * oak
+read 1 system search * oak
+read 2 200 search * oak
+read 3 100 search * oak
+end
+scenario h-search-refusals-and-paging
+op 1 100 create 1=s:oak-tree 2=i:5 3=b:1
+op 1 100 create 1=s:oakwood 2=i:7 3=b:1
+op 1 100 type 4 create 2=i:2 3=s:oak-note
+op 1 100 type 4 create 2=i:3 3=s:oak-note-two
+read 1 100 search *
+read 1 100 search * oak page=0
+read 1 100 search * oak page=201
+read 1 100 search * oak page=200
+read 1 100 search 9 oak
+read 1 100 search * a b c d e f g h i
+read 1 100 search * a b c d e f g h
+read 1 100 search * aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+read 1 100 search * ---
+read 1 100 search * oak
+read 1 100 search * oak page=1
+read 1 100 search * oak page=2
+read 1 100 search 4 oak
+read 1 100 search 2 oak
+read 1 100 search 1 oak page=1
+read 3 100 search * oak
+end
+scenario h-aggregate-items-by-rank
+op 1 100 create 1=s:a 2=i:5 3=b:1
+op 1 100 create 1=s:b 2=i:9 3=b:0
+op 1 100 create 1=s:c 3=b:1
+op 1 100 create 1=s:elm 2=i:7 3=b:1
+read 1 100 aggregate items_by_rank count
+read 1 100 aggregate items_by_rank bounded_count
+read 1 100 aggregate items_by_rank sum_rank
+read 1 100 aggregate items_by_rank min_rank
+read 1 100 aggregate items_by_rank max_rank
+read 1 100 aggregate items_by_rank top_rank
+read 1 100 aggregate items_by_rank count_by_flag
+read 1 101 aggregate items_by_rank sum_rank
+read 1 100 aggregate items_by_rank sum_rank filter.3=b:1
+read 1 100 aggregate items_by_rank sum_rank filter.1=s:a
+read 1 100 aggregate items_by_rank nope
+read 1 100 aggregate nope count
+read 1 100 aggregate items_by_rank count tag=s:x
+read 1 100 aggregate items_not_elm count tag=s:x
+read 1 100 aggregate items_not_elm count filter.3=b:1
+read 1 100 aggregate items_not_elm sum_rank tag=s:x
+read 1 100 aggregate items_not_elm count nope=i:1
+read 1 anon aggregate items_by_rank count
+read 1 system aggregate items_by_rank sum_rank
+read 3 100 aggregate items_by_rank count
+end
+scenario h-aggregate-hidden-by-field-rule-and-sum-overflow
+op 1 100 create 1=s:a 2=i:9223372036854775807
+op 1 100 create 1=s:b 2=i:9223372036854775807
+read 1 100 aggregate items_by_rank sum_rank
+read 1 100 aggregate items_by_rank count
+read 1 100 aggregate items_by_rank min_rank
+op 1 100 type 2 create 4=i:3
+op 1 100 type 2 create 4=i:8
+read 1 100 aggregate parts_ranked sum
+read 1 101 aggregate parts_ranked count
+read 1 101 aggregate parts_ranked sum
+read 1 101 aggregate parts_ranked max
+read 1 100 aggregate parts_ranked max
+read 1 100 aggregate tickets_open max_note
+end
+scenario h-aggregate-tickets-hidden-note
+op 1 100 type 4 create 2=i:0 3=s:quiet
+op 1 100 type 4 create 2=i:2 3=s:urgent
+read 1 100 aggregate tickets_open count
+read 1 100 aggregate tickets_open sum_votes
+read 1 100 aggregate tickets_open max_note
+read 1 101 aggregate tickets_open max_note
+read 1 100 aggregate tickets_open max_note filter.2=i:2
+end

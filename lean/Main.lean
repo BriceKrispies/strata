@@ -17,6 +17,8 @@ The Rust kernel is run on the same scenarios and must print the same text. See
 import Strata.Impl.World
 import Strata.Impl.Transition
 import Strata.Impl.Read
+import Strata.Impl.Search
+import Strata.Impl.Aggregates
 import Strata.Bench
 
 open Strata
@@ -401,6 +403,79 @@ def showRead : Except ReadErr ReadResult → List String
   | .error e => [s!"err {showReadErr e}"]
   | .ok r => ["ok", s!"next {showCursor r.next}"] ++ r.rows.map (fun row => s!"row {row.1} {recordBody row.2}")
 
+/-! ### Search and aggregates (slice 10, second half)
+
+A search line is `read <tenant> <principal> search <type|*> <words..> [page=<n>]`: the words are the
+tokens before the page, joined by spaces, and `*` searches every type. It prints `err <kind>`, or `ok`,
+`examined <n>`, `next <type> <id>` (`-` for none) and one `hit <type> <id> matched=<fields> <record>` line
+per hit, in order. An aggregate line is `read <tenant> <principal> aggregate <query> <aggregate>
+[filter.<n>=<v> ..] [<param>=<v> ..]`: a `filter.<n>` token filters on field `n`, any other `k=v` is a
+parameter. It prints `err <kind>`, with the rule for a limit, or `ok`, `scanned <n>`, and for each group
+`group <key|-> <value|->` followed by its `top <id> <value>` rows. -/
+
+/-- The words of a search line, and its page size when one is named last. -/
+def parseSearch : List String → Option (TenantId × Principal × SearchReq)
+  | "read" :: t :: p :: "search" :: ty :: rest => do
+    let objects ← (if ty = "*" then some [] else (ty.toNat?).map (fun n => [n]))
+    let (ws, page) ← match rest.getLast? with
+      | some last =>
+        if last.startsWith "page=" then
+          (do let n ← (dropChars last 5).toNat?; pure (rest.dropLast, some n))
+        else some (rest, none)
+      | none => some (rest, none)
+    pure (← t.toNat?, ← parsePrincipal p, { query := " ".intercalate ws, objects := objects, page := page })
+  | _ => none
+
+/-- The arguments of an aggregate line: `filter.<n>=<v>` filters on field `n`, `k=v` is a parameter. -/
+def parseAggArgs : List String → Option (List (String × Val) × List (FieldId × Val))
+  | [] => some ([], [])
+  | tok :: rest => do
+    let (ps, fs) ← parseAggArgs rest
+    match tok.splitOn "=" with
+    | k :: v =>
+      let v := "=".intercalate v
+      if k.startsWith "filter." then
+        pure (ps, (← (dropChars k 7).toNat?, ← parseVal v) :: fs)
+      else pure ((k, ← parseVal v) :: ps, fs)
+    | [] => none
+
+def parseAggregate : List String → Option (TenantId × Principal × AggReq)
+  | "read" :: t :: p :: "aggregate" :: q :: a :: rest => do
+    let (ps, fs) ← parseAggArgs rest
+    pure (← t.toNat?, ← parsePrincipal p, { query := q, aggregate := a, params := ps, filter := fs })
+  | _ => none
+
+def showSearchNext : Option (TypeId × RecordId) → String
+  | none => "-"
+  | some (ty, id) => s!"{ty} {id}"
+
+def showSearchHit (h : SearchHit) : String :=
+  s!"hit {h.ty} {h.id} matched={",".intercalate (h.matched.map toString)} {recordBody h.record}"
+
+/-- The lines a search prints. -/
+def showSearch : Except ReadErr SearchResult → List String
+  | .error e => [s!"err {showReadErr e}"]
+  | .ok r => ["ok", s!"examined {r.examined}", s!"next {showSearchNext r.next}"] ++ r.hits.map showSearchHit
+
+def showAggErr : AggErr → String
+  | .unknownQuery => "err unknown_query"
+  | .invalidIntent => "err invalid_intent"
+  | .unknownObject => "err unknown_object"
+  | .unknownField => "err unknown_field"
+  | .limitExceeded .scanBound => "err limit_exceeded scan-bound-exceeded"
+  | .limitExceeded .sumOverflow => "err limit_exceeded sum-overflow"
+  | .limitExceeded .groupBound => "err limit_exceeded group-bound-exceeded"
+
+def showOptVal : Option Val → String
+  | none => "-"
+  | some v => showVal v
+
+/-- The lines an aggregate prints. -/
+def showAgg : Except AggErr AggResult → List String
+  | .error e => [showAggErr e]
+  | .ok r => ["ok", s!"scanned {r.scanned}"] ++ r.groups.flatMap (fun g =>
+      [s!"group {showOptVal g.key} {showOptVal g.value}"] ++ g.rows.map (fun row => s!"top {row.1} {showVal row.2}"))
+
 /-- One kernel the scenario runner drives: its start state, its transition (the world after an accepted step,
     with the events it emits), the revision of a tenant, and how it prints its state. -/
 structure Kernel (W : Type) where
@@ -410,6 +485,10 @@ structure Kernel (W : Type) where
   render : W → List String
   /-- A read on a tenant for a principal: none when the tenant does not exist. -/
   read : W → TenantId → Principal → ReadReq → Option (Except ReadErr ReadResult)
+  /-- A search on a tenant for a principal (slice 10, second half). -/
+  search : W → TenantId → Principal → SearchReq → Option (Except ReadErr SearchResult)
+  /-- An aggregate of a named query on a tenant for a principal (slice 10, second half). -/
+  aggregate : W → TenantId → Principal → AggReq → Option (Except AggErr AggResult)
 
 /-- The spec's kernel: the model as written, with its transition. -/
 def specKernel : Kernel World :=
@@ -417,19 +496,25 @@ def specKernel : Kernel World :=
     step := fun w i c => (transition w i c).map (fun tr => (tr.world, tr.events)),
     revision := fun w x => (w x).map (fun t => t.revision),
     render := showWorld,
-    read := fun w x p req => (w x).map (fun t => read t (readSpecOf x) p req) }
+    read := fun w x p req => (w x).map (fun t => read t (readSpecOf x) p req),
+    search := fun w x p req => (w x).map (fun t => search t (readSpecOf x) p req),
+    aggregate := fun w x p req => (w x).map (fun t => aggregate t (readSpecOf x) p req) }
 
 /-- The executable kernel: the slots, printed through the abstraction. -/
 def implKernel : Kernel IWorld :=
   { init := implInitial, step := fun w i c => transitionI w i c,
     revision := fun w x => (w x).map (fun t => t.revision), render := fun w => showWorld (absW w),
-    read := fun w x p req => (w x).map (fun t => readI t (readSpecOf x) p req) }
+    read := fun w x p req => (w x).map (fun t => readI t (readSpecOf x) p req),
+    search := fun w x p req => (w x).map (fun t => searchI t (readSpecOf x) p req),
+    aggregate := fun w x p req => (w x).map (fun t => aggregateI t (readSpecOf x) p req) }
 
 /-- The indexed kernel: slots and indexes, printed through the abstraction. -/
 def xKernel : Kernel XWorld :=
   { init := xInitial, step := fun w i c => transitionX w i c,
     revision := fun w x => (w x).map (fun t => t.core.revision), render := fun w => showWorld (absX w),
-    read := fun w x p req => (w x).map (fun t => readX t (readSpecOf x) p req) }
+    read := fun w x p req => (w x).map (fun t => readX t (readSpecOf x) p req),
+    search := fun w x p req => (w x).map (fun t => searchX t (readSpecOf x) p req),
+    aggregate := fun w x p req => (w x).map (fun t => aggregateX t (readSpecOf x) p req) }
 
 partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (out : Array String) :
     Array String :=
@@ -442,13 +527,23 @@ partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (ou
     | "scenario" :: name => runLines K rest K.init (out.push s!"scenario {" ".intercalate name}")
     | ["end"] => runLines K rest K.init ((out.push "state" ++ (K.render w).toArray).push "end")
     | "read" :: _ =>
-      match parseRead tokens with
+      let answered : Option (List String) :=
+        match tokens with
+        | _ :: _ :: _ :: "search" :: _ => (parseSearch tokens).map (fun (x, p, req) =>
+            match K.search w x p req with
+            | none => ["err no_tenant"]
+            | some r => showSearch r)
+        | _ :: _ :: _ :: "aggregate" :: _ => (parseAggregate tokens).map (fun (x, p, req) =>
+            match K.aggregate w x p req with
+            | none => ["err no_tenant"]
+            | some r => showAgg r)
+        | _ => (parseRead tokens).map (fun (x, p, req) =>
+            match K.read w x p req with
+            | none => ["err no_tenant"]
+            | some r => showRead r)
+      match answered with
       | none => runLines K rest w (out.push s!"unparsed {line}")
-      | some (x, p, req) =>
-        let lines := match K.read w x p req with
-          | none => ["err no_tenant"]
-          | some r => showRead r
-        runLines K rest w (lines.foldl (fun a l => a.push l) out)
+      | some lines => runLines K rest w (lines.foldl (fun a l => a.push l) out)
     | _ =>
       match parseOp tokens with
       | none => runLines K rest w (out.push s!"unparsed {line}")

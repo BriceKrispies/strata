@@ -185,22 +185,52 @@ def fixtureReadRules : FieldRules :=
     and declares a parameter `tag` that its filter does not read; `parts_ranked` the parts by field
     `4`; `tickets_open` the open tickets by field `2` then field `3`, two to a page. -/
 def fixtureQueries : List (QueryId × QueryDef) :=
-  [("items_by_rank", { ty := 1, order := [(2, true)] }),
+  [("items_by_rank",
+    { ty := 1, order := [(2, true)], declared := [2, 3],
+      aggregates :=
+        [("count", { kind := .count, scanBound := 10000 }),
+         ("bounded_count", { kind := .count, scanBound := 2 }),
+         ("sum_rank", { kind := .sum, field := some 2, scanBound := 10000 }),
+         ("min_rank", { kind := .minimum, field := some 2, scanBound := 10000 }),
+         ("max_rank", { kind := .maximum, field := some 2, scanBound := 10000 }),
+         ("top_rank", { kind := .top, field := some 2, n := some 2, descending := true, scanBound := 10000 }),
+         ("count_by_flag", { kind := .count, groupBy := some 3, scanBound := 10000 })] }),
    ("items_not_elm",
     { ty := 1
       params := ["tag"]
       filter := some (.cmp .ne (.field .record 1) (.lit (.str "elm")))
       order := [(3, false), (2, true)]
-      limit := some 3 }),
-   ("parts_ranked", { ty := 2, order := [(4, false)] }),
+      limit := some 3
+      declared := [2, 3]
+      aggregates :=
+        [("count", { kind := .count, scanBound := 10000 }),
+         ("sum_rank", { kind := .sum, field := some 2, scanBound := 10000 })] }),
+   ("parts_ranked",
+    { ty := 2, order := [(4, false)], declared := [4],
+      aggregates :=
+        [("count", { kind := .count, scanBound := 10000 }),
+         ("sum", { kind := .sum, field := some 4, scanBound := 10000 }),
+         ("max", { kind := .maximum, field := some 4, scanBound := 10000 })] }),
    ("tickets_open",
     { ty := 4
       filter := some (.cmp .eq (.field .record 1) (.lit (.str "open")))
       order := [(2, false), (3, false)]
-      limit := some 2 })]
+      limit := some 2
+      declared := [2, 3]
+      aggregates :=
+        [("count", { kind := .count, scanBound := 10000 }),
+         ("sum_votes", { kind := .sum, field := some 2, scanBound := 10000 }),
+         ("max_note", { kind := .maximum, field := some 3, scanBound := 10000 })] })]
+
+/-- The searchable fields of the fixture's types: an item's string fields `1`, `7` (a list of strings), `9`
+    and `10` (`10` has a read rule); a ticket's state `1` and note `3` (which has a read rule). A part has
+    no text field. -/
+def fixtureSearchable : List (TypeId × List FieldId) :=
+  [(1, [1, 7, 9, 10]), (4, [1, 3])]
 
 /-- The read declarations of the fixture's tenants `1` and `2`. -/
-def fixtureReadSpec : ReadSpec := { rules := fixtureReadRules, queries := fixtureQueries }
+def fixtureReadSpec : ReadSpec :=
+  { rules := fixtureReadRules, queries := fixtureQueries, searchable := fixtureSearchable }
 
 /-- The read declarations of tenant `x`: the fixture's for the two tenants that start with it, none
     for a tenant a scenario creates. -/
