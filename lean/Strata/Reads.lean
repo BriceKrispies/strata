@@ -20,7 +20,7 @@ Abstractions, all listed in the review note:
   not read them: `Expr` has no parameter form.
 - Conditions see the record, the principal and nothing else: no clock, no lookups through
   references, no scopes, so `InsufficientState` does not arise.
-- Order keys are compared by `Val.leb`, the model's order on values (by kind, then by payload).
+- Order keys are compared by `Val.leb`, the model's order on values: the kernel's derived order (by kind, then by payload, lists element by element).
 -/
 
 namespace Strata

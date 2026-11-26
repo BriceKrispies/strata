@@ -8,6 +8,8 @@ With `--impl` before the file name, the same scenarios run through the executabl
 (`Strata.Impl.transitionI`, the records held in slots) and print the same text, the state read back
 through the abstraction. The differential harness compares both with the Rust kernel.
 
+A `read` line (records or a named query, see `parseRead`) prints the answer of the kernel's read: `err <kind>`, or `ok`, `next <cursor>` and a `row` line per row. The three kernels (spec, `--impl`, `--indexed`) print the same.
+
 The Rust kernel is run on the same scenarios and must print the same text. See
 `crates/verification/src/lean.rs` for the other half and the file format.
 -/

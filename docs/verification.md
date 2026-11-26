@@ -144,7 +144,8 @@ are in `Reads.lean`; the theorems below are in `lean/Audit.lean`, which `lake en
 | Visibility and field read rules | `hidden_field_absent`, `readRecords_hide`, `query_rows_hide` | A field a read rule hides on the stored record (the rule not exactly `true`) is absent from every row a reader is given; a row is a stored record the principal may read |
 | Record reads | `rowOf_visible`, `readRecords_rows`, `readRecords_limit_first`, `readRecords_unknown_type`, `missing_and_invisible_same` | Rows are the visible records, redacted, in request order; more than 200 ids is `limitExceeded` before the type is looked at; an unknown type is `unknownObject`; a missing record and an invisible one both leave no row, so the answer does not show which ids exist |
 | Named queries: membership | `scanRows_mem`, `queryAll_mem_iff`, `query_mem_iff` | The rows are exactly the records the principal may read whose redacted copy makes the filter exactly `true`, each redacted |
-| Named queries: order | `queryAll_sorted`, `keysLe_total`, `keysLe_trans`, `dirLe_total`, `dirLe_trans`, `Val.leb_total`, `Val.leb_trans`, `orderKey_length` | The rows are sorted by the order keys (each with its direction) and then by id; the order on rows is a total preorder over the keys of one length |
+| Named queries: order | `queryAll_sorted`, `keysLe_total`, `keysLe_trans`, `dirLe_total`, `dirLe_trans`, `Val.leb_total`, `Val.leb_trans`, `Elem.leb_total`, `Elem.leb_trans`, `lexLe_total`, `lexLe_trans`, `orderKey_length` | The rows are sorted by the order keys (each with its direction) and then by id; the order on rows is a total preorder over the keys of one length. The order on values is the kernel's derived order: by kind, then by payload, a list compared element by element with a prefix first |
+| Executable read | `Impl.readI_refines`, `Impl.readX_refines`, `Impl.readRecordsI_abs`, `Impl.queryPageI_abs`, `Impl.ITenant.scanRowsI_abs`, `Impl.ITenant.queryAllI_abs`, `Impl.ITenant.rowOfI_abs`, `Impl.ITenant.canRead_abs`, `Impl.ITenant.countI_abs`, `Impl.slotRows_eq` | The read on the slots of a stage 1 tenant (and on the core of an indexed one) is the spec's `read` on the abstraction, for every tenant: the same rows, the same cursor, the same refusal |
 | Named queries: pages | `walk_eq_drop`, `query_pages_concat`, `query_pages_nodup`, `queryAll_ids_nodup`, `scanRows_ids_nodup`, `filterMap_fst_sublist` | Concatenating the pages from offset 0 gives the whole result, in order; when the records of the type have distinct ids, no record is in two pages |
 | Named queries: refusals | `query_unknown`, `query_undeclared_param`, `query_page_zero`, `query_page_over`, `query_wrong_cursor`, `query_scan_limit` | An unknown query is `unknownQuery`; an undeclared parameter, a page size of 0 and a cursor that is not an offset are `invalidIntent`; a page size over 200 and a type of more than 10,000 records are `limitExceeded` |
 
@@ -505,9 +506,10 @@ order:
 
 Slice 10 is partly done. Covered in the model (`lean/Strata/Reads.lean`, theorems in `lean/Audit.lean`, see the
 slice 10 review note): record visibility, field read rules and redaction, record reads, and named queries in their scan
-form (filter, order keys, parameters, page size, cursor). Not covered yet: the executable read and its refinement, the
-codec and Rust mirror of the read declarations, the harness scenarios and generator for reads (so none of this is
-checked against the Rust kernel yet), search and aggregates. The bullets below say which is which.
+form (filter, order keys, parameters, page size, cursor). The executable read (stage 1 and the indexed tenant) refines it,
+and the harness, the h- scenarios and the generator compare its answers with the Rust kernel's. Not covered yet: the
+codec and Rust mirror of the read declarations (they sit beside the write model, see the review note), search and
+aggregates. The bullets below say which is which.
 
 - Visibility of a record: the authorization above for `Read` on the stored record; a field read
   rule hides a present field unless it is exactly `true`. `redact` gives the system records
@@ -640,7 +642,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **7 (done)** | Tenants, members, teams, invitations, conferring, the owner rule, reserved principal ids. The decisions are in `Strata/Members.lean`, the theorems in `Strata/MembersProofs.lean`, and the intents are in `Intent` and decided by `step`; the executable kernels, the working set, the codec of tenants (Lean and Rust) and the differential harness, scenarios and generator cover them (see the slice 7 review note) | 6 |
 | **8 (done)** | Workflows: the workflow of an object type (field, initial states, transitions with guards and assignments), the create and update decisions, the state check and the invariant (`lean/Strata/Workflows.lean`); the executable kernels, the codec (Lean and Rust), the harness with the ticket type (id 4), the h- scenarios and the generator cover them (see the slice 8 review note). Approvals are not in this slice: they decide automation steps, which slice 15 adds | 5, 6 |
 | **9 (done)** | Events and revisions: event bodies, sequence numbers, the revision, `Publish` effects, the grandfathered count (`lean/Strata/EventProofs.lean`, see the slice 9 review note) | 1 to 8, for their content |
-| 10 (partly done) | Reads: visibility, field read rules, record reads, named queries (filter, order, pages) are in the model (`lean/Strata/Reads.lean`, the slice 10 review note); the executable read, the codec and the harness for reads, search and aggregates are not | 5, 6 |
+| 10 (partly done) | Reads: visibility, field read rules, record reads, named queries (filter, order, pages) are in the model (`lean/Strata/Reads.lean`, the slice 10 review note), with the executable read (`lean/Strata/Impl/Read.lean`) and the harness for reads; search, aggregates and the codec of the read declarations are not | 5, 6 |
 | 11 | Schema change in general: the change kinds, `SchemaConflict`, the abstract validity predicate, `Reject` and `Grandfather`, object and role removal, and the evolution model's acceptance as the rule for breaking changes | 3 to 8 |
 | 12 | Settings | 6, 7 |
 | 13 | Ledger | 6 |
@@ -1140,10 +1142,20 @@ named queries. Search and aggregates are the second half and are not started. Th
 `lean/Audit.lean`. The Rust side is `crates/kernel/src/read.rs` and `query_plan.rs` (`read_named`, `scan`, `keyed`),
 `rules.rs` (`visible_in`, `redact`).
 
-- **The read declarations sit beside the write model.** A field's read rule and the named queries are a `ReadSpec`
-  passed to `read`, not fields of `FieldDef` or `ObjType`. So the write codec, its theorems (`lawful_objType`,
-  `lawful_fieldDef`) and the existing outcomes are unchanged. The codec of the read declarations is not written; it is
-  needed before a read crosses the boundary.
+- **The read declarations sit beside the write model (decided).** The kernel keeps a field's read rule in its
+  `FieldDef` and a named query in the tenant schema. The model keeps both in a `ReadSpec` passed to `read`, not in
+  `FieldDef`, `ObjType` or `Tenant`. Moving them in would add a field to `FieldDef` (its decidable equality, the codec
+  `lawful_fieldDef`, the Rust mirror of the codec and every proof that builds a `FieldDef`) and a list to `Tenant`, to
+  change no write outcome; the reads need no boundary crossing (a read request and its answer are printed as text by the
+  harness, not encoded). So the declarations stay beside the model, and the harness fixture gives both sides the same
+  ones: `fixtureReadSpec` (`lean/Strata/Fixture.lean`) for tenants `1` and `2` (`readSpecOf`), and in the kernel the
+  field read rules of `field_def`, `part_field_def` and `ticket_field_def` and the `DefineQuery` changes of
+  `fixture_queries` (`crates/verification/src/lean.rs`), installed by the same schema change that installs the rest. A
+  tenant a scenario creates (tenant `3`) declares none on either side. The cost is that the model does not see a schema
+  change of the declarations (there is none in the scenario language: `require` and `unique` redefine a field keeping
+  its read rule, as `current_field` does in the harness, and an h- scenario reads after both). The write codec, its
+  theorems and the existing outcomes are unchanged; the codec of the read declarations is not written and is needed
+  only when a schema change of them (slice 11) or a read across the FFI boundary is modelled.
 - **Check order follows the kernel.** A record read refuses more than 200 ids before it looks at the type. A named query
   checks, in order, the query, its parameters (an undeclared name), the page size (0, then over 200), the cursor (only an
   offset is a scan's cursor), and the scan bound (more than 10,000 records of the type, counted before visibility), then
@@ -1159,9 +1171,13 @@ named queries. Search and aggregates are the second half and are not started. Th
   its field, as the kernel's `unwrap_or(false)` does; an erroring filter leaves its row out, as the kernel does.
 - **Order keys.** A key is a field's value on the redacted copy: `null` when the field is absent or hidden, which the
   kernel also reads as `null` (`expr::attribute`), so such a row is kept and sorted first. The model's order on values is
-  by kind (`null`, bool, int, string, reference, list), then by payload; lists compare equal. The kernel's `Value` order
-  is not compared with this one; the rows of a query are sorted by it in the model and by the kernel's own order in the
-  Rust code. Unverified: that the two orders agree on every kind a key may hold.
+  the kernel's derived `Value` order, read from `crates/model-core/src/types.rs` (variants null, bool, int, str, time, ref,
+  list; a list compares element by element, a prefix first): by kind (`null`, bool, int, string, reference, list), then
+  by payload, lists lexicographically on the element order (`lexLe`). The first version compared two lists equal, which
+  differs from the kernel; it is fixed, with `lexLe_total` and `lexLe_trans`. The model has no time kind, so the kernel's
+  `time` (between string and reference) has no counterpart; strings compare by code point, which is the byte order of
+  UTF-8 the kernel uses. The fixture's order keys are scalar fields only (integer, boolean), so the harness reaches the
+  kinds `null` (an absent or hidden key) and integer and boolean payloads, and the generator never orders by a list.
 - **The result omits the revision and schema version.** The kernel's `ReadResult` carries both; the model returns rows
   and a cursor only.
 - **Missing and invisible records.** Both give no row, from one function (`rowOf`): `missing_and_invisible_same` states
@@ -1174,9 +1190,26 @@ named queries. Search and aggregates are the second half and are not started. Th
   checks above unchanged. Whether the system should read every record (what the unredacted redaction suggests) or
   nothing (what the roles give it) is for the owner to decide; the model states the current kernel behaviour and records
   the question here, and does not choose.
-- **Not covered in this half.** The executable read and its refinement (`Impl`); the codec and the Rust mirror of the
-  read declarations and requests; the harness scenarios and generator for reads, and the million-operation run. So no
-  read outcome has yet been compared with the Rust kernel. Also not covered: search; aggregates; the descendants read
+- **The executable read** (`lean/Strata/Impl/Read.lean`). `readI` answers on a stage 1 tenant from its slots: a record is
+  an array index, a query's scan walks the slots from the highest id down (`slotRows`, equal to the spec's list,
+  `slotRows_eq`), and who may read is `Tenant.allows` written out on the fields the tenant holds (`ITenant.canRead`,
+  equal to the spec's by `canRead_abs`). `readI_refines` states `readI t = read t.abs` for every tenant, with no
+  invariant. The indexed tenant's `readX` is `readI` of its core (a read changes nothing and uses no index);
+  `readX_refines` is the same statement. The scan bound counts records, as the spec does (`countI_abs`).
+- **The harness.** A line `read <t> <p> records <type> <ids..>` (an id is `n` or `a-b`) or `read <t> <p> query <name>
+  [k=v ..] [page=<n>] [cursor=<c>]` (a cursor is `o<n>` or `a<id>`) is run by `Main.lean` on the spec, `--impl` and
+  `--indexed` kernels, and by `kernel_output` on the Rust kernel (`World::read`), and both print `err <kind>` or `ok`,
+  `next <cursor>` and one `row <id> <record>` line per row. The fixture queries are the ones the kernel plans as scans, so
+  the model's offset cursors are the kernel's. The h- scenarios `h-read-*` cover visible, missing and invisible records,
+  redaction by record and by principal, order with ties and hidden keys, pages and cursors, each refusal in the
+  kernel's order, tenant `3` absent and created, the system and an anonymous caller, and reads after writes and schema
+  changes. The generator (`lean_diff::read_op`, from a stream of its own so the other operations are unchanged) places
+  reads among the operations, and the coverage requires every read outcome in `READ_KINDS` and `REQUIRED_PER_INTENT`:
+  accepted with and without rows, with a next cursor and with a cursor asked for; `limitExceeded` and `unknownObject` of a
+  records read; `unknownQuery`, `invalidIntent` and `limitExceeded` of a query. The scan bound (10,000 records) is not
+  reachable by the fixture. The coverage count now cuts the output by operation (`op_outcomes`), as an accepted step
+  prints more than one line since slice 9.
+- **Not covered.** The codec and the Rust mirror of the read declarations and requests (see above). Also not covered: search; aggregates; the descendants read
   (the `tree` form of a named query); scoped roles and the reads that follow references (`audience_needs`); the snapshot
   that `read_missing` names (the model has no snapshot); and the revision in the result.
 
