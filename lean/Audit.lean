@@ -3239,6 +3239,767 @@ theorem expireCore_total {t : Tenant} {actor : Principal} {now : Int} {unit : Na
 
 end Strata
 
+/-! ## Slice 13: the limits of an accepted posting, the frame lemma and the balance invariant -/
+namespace Strata
+
+theorem postDynamic_new {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {evs : List LedgerPosted} (h : postDynamic t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+    let cur := L.accounts.find? (fun a => a.is q.owner q.unit q.scope)
+    let before : Int := (cur.map (fun a => a.balance)).getD 0
+    let last : Nat := (cur.map (fun a => a.lastSeq)).getD 0
+    let curPeriods : List LedgerPeriodTotal := (cur.map (fun a => a.periods)).getD []
+    let applying := applyingLimits t (accountLimit? L q.owner q.unit q.scope) q.unit
+    correctionErr last q = none ∧ boundErr (before + q.amount) = none ∧
+    floorErr applying before (before + q.amount) q.amount = none ∧
+    capErr applying before (before + q.amount) q.amount = none ∧
+    periodErr applying curPeriods (decide (0 < q.amount) && !(applying.additionsOnly && q.corrects.isSome)) now q.amount = none := by
+  intro cur before last curPeriods applying
+  unfold postDynamic at h
+  simp only [] at h
+  repeat' split at h
+  all_goals first
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, rfl⟩ := h
+       simp_all [cur, before, last, curPeriods, applying])
+    | cases h
+end Strata
+namespace Strata
+
+theorem floorErr_none {ap : AppliedLimits} {b a amt : Int} (h : floorErr ap b a amt = none) :
+    ∀ f, ap.floor = some f → f ≤ a ∨ (b < f ∧ 0 < amt) := by
+  intro f hf
+  unfold floorErr at h
+  rw [hf] at h
+  simp only [] at h
+  split at h
+  · cases h
+  · rename_i hc
+    by_cases h1 : a < f
+    · right
+      simp only [h1, decide_true, Bool.true_and, Bool.not_eq_true'] at hc
+      simpa using hc
+    · left; omega
+
+theorem capErr_none {ap : AppliedLimits} {b a amt : Int} (h : capErr ap b a amt = none) :
+    ∀ c, ap.cap = some c → a ≤ c ∨ (c < b ∧ amt < 0) := by
+  intro c hc'
+  unfold capErr at h
+  rw [hc'] at h
+  simp only [] at h
+  split at h
+  · cases h
+  · rename_i hc
+    by_cases h1 : c < a
+    · right
+      simp only [h1, decide_true, Bool.true_and, Bool.not_eq_true'] at hc
+      simpa using hc
+    · left; omega
+
+theorem periodErr_none {ap : AppliedLimits} {cur : List LedgerPeriodTotal} {counts : Bool} {now amt : Int}
+    (h : periodErr ap cur counts now amt = none) :
+    ∀ cap p, ap.periodCap = some (cap, p) → counts = true → creditsIn cur p now + amt.toNat ≤ cap := by
+  intro cap p hp hc
+  unfold periodErr at h
+  rw [hp] at h
+  simp only [hc, Bool.true_and] at h
+  split at h
+  · cases h
+  · rename_i hn
+    simpa using hn
+
+end Strata
+namespace Strata
+
+/-- The state an accepted, non-replayed posting leaves. -/
+theorem postDynamic_state {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {evs : List LedgerPosted} (h : postDynamic t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+    ∃ (acct : LedgerAccount) (entry : LedgerEntry),
+      acct.is q.owner q.unit q.scope = true ∧
+      acct.balance = ((L.accounts.find? (fun a => a.is q.owner q.unit q.scope)).map (fun a => a.balance)).getD 0 + q.amount ∧
+      entry.owner = q.owner ∧ entry.unit = q.unit ∧ entry.scope = q.scope ∧ entry.amount = q.amount ∧
+      L'.journal = L.journal ++ [entry] ∧ L'.limits = L.limits ∧
+      L'.accounts = (if (L.accounts.find? (fun a => a.is q.owner q.unit q.scope)).isSome then
+          L.accounts.map (fun a => if a.is q.owner q.unit q.scope then acct else a)
+        else L.accounts ++ [acct]) := by
+  unfold postDynamic at h
+  simp only [] at h
+  repeat' split at h
+  all_goals first
+    | (cases h; done)
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, rfl⟩ := h
+       exact absurd rfl hne)
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, rfl⟩ := h
+       apply Exists.intro
+       apply Exists.intro
+       refine ⟨?h1, ?h2, ?h3, ?h4, ?h5, ?h6, ?h7, ?h8, ?h9⟩
+       case h7 => rfl
+       case h8 => rfl
+       case h9 =>
+         dsimp only
+         first
+           | exact (if_pos (c := (List.find? (fun a => a.is q.owner q.unit q.scope) L.accounts).isSome = true) (by simp_all [List.find?_isSome])).symm
+           | exact (if_neg (c := (List.find? (fun a => a.is q.owner q.unit q.scope) L.accounts).isSome = true) (by simp_all [List.find?_isSome])).symm
+       case h1 => simp [LedgerAccount.is]
+       case h2 => rfl
+       case h3 => rfl
+       case h4 => rfl
+       case h5 => rfl
+       case h6 => rfl)
+end Strata
+namespace Strata
+
+/-- Two accounts, or an account and the key of an entry, name the same account. -/
+def LedgerAccount.sameKey (a b : LedgerAccount) : Prop :=
+  a.owner = b.owner ∧ a.unit = b.unit ∧ a.scope = b.scope
+
+theorem LedgerAccount.is_iff (a : LedgerAccount) (o : LedgerOwner) (u : Nat) (s : String) :
+    a.is o u s = true ↔ (a.owner = o ∧ a.unit = u ∧ a.scope = s) := by
+  simp [LedgerAccount.is, and_assoc]
+
+theorem LedgerEntry.inAccount_iff (e : LedgerEntry) (o : LedgerOwner) (u : Nat) (s : String) :
+    e.inAccount o u s = true ↔ (e.owner = o ∧ e.unit = u ∧ e.scope = s) := by
+  simp [LedgerEntry.inAccount, and_assoc]
+
+/-- Pointwise frame of a replacing map. -/
+theorem find?_map_replace {α : Type} (p : α → Bool) (g : α → α) (l : List α)
+    (h : ∀ a ∈ l, p (g a) = p a ∧ (p a = true → g a = a)) :
+    (l.map g).find? p = l.find? p := by
+  induction l with
+  | nil => rfl
+  | cons a l ih =>
+    have ha := h a (by simp)
+    simp only [List.map_cons, List.find?_cons, ha.1]
+    cases hp : p a with
+    | true => simp [ha.2 hp]
+    | false => exact ih (fun b hb => h b (by simp [hb]))
+
+theorem find?_map_hit {α : Type} (p : α → Bool) (g : α → α) (l : List α)
+    (h : ∀ a ∈ l, p (g a) = p a) : (l.map g).find? p = (l.find? p).map g := by
+  induction l with
+  | nil => rfl
+  | cons a l ih =>
+    have ha := h a (by simp)
+    simp only [List.map_cons, List.find?_cons, ha]
+    cases hp : p a with
+    | true => simp
+    | false => exact ih (fun b hb => h b (by simp [hb]))
+
+/-- The pointwise frame: an accepted, non-replayed posting leaves every account other than the posted one as it was,
+    and the posted account holds the balance before plus the amount. -/
+theorem postOne_frame {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {evs : List LedgerPosted} (h : postOne t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+    (∀ o u s, ¬ (o = q.owner ∧ u = q.unit ∧ s = q.scope) →
+        L'.accounts.find? (fun a => a.is o u s) = L.accounts.find? (fun a => a.is o u s)) ∧
+    ((L'.accounts.find? (fun a => a.is q.owner q.unit q.scope)).map (fun a => a.balance) =
+      some (((L.accounts.find? (fun a => a.is q.owner q.unit q.scope)).map (fun a => a.balance)).getD 0 + q.amount)) := by
+  unfold postOne at h
+  cases hs : postStaticErr t actor q with
+  | some e => rw [hs] at h; cases h
+  | none =>
+    rw [hs] at h
+    simp only [] at h
+    obtain ⟨acct, entry, hi, hb, -, -, -, -, -, -, hacc⟩ := postDynamic_state h hne
+    obtain ⟨hao, hau, has⟩ := (LedgerAccount.is_iff _ _ _ _).mp hi
+    constructor
+    · intro o u s hk
+      rw [hacc]
+      split
+      · rw [find?_map_replace]
+        intro a _
+        by_cases ha : a.is q.owner q.unit q.scope = true
+        · have hao' := (LedgerAccount.is_iff _ _ _ _).mp ha
+          have h1 : a.is o u s = false := by
+            cases hh : a.is o u s
+            · rfl
+            · exfalso; apply hk
+              have := (LedgerAccount.is_iff _ _ _ _).mp hh
+              exact ⟨this.1 ▸ hao'.1 ▸ rfl, this.2.1 ▸ hao'.2.1 ▸ rfl, this.2.2 ▸ hao'.2.2 ▸ rfl⟩
+          have h2 : acct.is o u s = false := by
+            cases hh : acct.is o u s
+            · rfl
+            · exfalso; apply hk
+              have := (LedgerAccount.is_iff _ _ _ _).mp hh
+              exact ⟨this.1 ▸ hao ▸ rfl, this.2.1 ▸ hau ▸ rfl, this.2.2 ▸ has ▸ rfl⟩
+          simp [ha, h1, h2]
+        · simp [ha]
+      · rw [List.find?_append]
+        have h2 : acct.is o u s = false := by
+          cases hh : acct.is o u s
+          · rfl
+          · exfalso; apply hk
+            have := (LedgerAccount.is_iff _ _ _ _).mp hh
+            exact ⟨this.1 ▸ hao ▸ rfl, this.2.1 ▸ hau ▸ rfl, this.2.2 ▸ has ▸ rfl⟩
+        simp [h2]
+    · rw [hacc]
+      split
+      · rename_i hsome
+        rw [find?_map_hit]
+        · obtain ⟨a0, ha0⟩ := Option.isSome_iff_exists.mp hsome
+          have hp := List.find?_some ha0
+          simp [ha0, hp, hb]
+        · intro a _
+          by_cases ha : a.is q.owner q.unit q.scope = true
+          · simp [ha, hi]
+          · simp [ha]
+      · rename_i hnone
+        have hn : L.accounts.find? (fun a => a.is q.owner q.unit q.scope) = none := by
+          simpa using hnone
+        simp [List.find?_append, hn, hi, hb]
+end Strata
+namespace Strata
+
+/-- The limits hold after an accepted posting, in the kernel's rule: an accepted posting leaves the balance at or above
+    the floor unless it moved the balance up from below it, and at or below the cap unless it moved it down from above
+    it; and the credits of the period of its entry, with the entry, are within the cap per period whenever the posting
+    counts toward it (a credit, other than a reversal under an additions-only cap). The balance is the one the posted
+    account holds afterwards. -/
+theorem postOne_limits {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {evs : List LedgerPosted} (h : postOne t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+    let cur := L.accounts.find? (fun a => a.is q.owner q.unit q.scope)
+    let before : Int := (cur.map (fun a => a.balance)).getD 0
+    let applying := applyingLimits t (accountLimit? L q.owner q.unit q.scope) q.unit
+    (L'.accounts.find? (fun a => a.is q.owner q.unit q.scope)).map (fun a => a.balance) = some (before + q.amount) ∧
+    (∀ f, applying.floor = some f → f ≤ before + q.amount ∨ (before < f ∧ 0 < q.amount)) ∧
+    (∀ c, applying.cap = some c → before + q.amount ≤ c ∨ (c < before ∧ q.amount < 0)) ∧
+    (∀ cap p, applying.periodCap = some (cap, p) →
+      (0 < q.amount ∧ ¬ (applying.additionsOnly = true ∧ q.corrects.isSome = true)) →
+      creditsIn ((cur.map (fun a => a.periods)).getD []) p now + q.amount.toNat ≤ cap) := by
+  intro cur before applying
+  have hf := postOne_frame h hne
+  unfold postOne at h
+  cases hs : postStaticErr t actor q with
+  | some e => rw [hs] at h; cases h
+  | none =>
+    rw [hs] at h
+    simp only [] at h
+    obtain ⟨hcor, hbound, hfl, hcap, hper⟩ := postDynamic_new h hne
+    refine ⟨hf.2, floorErr_none hfl, capErr_none hcap, ?_⟩
+    intro cap p hp ⟨hpos, hnot⟩
+    refine periodErr_none hper cap p hp ?_
+    simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.not_eq_true']
+    refine ⟨hpos, ?_⟩
+    simpa using hnot
+end Strata
+namespace Strata
+
+/-- The sum of the amounts of the entries of one account in a journal. -/
+def acctSum (J : List LedgerEntry) (o : LedgerOwner) (u : Nat) (s : String) : Int :=
+  ((J.filter (fun e => e.inAccount o u s)).map (fun e => e.amount)).sum
+
+/-- The ledger invariant: every account's balance is the sum of its entries' amounts, no two accounts name the same
+    account, and every entry is in an account that has a header. -/
+structure LedgerSound (L : LedgerState) : Prop where
+  bal : ∀ a ∈ L.accounts, a.balance = acctSum L.journal a.owner a.unit a.scope
+  uniq : L.accounts.Pairwise (fun a b => ¬ a.sameKey b)
+  cover : ∀ e ∈ L.journal, ∃ a ∈ L.accounts, a.owner = e.owner ∧ a.unit = e.unit ∧ a.scope = e.scope
+
+theorem acctSum_append (J K : List LedgerEntry) (o u s) : acctSum (J ++ K) o u s = acctSum J o u s + acctSum K o u s := by
+  simp [acctSum, List.filter_append, List.map_append, List.sum_append]
+
+theorem acctSum_nil (o u s) : acctSum [] o u s = 0 := by simp [acctSum]
+
+theorem acctSum_single_same (e : LedgerEntry) (o u s) (h : e.owner = o ∧ e.unit = u ∧ e.scope = s) :
+    acctSum [e] o u s = e.amount := by
+  have : e.inAccount o u s = true := (LedgerEntry.inAccount_iff _ _ _ _).mpr h
+  simp [acctSum, this]
+
+theorem acctSum_single_other (e : LedgerEntry) (o u s) (h : ¬ (e.owner = o ∧ e.unit = u ∧ e.scope = s)) :
+    acctSum [e] o u s = 0 := by
+  have : e.inAccount o u s = false := by
+    cases hh : e.inAccount o u s
+    · rfl
+    · exact absurd ((LedgerEntry.inAccount_iff _ _ _ _).mp hh) h
+  simp [acctSum, this]
+
+theorem acctSum_zero_of_none (J : List LedgerEntry) (o u s)
+    (h : ∀ e ∈ J, ¬ (e.owner = o ∧ e.unit = u ∧ e.scope = s)) : acctSum J o u s = 0 := by
+  have : J.filter (fun e => e.inAccount o u s) = [] := by
+    rw [List.filter_eq_nil_iff]
+    intro e he
+    have := h e he
+    cases hh : e.inAccount o u s
+    · simp
+    · exact absurd ((LedgerEntry.inAccount_iff _ _ _ _).mp hh) this
+  simp [acctSum, this]
+
+theorem sameKey_symm {a b : LedgerAccount} (h : a.sameKey b) : b.sameKey a :=
+  ⟨h.1.symm, h.2.1.symm, h.2.2.symm⟩
+theorem sameKey_trans {a b c : LedgerAccount} (h : a.sameKey b) (h' : b.sameKey c) : a.sameKey c :=
+  ⟨h.1.trans h'.1, h.2.1.trans h'.2.1, h.2.2.trans h'.2.2⟩
+
+/-- A header is replaced by another of the same key. -/
+theorem pairwise_map_sameKey {l : List LedgerAccount} (g : LedgerAccount → LedgerAccount)
+    (hg : ∀ a ∈ l, (g a).sameKey a) (hl : l.Pairwise (fun a b => ¬ a.sameKey b)) :
+    (l.map g).Pairwise (fun a b => ¬ a.sameKey b) := by
+  rw [List.pairwise_map]
+  refine List.Pairwise.imp_of_mem ?_ hl
+  intro a b ha hb hab hgab
+  exact hab (sameKey_trans (sameKey_symm (hg a ha)) (sameKey_trans hgab (hg b hb)))
+
+end Strata
+namespace Strata
+
+theorem postDynamic_replay {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {evs : List LedgerPosted} (h : postDynamic t actor now L q = .ok (L', evs)) (he : evs = []) : L' = L := by
+  subst he
+  unfold postDynamic at h
+  simp only [] at h
+  repeat' split at h
+  all_goals first
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       exact h.1.symm)
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, h2⟩ := h
+       simp at h2)
+    | cases h
+
+theorem uniq_of_pairwise {l : List LedgerAccount} (hl : l.Pairwise (fun a b => ¬ a.sameKey b))
+    {a b : LedgerAccount} (ha : a ∈ l) (hb : b ∈ l) (hab : a.sameKey b) : a = b := by
+  induction l with
+  | nil => cases ha
+  | cons x xs ih =>
+    rw [List.pairwise_cons] at hl
+    rcases List.mem_cons.mp ha with rfl | ha'
+    · rcases List.mem_cons.mp hb with rfl | hb'
+      · rfl
+      · exact absurd hab (hl.1 b hb')
+    · rcases List.mem_cons.mp hb with rfl | hb'
+      · exact absurd (sameKey_symm hab) (hl.1 a ha')
+      · exact ih hl.2 ha' hb'
+
+theorem postOne_sound {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {evs : List LedgerPosted} (h : postOne t actor now L q = .ok (L', evs)) (hL : LedgerSound L) :
+    LedgerSound L' := by
+  by_cases hne : evs = []
+  · have : L' = L := by
+      unfold postOne at h
+      cases hs : postStaticErr t actor q with
+      | some e => rw [hs] at h; cases h
+      | none => rw [hs] at h; exact postDynamic_replay h hne
+    rw [this]; exact hL
+  · unfold postOne at h
+    cases hs : postStaticErr t actor q with
+    | some e => rw [hs] at h; cases h
+    | none =>
+      rw [hs] at h
+      simp only [] at h
+      obtain ⟨acct, entry, hi, hb, heo, heu, hes, hea, hj, -, hacc⟩ := postDynamic_state h hne
+      obtain ⟨hao, hau, has⟩ := (LedgerAccount.is_iff _ _ _ _).mp hi
+      have hsum : ∀ o u s, acctSum L'.journal o u s =
+          acctSum L.journal o u s + (if (o = q.owner ∧ u = q.unit ∧ s = q.scope) then q.amount else 0) := by
+        intro o u s
+        rw [hj, acctSum_append]
+        by_cases hk : (o = q.owner ∧ u = q.unit ∧ s = q.scope)
+        · rw [if_pos hk, acctSum_single_same _ _ _ _ ⟨heo ▸ hk.1.symm, heu ▸ hk.2.1.symm, hes ▸ hk.2.2.symm⟩, hea]
+        · rw [if_neg hk, acctSum_single_other _ _ _ _ (fun hh => hk ⟨heo ▸ hh.1.symm, heu ▸ hh.2.1.symm, hes ▸ hh.2.2.symm⟩)]
+      have uniq_eq : ∀ {a b : LedgerAccount}, a ∈ L.accounts → b ∈ L.accounts → a.sameKey b → a = b := by
+        intro a b ha hb hab
+        exact uniq_of_pairwise hL.uniq ha hb hab
+      by_cases hsome : (L.accounts.find? (fun a => a.is q.owner q.unit q.scope)).isSome = true
+      · rw [if_pos hsome] at hacc
+        obtain ⟨a0, ha0⟩ := Option.isSome_iff_exists.mp hsome
+        have ha0m := List.mem_of_find?_eq_some ha0
+        have ha0i := List.find?_some ha0
+        have ha0k := (LedgerAccount.is_iff _ _ _ _).mp ha0i
+        have hbefore : ((L.accounts.find? (fun a => a.is q.owner q.unit q.scope)).map (fun a => a.balance)).getD 0
+            = acctSum L.journal q.owner q.unit q.scope := by
+          rw [ha0]; simp only [Option.map_some, Option.getD_some]
+          rw [hL.bal a0 ha0m, ha0k.1, ha0k.2.1, ha0k.2.2]
+        refine ⟨?_, ?_, ?_⟩
+        · rw [hacc]
+          intro a ha
+          obtain ⟨a1, ha1, rfl⟩ := List.mem_map.mp ha
+          by_cases hk : a1.is q.owner q.unit q.scope = true
+          · simp only [hk, if_true]
+            rw [hb, hbefore, hsum, if_pos ⟨hao, hau, has⟩, hao, hau, has]
+          · simp only [hk, Bool.false_eq_true, if_false]
+            rw [hL.bal a1 ha1, hsum, if_neg]
+            · simp
+            · intro hh
+              exact hk ((LedgerAccount.is_iff _ _ _ _).mpr ⟨hh.1, hh.2.1, hh.2.2⟩)
+        · rw [hacc]
+          apply pairwise_map_sameKey _ _ hL.uniq
+          intro a ha
+          by_cases hk : a.is q.owner q.unit q.scope = true
+          · simp only [hk, if_true]
+            have hk' := (LedgerAccount.is_iff _ _ _ _).mp hk
+            exact ⟨hao.trans hk'.1.symm, hau.trans hk'.2.1.symm, has.trans hk'.2.2.symm⟩
+          · simp only [hk, Bool.false_eq_true, if_false]
+            exact ⟨rfl, rfl, rfl⟩
+        · rw [hj, hacc]
+          intro e he
+          rcases List.mem_append.mp he with he | he
+          · obtain ⟨a, ha, hae⟩ := hL.cover e he
+            refine ⟨_, List.mem_map.mpr ⟨a, ha, rfl⟩, ?_⟩
+            by_cases hk : a.is q.owner q.unit q.scope = true
+            · have hk' := (LedgerAccount.is_iff _ _ _ _).mp hk
+              simp only [hk, if_true]
+              exact ⟨hao.trans (hk'.1.symm.trans hae.1), hau.trans (hk'.2.1.symm.trans hae.2.1),
+                has.trans (hk'.2.2.symm.trans hae.2.2)⟩
+            · simpa [hk] using hae
+          · have : e = entry := by simpa using he
+            subst this
+            exact ⟨acct, List.mem_map.mpr ⟨a0, ha0m, by simp [ha0i]⟩, hao.trans heo.symm, hau.trans heu.symm,
+              has.trans hes.symm⟩
+      · rw [if_neg hsome] at hacc
+        have hn : L.accounts.find? (fun a => a.is q.owner q.unit q.scope) = none := by
+          simpa using hsome
+        have hnone : ∀ a ∈ L.accounts, ¬ a.sameKey acct := by
+          intro a ha hk
+          have := List.find?_eq_none.mp hn a ha
+          apply this
+          exact (LedgerAccount.is_iff _ _ _ _).mpr ⟨hk.1.trans hao, hk.2.1.trans hau, hk.2.2.trans has⟩
+        have hbefore : ((L.accounts.find? (fun a => a.is q.owner q.unit q.scope)).map (fun a => a.balance)).getD 0
+            = acctSum L.journal q.owner q.unit q.scope := by
+          rw [hn]
+          symm
+          apply acctSum_zero_of_none
+          intro e he hk
+          obtain ⟨a, ha, hae⟩ := hL.cover e he
+          exact hnone a ha ⟨hae.1.trans (hk.1.trans hao.symm), hae.2.1.trans (hk.2.1.trans hau.symm),
+            hae.2.2.trans (hk.2.2.trans has.symm)⟩
+        refine ⟨?_, ?_, ?_⟩
+        · rw [hacc]
+          intro a ha
+          rcases List.mem_append.mp ha with ha | ha
+          · rw [hL.bal a ha, hsum, if_neg]
+            · simp
+            · intro hh
+              exact hnone a ha ⟨hh.1.trans hao.symm, hh.2.1.trans hau.symm, hh.2.2.trans has.symm⟩
+          · have : a = acct := by simpa using ha
+            subst this
+            rw [hb, hbefore, hsum, if_pos ⟨hao, hau, has⟩, hao, hau, has]
+        · rw [hacc]
+          rw [List.pairwise_append]
+          refine ⟨hL.uniq, by simp, ?_⟩
+          intro a ha b hb'
+          have : b = acct := by simpa using hb'
+          subst this
+          exact hnone a ha
+        · rw [hj, hacc]
+          intro e he
+          rcases List.mem_append.mp he with he | he
+          · obtain ⟨a, ha, hae⟩ := hL.cover e he
+            exact ⟨a, List.mem_append.mpr (Or.inl ha), hae⟩
+          · have : e = entry := by simpa using he
+            subst this
+            exact ⟨acct, by simp, hao.trans heo.symm, hau.trans heu.symm, has.trans hes.symm⟩
+end Strata
+namespace Strata
+
+theorem postFold_sound (t : Tenant) (actor : Principal) (now : Int) :
+    ∀ (ps : List LedgerPosting) (acc : LedgerState × List LedgerPosted) (r : LedgerState × List LedgerPosted),
+      List.foldlM (fun (acc : LedgerState × List LedgerPosted) (q : LedgerPosting) =>
+        (postOne t actor now acc.1 q).map (fun r => (r.1, acc.2 ++ r.2))) acc ps = .ok r →
+      LedgerSound acc.1 → LedgerSound r.1 := by
+  intro ps
+  induction ps with
+  | nil =>
+    intro acc r h hs
+    simp only [List.foldlM, pure, Except.pure, Except.ok.injEq] at h
+    subst h; exact hs
+  | cons q qs ih =>
+    intro acc r h hs
+    simp only [List.foldlM_cons] at h
+    cases hp : postOne t actor now acc.1 q with
+    | error e => simp [hp, Except.map, Except.bind, bind] at h
+    | ok x =>
+      simp only [hp, Except.map, Except.bind, bind] at h
+      exact ih _ r h (postOne_sound hp hs)
+
+/-- An accepted `PostLedger` leaves the ledger sound when it was. -/
+theorem postLedgerCore_sound {t : Tenant} {actor : Principal} {now : Int} {ps : List LedgerPosting}
+    {L' : LedgerState} {evs : List LedgerPosted} (h : postLedgerCore t actor now ps = .ok (L', evs))
+    (hs : LedgerSound t.ledger) : LedgerSound L' := by
+  unfold postLedgerCore at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · exact postFold_sound t actor now ps _ _ h hs
+end Strata
+namespace Strata
+
+theorem keyed_snd_sublist (accts : List LedgerAccount) (unit : Nat) (cutoff : Int) :
+    ((((accts.filter (fun a => a.unit == unit)).filterMap (fun a =>
+      match oldestBucketStart? a with
+      | some s => if s ≤ cutoff then some (s, a) else none
+      | none => none)).map (fun x => x.2))).Sublist accts := by
+  have gen : ∀ l : List LedgerAccount, ((l.filterMap (fun a =>
+      match oldestBucketStart? a with
+      | some s => if s ≤ cutoff then some (s, a) else none
+      | none => none)).map (fun x => x.2)).Sublist l := by
+    intro l
+    induction l with
+    | nil => simp
+    | cons a l ih =>
+      simp only [List.filterMap_cons]
+      cases hs : oldestBucketStart? a with
+      | none => exact ih.cons _
+      | some s =>
+        by_cases hc : s ≤ cutoff
+        · simp only [hc, if_true, List.map_cons]
+          exact ih.cons₂ _
+        · simp only [hc, if_false]
+          exact ih.cons _
+  exact (gen _).trans (List.filter_sublist)
+
+theorem dueAccounts_facts (accts : List LedgerAccount) (unit : Nat) (cutoff : Int) :
+    (∀ d ∈ dueAccounts accts unit cutoff, d ∈ accts) ∧
+    (accts.Pairwise (fun a b => ¬ a.sameKey b) → (dueAccounts accts unit cutoff).Pairwise (fun a b => ¬ a.sameKey b)) := by
+  unfold dueAccounts
+  simp only []
+  generalize hk : ((accts.filter (fun a => a.unit == unit)).filterMap (fun a =>
+      match oldestBucketStart? a with
+      | some s => if s ≤ cutoff then some (s, a) else none
+      | none => none)) = keyed
+  have hsub : (keyed.map (fun x => x.2)).Sublist accts := hk ▸ keyed_snd_sublist accts unit cutoff
+  have hperm : ((keyed.mergeSort (fun x y => decide (x.1 ≤ y.1))).map (fun x => x.2)).Perm (keyed.map (fun x => x.2)) :=
+    (List.mergeSort_perm _ _).map _
+  constructor
+  · intro d hd
+    have h1 := List.mem_of_mem_take hd
+    exact hsub.subset (hperm.mem_iff.mp h1)
+  · intro hp
+    have h1 : (keyed.map (fun x => x.2)).Pairwise (fun a b => ¬ a.sameKey b) := hp.sublist hsub
+    have h2 := hperm.pairwise_iff (fun {a b} hab hba => hab (sameKey_symm hba)) |>.mpr h1
+    exact h2.sublist (List.take_sublist _ _)
+
+
+theorem expireAccount_facts (e : LedgerExpiry) (t cutoff : Int) (a : LedgerAccount) :
+    (expireAccount e t cutoff a).1.owner = a.owner ∧ (expireAccount e t cutoff a).1.unit = a.unit ∧
+    (expireAccount e t cutoff a).1.scope = a.scope ∧
+    (∀ x ∈ (expireAccount e t cutoff a).2, x.1.owner = a.owner ∧ x.1.unit = a.unit ∧ x.1.scope = a.scope) ∧
+    (expireAccount e t cutoff a).1.balance =
+      a.balance + (((expireAccount e t cutoff a).2).map (fun x => x.1.amount)).sum := by
+  have gen : ∀ (ds : List LedgerBucket) (acc : LedgerAccount × List (LedgerEntry × LedgerPosted)),
+      acc.1.owner = a.owner → acc.1.unit = a.unit → acc.1.scope = a.scope →
+      (∀ x ∈ acc.2, x.1.owner = a.owner ∧ x.1.unit = a.unit ∧ x.1.scope = a.scope) →
+      acc.1.balance = a.balance + (acc.2.map (fun x => x.1.amount)).sum →
+      (ds.foldl (expireStep e t) acc).1.owner = a.owner ∧ (ds.foldl (expireStep e t) acc).1.unit = a.unit ∧
+      (ds.foldl (expireStep e t) acc).1.scope = a.scope ∧
+      (∀ x ∈ (ds.foldl (expireStep e t) acc).2, x.1.owner = a.owner ∧ x.1.unit = a.unit ∧ x.1.scope = a.scope) ∧
+      (ds.foldl (expireStep e t) acc).1.balance =
+        a.balance + ((ds.foldl (expireStep e t) acc).2.map (fun x => x.1.amount)).sum := by
+    intro ds
+    induction ds with
+    | nil => intro acc h1 h2 h3 h4 h5; exact ⟨h1, h2, h3, h4, h5⟩
+    | cons b bs ih =>
+      intro acc h1 h2 h3 h4 h5
+      apply ih
+      · simpa [expireStep] using h1
+      · simpa [expireStep] using h2
+      · simpa [expireStep] using h3
+      · intro x hx
+        simp only [expireStep, List.mem_append, List.mem_singleton] at hx
+        rcases hx with hx | hx
+        · exact h4 x hx
+        · subst hx; exact ⟨h1, h2, h3⟩
+      · simp only [expireStep, List.map_append, List.sum_append, List.map_cons, List.map_nil, List.sum_cons,
+          List.sum_nil]
+        rw [h5]; omega
+  unfold expireAccount
+  exact gen _ (a, []) rfl rfl rfl (by simp) (by simp)
+
+end Strata
+namespace Strata
+
+theorem expireCore_state {t : Tenant} {actor : Principal} {now : Int} {unit : Nat} {cutoffAt : Int}
+    {L' : LedgerState} {evs : List LedgerPosted} (h : expireCore t actor now unit cutoffAt = .ok (L', evs)) :
+    ∃ e : LedgerExpiry,
+      L'.accounts = t.ledger.accounts.map (fun a =>
+        match ((dueAccounts t.ledger.accounts unit cutoffAt).map (fun d => (expireAccount e now cutoffAt d).1)).find?
+            (fun h => h.is a.owner a.unit a.scope) with
+        | some h => h
+        | none => a) ∧
+      L'.journal = t.ledger.journal ++
+        (((dueAccounts t.ledger.accounts unit cutoffAt).map (fun d => expireAccount e now cutoffAt d)).flatMap
+          (fun r => r.2)).map (fun x => x.1) := by
+  unfold expireCore at h
+  simp only [] at h
+  repeat' split at h
+  all_goals first
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, -⟩ := h
+       refine ⟨‹LedgerExpiry›, ?_, ?_⟩
+       · simp only [List.map_map, Function.comp_def] <;> rfl
+       · simp only [List.map_map, Function.comp_def] <;> rfl)
+    | (cases h; done)
+end Strata
+namespace Strata
+
+theorem acctSum_keyed (es : List LedgerEntry) (o0 : LedgerOwner) (u0 : Nat) (s0 : String)
+    (h : ∀ x ∈ es, x.owner = o0 ∧ x.unit = u0 ∧ x.scope = s0) (o : LedgerOwner) (u : Nat) (s : String) :
+    acctSum es o u s = if (o0 = o ∧ u0 = u ∧ s0 = s) then (es.map (fun x => x.amount)).sum else 0 := by
+  by_cases hk : (o0 = o ∧ u0 = u ∧ s0 = s)
+  · rw [if_pos hk]
+    have : es.filter (fun e => e.inAccount o u s) = es := by
+      rw [List.filter_eq_self]
+      intro x hx
+      have := h x hx
+      exact (LedgerEntry.inAccount_iff _ _ _ _).mpr ⟨this.1.trans hk.1, this.2.1.trans hk.2.1, this.2.2.trans hk.2.2⟩
+    simp [acctSum, this]
+  · rw [if_neg hk]
+    apply acctSum_zero_of_none
+    intro x hx hx'
+    have := h x hx
+    exact hk ⟨this.1.symm.trans hx'.1, this.2.1.symm.trans hx'.2.1, this.2.2.symm.trans hx'.2.2⟩
+
+end Strata
+namespace Strata
+
+theorem sameKey_refl (a : LedgerAccount) : a.sameKey a := ⟨rfl, rfl, rfl⟩
+
+theorem flat_sum (R : LedgerAccount → LedgerAccount × List (LedgerEntry × LedgerPosted))
+    (hR : ∀ d, ∀ x ∈ (R d).2, x.1.owner = d.owner ∧ x.1.unit = d.unit ∧ x.1.scope = d.scope)
+    (a : LedgerAccount) :
+    ∀ ds : List LedgerAccount, ds.Pairwise (fun x y => ¬ x.sameKey y) → (∀ d ∈ ds, d.sameKey a → d = a) →
+      acctSum (((ds.map R).flatMap (fun r => r.2)).map (fun x => x.1)) a.owner a.unit a.scope =
+        if a ∈ ds then (((R a).2).map (fun x => x.1.amount)).sum else 0 := by
+  intro ds
+  induction ds with
+  | nil => intro _ _; simp [acctSum_nil]
+  | cons d ds ih =>
+    intro hp hu
+    rw [List.pairwise_cons] at hp
+    simp only [List.map_cons, List.flatMap_cons, List.map_append, acctSum_append]
+    have h1 := acctSum_keyed ((R d).2.map (fun x => x.1)) d.owner d.unit d.scope
+      (by intro x hx; obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx; exact hR d y hy) a.owner a.unit a.scope
+    rw [h1, ih hp.2 (fun x hx => hu x (List.mem_cons_of_mem _ hx))]
+    by_cases hk : d.sameKey a
+    · have hda := hu d (List.mem_cons_self) hk
+      subst hda
+      have : d ∉ ds := fun hm => hp.1 d hm (sameKey_refl d)
+      simp [this, List.map_map, Function.comp_def]
+    · have hk' : ¬ (d.owner = a.owner ∧ d.unit = a.unit ∧ d.scope = a.scope) := hk
+      have : a ≠ d := fun h => hk (h ▸ sameKey_refl a)
+      simp [hk', List.mem_cons, this]
+end Strata
+namespace Strata
+
+theorem expire_replace (accts due : List LedgerAccount)
+    (R : LedgerAccount → LedgerAccount × List (LedgerEntry × LedgerPosted))
+    (hR : ∀ d, (R d).1.sameKey d) (hsub : ∀ d ∈ due, d ∈ accts)
+    (hu : accts.Pairwise (fun a b => ¬ a.sameKey b)) (a : LedgerAccount) (ha : a ∈ accts) :
+    (match (due.map (fun d => (R d).1)).find? (fun h => h.is a.owner a.unit a.scope) with
+      | some h => h
+      | none => a) = if a ∈ due then (R a).1 else a := by
+  rw [List.find?_map]
+  cases hf : due.find? ((fun h : LedgerAccount => h.is a.owner a.unit a.scope) ∘ (fun d => (R d).1)) with
+  | some d =>
+    have hd := List.mem_of_find?_eq_some hf
+    have hp := List.find?_some hf
+    simp only [Function.comp, LedgerAccount.is_iff] at hp
+    have hk : d.sameKey a := sameKey_trans (sameKey_symm (hR d)) ⟨hp.1, hp.2.1, hp.2.2⟩
+    have hda : d = a := uniq_of_pairwise hu (hsub d hd) ha hk
+    subst hda
+    simp [hd]
+  | none =>
+    have hn : a ∉ due := by
+      intro hm
+      have := List.find?_eq_none.mp hf a hm
+      apply this
+      simp only [Function.comp, decide_eq_true_eq, LedgerAccount.is_iff]
+      have := hR a
+      exact ⟨this.1, this.2.1, this.2.2⟩
+    simp [hn]
+
+end Strata
+namespace Strata
+
+/-- An accepted `ExpireLedger` leaves the ledger sound when it was. -/
+theorem expireCore_sound {t : Tenant} {actor : Principal} {now : Int} {unit : Nat} {cutoffAt : Int}
+    {L' : LedgerState} {evs : List LedgerPosted} (h : expireCore t actor now unit cutoffAt = .ok (L', evs))
+    (hs : LedgerSound t.ledger) : LedgerSound L' := by
+  obtain ⟨e, hacc, hj⟩ := expireCore_state h
+  obtain ⟨hsub, hpw⟩ := dueAccounts_facts t.ledger.accounts unit cutoffAt
+  have hpw' := hpw hs.uniq
+  generalize dueAccounts t.ledger.accounts unit cutoffAt = due at hacc hj hsub hpw'
+  have facts := expireAccount_facts e now cutoffAt
+  have hR : ∀ d, (expireAccount e now cutoffAt d).1.sameKey d := fun d =>
+    ⟨(facts d).1, (facts d).2.1, (facts d).2.2.1⟩
+  have hrepl := expire_replace t.ledger.accounts due (fun d => expireAccount e now cutoffAt d) hR hsub hs.uniq
+  have hFk : ∀ a ∈ t.ledger.accounts,
+      (match (due.map (fun d => (expireAccount e now cutoffAt d).1)).find?
+          (fun (h : LedgerAccount) => h.is a.owner a.unit a.scope) with
+        | some h => h
+        | none => a).sameKey a := by
+    intro a ha
+    rw [hrepl a ha]
+    by_cases hm : a ∈ due
+    · rw [if_pos hm]; exact hR a
+    · rw [if_neg hm]; exact sameKey_refl a
+  have hentries : ∀ d, ∀ x ∈ (expireAccount e now cutoffAt d).2,
+      x.1.owner = d.owner ∧ x.1.unit = d.unit ∧ x.1.scope = d.scope := fun d => (facts d).2.2.2.1
+  refine ⟨?_, ?_, ?_⟩
+  · rw [hacc]
+    intro a' ha'
+    obtain ⟨a, ha, rfl⟩ := List.mem_map.mp ha'
+    have hk := hFk a ha
+    rw [hj, acctSum_append]
+    have hkey : ∀ (x : LedgerAccount), x.sameKey a →
+        acctSum (((due.map (fun d => expireAccount e now cutoffAt d)).flatMap (fun r => r.2)).map (fun x => x.1))
+          x.owner x.unit x.scope =
+        if a ∈ due then (((expireAccount e now cutoffAt a).2).map (fun x => x.1.amount)).sum else 0 := by
+      intro x hx
+      rw [hx.1, hx.2.1, hx.2.2]
+      exact flat_sum (fun d => expireAccount e now cutoffAt d) hentries a due hpw'
+        (fun d hd hda => uniq_of_pairwise hs.uniq (hsub d hd) ha hda)
+    rw [hkey _ hk, hrepl a ha]
+    by_cases hm : a ∈ due
+    · rw [if_pos hm, if_pos hm, (facts a).2.2.2.2, hs.bal a ha]
+      rw [(facts a).1, (facts a).2.1, (facts a).2.2.1]
+    · rw [if_neg hm, if_neg hm, hs.bal a ha]; simp
+  · rw [hacc]
+    exact pairwise_map_sameKey _ hFk hs.uniq
+  · rw [hj, hacc]
+    intro x hx
+    rcases List.mem_append.mp hx with hx | hx
+    · obtain ⟨a, ha, hae⟩ := hs.cover x hx
+      refine ⟨_, List.mem_map.mpr ⟨a, ha, rfl⟩, ?_⟩
+      have hk := hFk a ha
+      exact ⟨hk.1.trans hae.1, hk.2.1.trans hae.2.1, hk.2.2.trans hae.2.2⟩
+    · obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
+      obtain ⟨r, hr, hyr⟩ := List.mem_flatMap.mp hy
+      obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hr
+      have hk := hFk d (hsub d hd)
+      have hy' := hentries d y hyr
+      refine ⟨_, List.mem_map.mpr ⟨d, hsub d hd, rfl⟩, ?_⟩
+      exact ⟨hk.1.trans hy'.1.symm, hk.2.1.trans hy'.2.1.symm, hk.2.2.trans hy'.2.2.symm⟩
+end Strata
+namespace Strata
+
+/-- The empty ledger is sound. -/
+theorem ledgerSound_empty : LedgerSound ({} : LedgerState) :=
+  ⟨by simp, List.Pairwise.nil, by simp⟩
+
+/-- An accepted `PostLedger` leaves the tenant's ledger sound when it was: each account's balance is the sum of its
+    entries' amounts, no account is held twice, and every entry is in an account that has a header. -/
+theorem postLedgerT_sound {t t' : Tenant} {p : Principal} {now : Int} {ps : List LedgerPosting}
+    (h : postLedgerT t p now ps = .ok t') (hs : LedgerSound t.ledger) : LedgerSound t'.ledger := by
+  unfold postLedgerT at h
+  cases hc : postLedgerCore t p now ps with
+  | error e => simp [hc, Except.map] at h
+  | ok r =>
+    simp only [hc, Except.map, Except.ok.injEq] at h
+    subst h
+    exact postLedgerCore_sound hc hs
+
+/-- An accepted `ExpireLedger` leaves the tenant's ledger sound when it was. -/
+theorem expireLedgerT_sound {t t' : Tenant} {p : Principal} {now : Int} {u : Nat} {c : Int}
+    (h : expireLedgerT t p now u c = .ok t') (hs : LedgerSound t.ledger) : LedgerSound t'.ledger := by
+  unfold expireLedgerT at h
+  cases hc : expireCore t p now u c with
+  | error e => simp [hc, Except.map] at h
+  | ok r =>
+    simp only [hc, Except.map, Except.ok.injEq] at h
+    subst h
+    exact expireCore_sound hc hs
+
+end Strata
+
 /-! Axioms of the slice 13 theorems: only propext, Classical.choice and Quot.sound. -/
 #print axioms Strata.postOne_total
 #print axioms Strata.ledger_post_atomic
@@ -3246,3 +4007,39 @@ end Strata
 #print axioms Strata.expireAccount_debits_due
 #print axioms Strata.expireCore_total
 #print axioms Strata.read_refused_when_unpermitted
+#print axioms Strata.postDynamic_new
+#print axioms Strata.floorErr_none
+#print axioms Strata.capErr_none
+#print axioms Strata.periodErr_none
+#print axioms Strata.postDynamic_state
+#print axioms Strata.LedgerAccount.is_iff
+#print axioms Strata.LedgerEntry.inAccount_iff
+#print axioms Strata.find?_map_replace
+#print axioms Strata.find?_map_hit
+#print axioms Strata.postOne_frame
+#print axioms Strata.postOne_limits
+#print axioms Strata.acctSum_append
+#print axioms Strata.acctSum_nil
+#print axioms Strata.acctSum_single_same
+#print axioms Strata.acctSum_single_other
+#print axioms Strata.acctSum_zero_of_none
+#print axioms Strata.sameKey_symm
+#print axioms Strata.sameKey_trans
+#print axioms Strata.pairwise_map_sameKey
+#print axioms Strata.postDynamic_replay
+#print axioms Strata.uniq_of_pairwise
+#print axioms Strata.postOne_sound
+#print axioms Strata.postFold_sound
+#print axioms Strata.postLedgerCore_sound
+#print axioms Strata.keyed_snd_sublist
+#print axioms Strata.dueAccounts_facts
+#print axioms Strata.expireAccount_facts
+#print axioms Strata.expireCore_state
+#print axioms Strata.acctSum_keyed
+#print axioms Strata.sameKey_refl
+#print axioms Strata.flat_sum
+#print axioms Strata.expire_replace
+#print axioms Strata.expireCore_sound
+#print axioms Strata.ledgerSound_empty
+#print axioms Strata.postLedgerT_sound
+#print axioms Strata.expireLedgerT_sound
