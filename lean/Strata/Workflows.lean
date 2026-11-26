@@ -15,10 +15,12 @@ model's decisions are in `Strata/ModelBase.lean` (`fireOne`, `fireAll`, `initial
   there (a field that is absent or `null` is not one).
 
 The rule that makes the first two hold is the kernel's definition-time refusal (`WfDefined`): a
-transition of a workflow may not assign a workflow field of its type, `null` included. The kernel's
-schema check refuses such a definition (`TenantSchema::problems`, one workflow), so every object type
-the kernel holds satisfies it; the model has no definition step, so the theorems take it as the
-hypothesis `WfDefined` (for the object type) or `Tenant.WfDefs` / `World.WfDefs` (for the state).
+transition of a workflow may not assign the field of another workflow of its type, and may assign the field of
+its own workflow only a string literal that is one of the workflow's states (a `null` or a computed value is
+refused). The kernel's schema check refuses such a definition (`TenantSchema::problems`, one workflow), so every
+object type the kernel holds satisfies it; the model has no definition step, so the theorems take it as the
+hypothesis `WfDefined` (for the object type) or `Tenant.WfDefs` / `World.WfDefs` (for the state). A changed workflow
+field then holds the target of its transition, or the state named by the transition's own assignment of it.
 
 The statements that describe a write as the patched record keep their hypothesis `Tenant.Plain`
 (`Strata/WorkflowLemmas.lean`), because an assignment changes the record written.
@@ -32,18 +34,45 @@ import Strata.WorkflowLemmas
 
 namespace Strata
 
-/-- The definition-time rule of the kernel (`TenantSchema::problems`, one workflow): no transition of a workflow
-    of the type assigns a field that is the field of a workflow of the type. A `null` assignment to such a
-    field is an assignment of it, so it is refused too. Under this rule a write changes a workflow field only
-    by its patch and the transitions that the patch names, so a changed workflow field has a fired transition
-    and the state invariant holds without exceptions. -/
+/-- The definition-time rule of the kernel (`TenantSchema::problems`, the workflow loop), for the workflows `ws` of a
+    type: their ids are distinct; a transition of a workflow assigns no field of another workflow of the type; a
+    transition's assignments are distinct fields; and a transition assigns the field of its own workflow only a
+    string literal that is one of the workflow's states. Under this rule a write changes a workflow field only by
+    the transition that takes it, and the value the field then holds is the target of that transition or a state
+    its own assignment names. -/
 def WfDefined (ws : List Workflow) : Prop :=
-  ∀ w ∈ ws, ∀ tr ∈ w.transitions, ∀ v ∈ ws, ∀ fe ∈ tr.set, fe.1 ≠ v.field
+  (ws.map (fun w => w.id)).Nodup ∧
+    ∀ w ∈ ws, ∀ tr ∈ w.transitions, (tr.set.map Prod.fst).Nodup ∧
+      ∀ fe ∈ tr.set, (∀ v ∈ ws, v.id ≠ w.id → fe.1 ≠ v.field) ∧
+        (fe.1 = w.field → ∃ s, fe.2 = .lit (.str s) ∧ s ∈ w.states)
 
 theorem wfDefined_tail {w : Workflow} {ws : List Workflow} (h : WfDefined (w :: ws)) :
-    WfDefined ws :=
-  fun w' hw' tr htr v hv fe hfe =>
-    h w' (List.mem_cons_of_mem _ hw') tr htr v (List.mem_cons_of_mem _ hv) fe hfe
+    WfDefined ws := by
+  obtain ⟨hnd, hr⟩ := h
+  refine ⟨(List.nodup_cons.mp hnd).2, fun w' hw' tr htr => ?_⟩
+  obtain ⟨hn, hfe⟩ := hr w' (List.mem_cons_of_mem _ hw') tr htr
+  exact ⟨hn, fun fe hm => ⟨fun v hv hne => (hfe fe hm).1 v (List.mem_cons_of_mem _ hv) hne, (hfe fe hm).2⟩⟩
+
+/-- The ids of the workflows of a definition rule are distinct, so a workflow of the tail differs from the head. -/
+theorem id_ne_of_nodup {w : Workflow} {ws : List Workflow} (h : ((w :: ws).map fun v => v.id).Nodup)
+    {w' : Workflow} (hw' : w' ∈ ws) : w'.id ≠ w.id := by
+  intro heq
+  apply (List.nodup_cons.mp h).1
+  show w.id ∈ List.map (fun v => v.id) ws
+  rw [← heq]
+  exact List.mem_map_of_mem (f := fun v => v.id) hw'
+
+/-- Under the rule, a transition of the head workflow assigns no field of a workflow of the tail. -/
+theorem wfDefined_cross {w0 : Workflow} {ws : List Workflow} (h : WfDefined (w0 :: ws)) {w : Workflow}
+    (hw : w ∈ ws) {tr : WfTransition} (htr : tr ∈ w0.transitions) {fe : FieldId × Expr} (hfe : fe ∈ tr.set) :
+    fe.1 ≠ w.field :=
+  ((h.2 w0 List.mem_cons_self tr htr).2 fe hfe).1 w (List.mem_cons_of_mem _ hw) (id_ne_of_nodup h.1 hw)
+
+/-- Under the rule, a transition of a workflow of the tail assigns no field of the head workflow. -/
+theorem wfDefined_foreign {w0 : Workflow} {ws : List Workflow} (h : WfDefined (w0 :: ws)) {w : Workflow}
+    (hw : w ∈ ws) {tr : WfTransition} (htr : tr ∈ w.transitions) {fe : FieldId × Expr} (hfe : fe ∈ tr.set) :
+    fe.1 ≠ w0.field :=
+  ((h.2 w (List.mem_cons_of_mem _ hw) tr htr).2 fe hfe).1 w0 List.mem_cons_self (id_ne_of_nodup h.1 hw).symm
 
 /-- Every object type of the tenant is defined by the rule (the kernel refuses a definition that breaks it). -/
 def Tenant.WfDefs (t : Tenant) : Prop :=
@@ -241,35 +270,64 @@ theorem fireOne_keeps {p : Principal} {old cand : Record} {w : Workflow} {r : Re
 
 /-! ## Every workflow of a write -/
 
-/-- The workflows of an accepted write, under `WfDefined`: each workflow whose field the patch changed
-    has a fired transition, from the stored state to the new one, whose guard held on the candidate the
-    step read (the workflow's field is the patch's value there). -/
-theorem fireAll_fires (p : Principal) (old : Record) :
-    ∀ (ws : List Workflow) (cand r : Record), WfDefined ws → fireAll p old cand ws = .ok r →
-      ∀ w ∈ ws, old.fields.get w.field ≠ cand.fields.get w.field →
-      ∃ c tr, tr ∈ w.transitions ∧ c.fields.get w.field = cand.fields.get w.field ∧
-        old.fields.get w.field = .str tr.source ∧ cand.fields.get w.field = .str tr.target ∧
-        guardHolds { record := some old, old := some old, new := some c, principal := p.userId? }
-          tr.guard = true
-  | [], _, _, _, _, w, hw, _ => by simp at hw
-  | w' :: ws', cand, r, hind, h, w, hw, hch => by
-    unfold fireAll at h
+/-- A workflow leaves the candidate as it is when the field it watches has the same value on both. -/
+theorem fireOne_unchanged {p : Principal} {old cand : Record} {w : Workflow}
+    (h : old.fields.get w.field = cand.fields.get w.field) : fireOne p old cand w = .ok cand := by
+  simp [fireOne, h]
+
+/-- One workflow that changes its field: a transition takes the field from its source to its target, and the
+    field then holds the target, or the state that the transition's own assignment of the field gives (a string
+    literal, by the rule). -/
+theorem fireOne_field {p : Principal} {old cand : Record} {w : Workflow} {r : Record}
+    (hW : ∀ tr ∈ w.transitions, (tr.set.map Prod.fst).Nodup ∧
+      ∀ fe ∈ tr.set, fe.1 = w.field → ∃ s, fe.2 = .lit (.str s))
+    (h : fireOne p old cand w = .ok r) (hch : old.fields.get w.field ≠ cand.fields.get w.field) :
+    ∃ tr ∈ w.transitions, old.fields.get w.field = .str tr.source ∧ cand.fields.get w.field = .str tr.target ∧
+      guardHolds { record := some old, old := some old, new := some cand, principal := p.userId? }
+        tr.guard = true ∧
+      ((∀ fe ∈ tr.set, fe.1 ≠ w.field) ∧ r.fields.get w.field = .str tr.target ∨
+        ∃ s, r.fields.get w.field = .str s ∧ ∃ fe ∈ tr.set, fe.1 = w.field ∧ fe.2 = .lit (.str s)) := by
+  unfold fireOne at h
+  dsimp only at h
+  have hbe : ¬ (old.fields.get w.field == cand.fields.get w.field) = true := by
+    intro hb; exact hch (beq_iff_eq.mp hb)
+  rw [if_neg hbe] at h
+  split at h
+  · cases h
+  · rename_i tr hT
+    obtain ⟨hmem, hs, ht, hg⟩ := findTransition_spec _ _ _ _ _ hT
+    refine ⟨tr, hmem, hs, ht, hg, ?_⟩
     split at h
     · cases h
-    · rename_i c1 hc1
-      have htail := wfDefined_tail hind
-      have hkeep : c1.fields.get w.field = cand.fields.get w.field := by
-        apply fireOne_keeps (w := w') (f := w.field) _ hc1
-        intro tr htr fe hfe
-        exact hind w' List.mem_cons_self tr htr w hw fe hfe
-      rcases List.mem_cons.mp hw with rfl | hw'
-      · obtain ⟨tr, htr, hs, ht, hg, -⟩ := fireOne_declared hc1 hch
-        exact ⟨cand, tr, htr, rfl, hs, ht, hg⟩
-      · have hch1 : old.fields.get w.field ≠ c1.fields.get w.field := by
-          rw [hkeep]
-          exact hch
-        obtain ⟨c, tr, htr, hc, hs, ht, hg⟩ := fireAll_fires p old ws' c1 r htail h w hw' hch1
-        exact ⟨c, tr, htr, by rw [hc, hkeep], hs, by rw [← hkeep]; exact ht, hg⟩
+    · rename_i as has
+      have hr : r = applySets cand as := (Except.ok.inj h).symm
+      subst hr
+      have hk := evalSets_keys _ tr.set as has
+      have hknd : (as.map Prod.fst).Nodup := by
+        rw [hk]; exact (hW tr hmem).1
+      by_cases hown : ∃ fe ∈ tr.set, fe.1 = w.field
+      · obtain ⟨fe, hfe, hfeq⟩ := hown
+        obtain ⟨s, hlit⟩ := (hW tr hmem).2 fe hfe hfeq
+        obtain ⟨v, hv, hm⟩ := evalSets_mem _ tr.set as has fe hfe
+        have hvs : v = .str s := by
+          rw [hlit] at hv
+          simp [evalExpr] at hv
+          exact hv.symm
+        have hget := applySets_get_mem as cand hknd (fe.1, v) hm
+        right
+        refine ⟨s, ?_, fe, hfe, hfeq, hlit⟩
+        rw [← hfeq, ← hvs]
+        exact hget
+      · left
+        refine ⟨fun fe hfe hf => hown ⟨fe, hfe, hf⟩, ?_⟩
+        have hnot : ∀ fv ∈ as, fv.1 ≠ w.field := by
+          intro fv hfv
+          have hm : fv.1 ∈ tr.set.map Prod.fst := by
+            rw [← hk]; exact List.mem_map_of_mem (f := Prod.fst) hfv
+          obtain ⟨fe, hfe, hfeq⟩ := List.mem_map.mp hm
+          rw [← hfeq]
+          exact fun hf => hown ⟨fe, hfe, hf⟩
+        rw [applySets_get_other w.field as cand hnot, ht]
 
 /-- The workflows leave a field as it is when no transition of any of them assigns it. -/
 theorem fireAll_keeps (p : Principal) (old : Record) (f : FieldId) :
@@ -289,21 +347,71 @@ theorem fireAll_keeps (p : Principal) (old : Record) (f : FieldId) :
       have hk2 := fireAll_keeps p old f ws c1 r (fun w' hw' => hf w' (List.mem_cons_of_mem _ hw')) h
       rw [hk2, hk1]
 
-/-- Under the definition rule, an accepted write leaves every workflow field holding a state, when the
-    stored record did: a field the patch did not change keeps its state, and one it changed holds the target
-    of the transition that the workflow fired. -/
+/-- **The workflows of an accepted write leave each field with a stated final value.** Under the rule, for every
+    workflow of the write: a field the patch left alone keeps its value; a field it changed took a declared
+    transition, and the record then holds either that transition's target (when the transition assigns no field of
+    the workflow) or the state the transition's own assignment of the field names. -/
+theorem fireAll_final (p : Principal) (old : Record) :
+    ∀ (ws : List Workflow) (cand r : Record), WfDefined ws → fireAll p old cand ws = .ok r →
+      ∀ w ∈ ws,
+        (old.fields.get w.field = cand.fields.get w.field →
+          r.fields.get w.field = old.fields.get w.field) ∧
+        (old.fields.get w.field ≠ cand.fields.get w.field →
+          ∃ c tr, tr ∈ w.transitions ∧ c.fields.get w.field = cand.fields.get w.field ∧
+            old.fields.get w.field = .str tr.source ∧ cand.fields.get w.field = .str tr.target ∧
+            guardHolds { record := some old, old := some old, new := some c, principal := p.userId? }
+              tr.guard = true ∧
+            ((∀ fe ∈ tr.set, fe.1 ≠ w.field) ∧ r.fields.get w.field = .str tr.target ∨
+              ∃ s, r.fields.get w.field = .str s ∧ ∃ fe ∈ tr.set, fe.1 = w.field ∧
+                fe.2 = .lit (.str s))) := by
+  intro ws
+  induction ws with
+  | nil => intro cand r _ _ w hw; simp at hw
+  | cons w0 ws' ih =>
+    intro cand r hd h w hw
+    unfold fireAll at h
+    split at h
+    · cases h
+    · rename_i c1 hc1
+      have hkeepTail : ∀ u ∈ ws', c1.fields.get u.field = cand.fields.get u.field := fun u hu =>
+        fireOne_keeps (fun tr htr fe hfe => wfDefined_cross hd hu htr hfe) hc1
+      have hrh : r.fields.get w0.field = c1.fields.get w0.field :=
+        fireAll_keeps p old w0.field ws' c1 r (fun w' hw' tr htr fe hfe => wfDefined_foreign hd hw' htr hfe) h
+      have hW : ∀ tr ∈ w0.transitions, (tr.set.map Prod.fst).Nodup ∧
+          ∀ fe ∈ tr.set, fe.1 = w0.field → ∃ s, fe.2 = .lit (.str s) :=
+        fun tr htr => ⟨(hd.2 w0 List.mem_cons_self tr htr).1, fun fe hfe hf => by
+          obtain ⟨s, hs, -⟩ := ((hd.2 w0 List.mem_cons_self tr htr).2 fe hfe).2 hf
+          exact ⟨s, hs⟩⟩
+      rcases List.mem_cons.mp hw with hu0 | hu'
+      · rw [hu0]
+        constructor
+        · intro heq
+          have hc : c1 = cand := Except.ok.inj (hc1.symm.trans (fireOne_unchanged heq))
+          rw [hrh, hc, heq]
+        · intro hch
+          obtain ⟨tr, htr, hs, ht, hg, hr⟩ := fireOne_field hW hc1 hch
+          refine ⟨cand, tr, htr, rfl, hs, ht, hg, ?_⟩
+          rw [hrh]
+          exact hr
+      · obtain ⟨i1, i2⟩ := ih c1 r (wfDefined_tail hd) h w hu'
+        rw [hkeepTail w hu'] at i1 i2
+        exact ⟨i1, i2⟩
+
+/-- **Every workflow field of an accepted write holds a string**, when the stored record did: a field the patch left
+    alone keeps its string, and a field it changed holds the target or the literal state of the transition. -/
 theorem fireAll_present {p : Principal} {old cand : Record} {ws : List Workflow} {r : Record}
     (hd : WfDefined ws) (hF : fireAll p old cand ws = .ok r)
     (hold : ∀ w ∈ ws, ∃ s, old.fields.get w.field = .str s) :
     ∀ w ∈ ws, ∃ s, r.fields.get w.field = .str s := by
   intro w hw
-  have hk := fireAll_keeps p old w.field ws cand r
-    (fun w' hw' tr htr fe hfe => hd w' hw' tr htr w hw fe hfe) hF
+  obtain ⟨h1, h2⟩ := fireAll_final p old ws cand r hd hF w hw
   by_cases heq : old.fields.get w.field = cand.fields.get w.field
   · obtain ⟨s, hs⟩ := hold w hw
-    exact ⟨s, by rw [hk, ← heq, hs]⟩
-  · obtain ⟨-, tr, -, -, -, ht, -⟩ := fireAll_fires p old ws cand r hd hF w hw heq
-    exact ⟨tr.target, by rw [hk, ht]⟩
+    exact ⟨s, by rw [h1 heq, hs]⟩
+  · obtain ⟨-, tr, -, -, -, ht, -, hr⟩ := h2 heq
+    rcases hr with ⟨-, hr⟩ | ⟨s, hr, -⟩
+    · exact ⟨tr.target, hr⟩
+    · exact ⟨s, hr⟩
 
 /-! ## Creates -/
 
@@ -352,36 +460,6 @@ theorem create_non_initial_refused (t : Tenant) (p : Principal) (ty : TypeId) (f
 
 /-! ## Updates -/
 
-/-- **A changed workflow field follows a declared transition.** Under `WfDefined`, an accepted update
-    that changes a workflow field by its patch took a transition of that workflow from the stored state to
-    the patched one, whose guard held on the candidate the step read. -/
-theorem update_changed_fired {t t' : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
-    {fs : Fields} {ev : Option Nat} {o : ObjType} {old : Record} (ho : t.typ? ty = some o)
-    (hl : o.records.lookup id = some old) (hind : WfDefined o.workflows)
-    (h : stepTenant t p (.update ty id fs ev) = .ok t') {w : Workflow} (hw : w ∈ o.workflows)
-    (hch : old.fields.get w.field ≠ (patched old fs).fields.get w.field) :
-    ∃ c tr, tr ∈ w.transitions ∧ c.fields.get w.field = (patched old fs).fields.get w.field ∧
-      old.fields.get w.field = .str tr.source ∧ (patched old fs).fields.get w.field = .str tr.target ∧
-      guardHolds { record := some old, old := some old, new := some c, principal := p.userId? }
-        tr.guard = true := by
-  obtain ⟨r, hF, -, -, -, -, -⟩ := update_ok_parts_gen ho hl h
-  exact fireAll_fires p old o.workflows (patched old fs) r hind hF w hw hch
-
-/-- **An update that changes a workflow field without a declared transition is refused**, under
-    `WfDefined`: when no transition of the workflow from the stored state to the patched one exists,
-    no step is accepted. -/
-theorem update_undeclared_refused {t : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
-    {fs : Fields} {ev : Option Nat} {o : ObjType} {old : Record} (ho : t.typ? ty = some o)
-    (hl : o.records.lookup id = some old) (hind : WfDefined o.workflows) {w : Workflow}
-    (hw : w ∈ o.workflows)
-    (hch : old.fields.get w.field ≠ (patched old fs).fields.get w.field)
-    (hnone : ∀ tr ∈ w.transitions, ¬ (old.fields.get w.field = .str tr.source ∧
-      (patched old fs).fields.get w.field = .str tr.target)) :
-    ∀ t', stepTenant t p (.update ty id fs ev) ≠ .ok t' := by
-  intro t' h'
-  obtain ⟨-, tr, htr, -, hs, ht, -⟩ := update_changed_fired ho hl hind h' hw hch
-  exact hnone tr htr ⟨hs, ht⟩
-
 /-- **The record an accepted update writes is the patched record as the workflows leave it**, and a record
     the workflows changed is authorised again: the update may write only what the actor may write. -/
 theorem update_writes_fired {t t' : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
@@ -402,6 +480,41 @@ theorem update_writes_fired {t t' : Tenant} {p : Principal} {ty : TypeId} {id : 
     · rw [hs] at hd
       cases hd
     · exact hc
+
+/-- **A changed workflow field follows a declared transition, and the record holds its state.** Under the rule, an
+    accepted update that changes a workflow field by its patch took a transition of that workflow from the stored
+    state to the patched one, whose guard held on the candidate the step read; the record it writes then holds the
+    transition's target there, or the state that the transition's own assignment of the field names. -/
+theorem update_changed_fired {t t' : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
+    {fs : Fields} {ev : Option Nat} {o : ObjType} {old : Record} (ho : t.typ? ty = some o)
+    (hl : o.records.lookup id = some old) (hind : WfDefined o.workflows)
+    (h : stepTenant t p (.update ty id fs ev) = .ok t') {w : Workflow} (hw : w ∈ o.workflows)
+    (hch : old.fields.get w.field ≠ (patched old fs).fields.get w.field) :
+    ∃ r, t'.recordAt ty id = some r ∧ ∃ c tr, tr ∈ w.transitions ∧
+      c.fields.get w.field = (patched old fs).fields.get w.field ∧
+      old.fields.get w.field = .str tr.source ∧ (patched old fs).fields.get w.field = .str tr.target ∧
+      guardHolds { record := some old, old := some old, new := some c, principal := p.userId? }
+        tr.guard = true ∧
+      ((∀ fe ∈ tr.set, fe.1 ≠ w.field) ∧ r.fields.get w.field = .str tr.target ∨
+        ∃ s, r.fields.get w.field = .str s ∧ ∃ fe ∈ tr.set, fe.1 = w.field ∧ fe.2 = .lit (.str s)) := by
+  obtain ⟨r, hF, hrec, -⟩ := update_writes_fired ho hl h
+  obtain ⟨c, tr, htr, hc, hs, ht, hg, hr⟩ :=
+    (fireAll_final p old o.workflows (patched old fs) r hind hF w hw).2 hch
+  exact ⟨r, hrec, c, tr, htr, hc, hs, ht, hg, hr⟩
+
+/-- **An update that changes a workflow field without a declared transition is refused**, under the definition
+    rule: when no transition of the workflow from the stored state to the patched one exists, no step is accepted. -/
+theorem update_undeclared_refused {t : Tenant} {p : Principal} {ty : TypeId} {id : RecordId}
+    {fs : Fields} {ev : Option Nat} {o : ObjType} {old : Record} (ho : t.typ? ty = some o)
+    (hl : o.records.lookup id = some old) (hind : WfDefined o.workflows) {w : Workflow}
+    (hw : w ∈ o.workflows)
+    (hch : old.fields.get w.field ≠ (patched old fs).fields.get w.field)
+    (hnone : ∀ tr ∈ w.transitions, ¬ (old.fields.get w.field = .str tr.source ∧
+      (patched old fs).fields.get w.field = .str tr.target)) :
+    ∀ t', stepTenant t p (.update ty id fs ev) ≠ .ok t' := by
+  intro t' h'
+  obtain ⟨-, -, c, tr, htr, -, hs, ht, -, -⟩ := update_changed_fired ho hl hind h' hw hch
+  exact hnone tr htr ⟨hs, ht⟩
 
 /-! ## Every accepted step keeps the states -/
 

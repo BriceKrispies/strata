@@ -107,9 +107,9 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `create_non_initial_refused` | A permitted create whose record does not start in an initial state is refused with `workflowViolation`, and no state follows |
 | | `fireOne_declared` | A workflow that changes the state of its field takes a declared transition from the old state to the new one whose guard is `true` on the environment the step reads; its assignments give their fields the values of their expressions, when the assigned fields are distinct |
 | | `fireOne_keeps`, `applySets_get_mem`, `applySets_get_other`, `evalSets_keys`, `fireAll_nodup`, `fireAll_version` | An assignment changes only the fields it names, to the values they are given; the workflows keep the field names distinct and the version |
-| | `fireAll_fires` | Under `WfDefined` (the definition rule: no transition assigns a workflow field), every workflow of the write whose field the patch changed took such a transition, and its guard held on the candidate the step read |
-| | `fireAll_keeps` | Under `WfDefined`, the workflows leave every workflow field as the candidate has it |
-| | `update_changed_fired` | An accepted update that changes a workflow field by its patch has, for that workflow, a declared transition from the stored state to the patched one whose guard held (the `WfDefined` hypothesis, the kernel's definition rule) |
+| | `fireAll_final` | Under `WfDefined`, for every workflow of an accepted write: a field the patch left alone keeps its value; a field it changed took a declared transition from the stored state to the patched one (guard held), and the record holds the transition's target, or the literal state its own assignment of the field names (`fireAll_present`: the field then holds a string) |
+| | `fireAll_keeps`, `fireOne_unchanged`, `fireOne_field` | The workflows leave a field no transition of them assigns as it is; a workflow that changes its field leaves the target or the named literal state there |
+| | `update_changed_fired` | An accepted update that changes a workflow field by its patch has, for that workflow, a declared transition from the stored state to the patched one whose guard held, and the record written holds the target there, or the state the transition's own assignment names (the `WfDefined` hypothesis, the kernel's definition rule) |
 | | `update_undeclared_refused` | Under `WfDefined`, an update that changes a workflow field with no declared transition from the stored state to the patched one is never accepted |
 | | `update_writes_fired` | The record an accepted update writes is the patched record as the workflows leave it; a record the workflows changed is authorised again (`canUpdate` on the record written) |
 | | `fireAll_present`, `clearRef_present`, `get_clearFields_str`, `stepTenant_preserves_states`, `step_preserves_states`, `clearRef_statesOk`, `str_of_clearFields`, `putType_statesOk` | Every accepted step keeps each stored record's workflow field holding a string that is one of the states (`Tenant.StatesOk`: `null` and an absent field are not states, and no accepted step leaves one); a delete's clearing of references keeps it so (the distinct field names of the records are assumed, `Tenant.Distinct`); the step theorems take the definition rule `WfDefs` of the pre-state |
@@ -1067,16 +1067,17 @@ cover the decisions.
   schema validity of slice 11 and are not part of the model; the fixture's workflow satisfies them. Schema changes do not
   define or remove workflows (slice 11).
 - **Findings.** Three things the kernel does, which the model reproduces and the theorems state.
-  1. A transition may assign a workflow field, the workflow's own or another's, so a field could change without the
-     transition that the workflow declares. **Rule chosen (WG-5666): refuse such a definition.** The schema check
-     (`TenantSchema::problems`, the workflow loop in `crates/kernel/src/schema.rs`) refuses, with `InvalidSchema`, a
-     workflow whose transition sets any workflow field of its type, this workflow's or another's; `functions.jsonc`
-     `workflow-problems` states the same check. Refusing at definition is the least surprising rule: the definition is
-     where the rule can be read, and a stored record then needs no check of which transition wrote a workflow field. The
+  1. A transition may assign a workflow field, so a field could change without the transition that declares it.
+     **Rule chosen (WG-5666, narrowed): refuse what the kernel cannot check at definition.** The schema check
+     (`TenantSchema::problems`, the workflow loop in `crates/kernel/src/schema.rs`) refuses, with `InvalidSchema`:
+     (a) a transition that assigns the field of another workflow of its type; (b) a transition's assignment of its own
+     workflow field that is not a string literal (`null` and computed values included), since its value cannot be
+     checked against the states. A literal that is one of the workflow's states is allowed, and an own-field literal
+     that is not a state keeps its existing refusal. `functions.jsonc` `workflow-problems` states the same checks. The
      model has no definition step, so the theorems take the rule as their hypothesis: `WfDefined` for an object type
-     (the former `WfIndependent`, with the null case included), `Tenant.WfDefs` and `World.WfDefs` for the state.
-     `update_changed_fired` and `update_undeclared_refused` take `WfDefined`; `fireAll_fires` and `fireAll_keeps` show
-     that a changed field took its transition and that no assignment moves a workflow field.
+     (the id-distinctness, the no-foreign-assignment, the literal-state conditions) and `Tenant.WfDefs` / `World.WfDefs`
+     for the state. `update_changed_fired` states what a changed field holds: the target of its transition, or the
+     literal state its own assignment names. `fireAll_final` proves it; `fireAll_keeps` and `fireOne_field` are its parts.
   2. A transition may assign `null` to a workflow field, and the state check then saw no state. The same definition
      rule refuses it, since a `null` assignment is an assignment of the field. A patch that sets the field to `null` is
      refused by the transition search (no transition goes to an absent state). The state invariant is therefore stated
@@ -1114,11 +1115,12 @@ cover the decisions.
   `fixtures/scenarios.txt`, and the scenarios that existed before print the lines of `expected.txt`. The Rust sides (codec,
   fixtures, harness, generator) were written by reading and are not compiled or run here.
 - **Rust side of WG-5666.** `TenantSchema::problems` (`crates/kernel/src/schema.rs`) and the `workflow-problems` function of
-  `specifications/functions.jsonc` (two new examples, one changed example) carry the definition rule; the kernel tests
-  `a_transition_that_assigns_another_workflows_field_is_refused`, `a_transition_that_assigns_null_to_a_workflow_field_is_refused`
-  and `a_transition_that_assigns_a_plain_field_is_defined` (`crates/kernel/tests/definitions.rs`) cover it. The h- scenarios do
-  not express a definition (the model has no definition step, and the fixture's workflow is the only one), so the refusal has
-  no scenario; the model's `WfDefined` hypothesis stands in for it.
+  `specifications/functions.jsonc` carry the definition rule (own-field string literals that are states are allowed; another
+  workflow's field and any own-field non-literal are refused). The kernel tests in `crates/kernel/tests/definitions.rs` are
+  `a_transition_that_assigns_another_workflows_field_is_refused`, `a_transition_that_assigns_null_to_a_workflow_field_is_refused`,
+  `a_transition_that_assigns_a_declared_state_literal_to_its_own_field_is_defined` and `a_transition_that_assigns_a_plain_field_is_defined`.
+  The h- scenarios do not express a definition (the model has no definition step, and the fixture's workflow is the only one),
+  so the refusal has no scenario; the model's `WfDefined` hypothesis stands in for it.
 - **Not covered.** Approvals (slice 15); events and transition names (slice 9); the schema changes that define or remove
   workflows, and the static validity of a workflow (slice 11); computed fields (slice 10). A later assignment overwriting an
   earlier workflow's assignment is the record the step writes, stated by `update_writes_fired`, not as a theorem about

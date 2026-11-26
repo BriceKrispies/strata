@@ -990,7 +990,7 @@ import Strata
 #print axioms Strata.create_non_initial_refused
 #print axioms Strata.fireOne_declared
 #print axioms Strata.fireOne_keeps
-#print axioms Strata.fireAll_fires
+#print axioms Strata.fireAll_final
 #print axioms Strata.fireAll_keeps
 #print axioms Strata.fireAll_present
 #print axioms Strata.clearRef_present

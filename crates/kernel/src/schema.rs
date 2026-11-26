@@ -519,17 +519,23 @@ impl TenantSchemaExt for TenantSchema {
                             transition.name
                         ));
                     }
-                    // A transition may not assign a workflow field of its type, of this workflow or
-                    // another, and `null` included (the model's WfDefined rule): a workflow field
-                    // changes only by its patch, and a changed one has a transition that took it.
-                    if self
-                        .workflows
-                        .values()
-                        .any(|other| other.object == workflow.object && other.field == *field)
-                    {
+                    // A transition may not assign the field of another workflow of its type, and may
+                    // assign its own workflow field only a string literal (the states are checked
+                    // below). A null or computed value cannot be checked against the states here.
+                    let own = *field == workflow.field;
+                    if self.workflows.values().any(|other| {
+                        other.id != workflow.id
+                            && other.object == workflow.object
+                            && other.field == *field
+                    }) {
                         problems.push(format!(
-                            "{at}.{}: sets {field}, a workflow field of {}: a transition may not assign it",
+                            "{at}.{}: sets {field}, the field of another workflow of {}: a transition may not assign it",
                             transition.name, workflow.object
+                        ));
+                    } else if own && !matches!(value, Expr::Lit(Value::Str(_))) {
+                        problems.push(format!(
+                            "{at}.{}: sets {field} to a value that is not a string literal: a workflow field takes only a state written as a literal",
+                            transition.name
                         ));
                     }
                     if let Err(e) = expr::check(value, &env) {
