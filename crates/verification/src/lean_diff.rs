@@ -14,6 +14,11 @@
 //! [`lean_intents`] reads the intent kinds `Main.lean` dispatches so a test can fail when the
 //! model gains an intent that [`GENERATED_INTENTS`] does not cover.
 //!
+//! Slice 7 adds the membership intents: the creation of tenant 3, roles, teams and invitations. The
+//! generator mixes single random operations of them with scripted sequences that reach the
+//! decisions that need several operations to line up (an invitation redeemed, revoked, expired, its
+//! issuer losing the right to manage members; a team that keeps the last owner; the last owner).
+//!
 //! The generator is aimed at the decisions of slice 2: patches that remove fields, expected
 //! versions right and wrong, a default relied on and suppressed, lists of scalars and of
 //! references (dangling elements, set-null and restricting lists, a required list), and values
@@ -25,7 +30,7 @@ use crate::lean::{build_model, kernel_output, run_model};
 use std::path::Path;
 
 /// The intent kinds the generator produces; each is the word after the principal in an `op` line.
-pub const GENERATED_INTENTS: [&str; 7] = [
+pub const GENERATED_INTENTS: [&str; 18] = [
     "create",
     "update",
     "patch",
@@ -33,6 +38,17 @@ pub const GENERATED_INTENTS: [&str; 7] = [
     "require",
     "unique",
     "composite",
+    "create-tenant",
+    "assign",
+    "revoke",
+    "team",
+    "team-assign",
+    "team-revoke",
+    "team-add",
+    "team-remove",
+    "invite",
+    "invite-revoke",
+    "redeem",
 ];
 
 /// Known differences between the model and the kernel that are intended, each with its reason.
@@ -94,6 +110,24 @@ pub enum OpKind {
     Unique(u64, bool),
     /// A composite unique constraint over these fields.
     Composite(Vec<u64>),
+    /// Create a tenant: its owner and its name token.
+    CreateTenant(u64, String),
+    /// Give a user a role, or take one away.
+    Assign(u64, u64),
+    Revoke(u64, u64),
+    /// Define a team: its number and its label token.
+    Team(u64, String),
+    /// Give a team a role, take one away; add a user to a team, remove one.
+    TeamAssign(u64, u64),
+    TeamRevoke(u64, u64),
+    TeamAdd(u64, u64),
+    TeamRemove(u64, u64),
+    /// Issue an invitation: its number, the address token, the roles (in the kernel's order) and the
+    /// time of the request.
+    Invite(u64, String, Vec<u64>, u64),
+    InviteRevoke(u64),
+    /// Redeem an invitation at a time, with a verified address token if the caller has one.
+    Redeem(u64, u64, Option<String>),
 }
 
 pub type Scenario = Vec<Op>;
@@ -145,6 +179,33 @@ impl Op {
             OpKind::Composite(fs) => format!(
                 "{head} composite{}",
                 fs.iter().map(|f| format!(" {f}")).collect::<String>()
+            ),
+            OpKind::CreateTenant(owner, name) => format!("{head} create-tenant {owner} {name}"),
+            OpKind::Assign(user, role) => format!("{head} assign {user} {role}"),
+            OpKind::Revoke(user, role) => format!("{head} revoke {user} {role}"),
+            OpKind::Team(team, label) => format!("{head} team {team} {label}"),
+            OpKind::TeamAssign(team, role) => format!("{head} team-assign {team} {role}"),
+            OpKind::TeamRevoke(team, role) => format!("{head} team-revoke {team} {role}"),
+            OpKind::TeamAdd(team, user) => format!("{head} team-add {team} {user}"),
+            OpKind::TeamRemove(team, user) => format!("{head} team-remove {team} {user}"),
+            OpKind::Invite(inv, address, roles, now) => {
+                let roles = if roles.is_empty() {
+                    "-".to_string()
+                } else {
+                    roles
+                        .iter()
+                        .map(u64::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                format!("{head} invite {inv} {address} {roles} @{now}")
+            }
+            OpKind::InviteRevoke(inv) => format!("{head} invite-revoke {inv}"),
+            OpKind::Redeem(inv, now, verified) => format!(
+                "{head} redeem {inv} @{now}{}",
+                verified
+                    .as_ref()
+                    .map_or(String::new(), |v| format!(" verified={v}"))
             ),
         }
     }
@@ -506,6 +567,345 @@ fn expected_version(rng: &mut Lcg, guess: u64) -> Option<u64> {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The membership intents (slice 7)
+// ---------------------------------------------------------------------------------------------
+
+/// The user numbers from this one up are the kernel's reserved principal ids (`lean::RESERVED_FROM`,
+/// the model's `reservedFrom`).
+const RESERVED_USER: u64 = 1_000_000;
+
+/// Fourteen days in milliseconds: how long an invitation lasts (ADM-1082).
+const FORTNIGHT_MS: u64 = 14 * 24 * 60 * 60 * 1000;
+
+/// The owner of a tenant: the fixture's for `1` and `2`, and the owner the generator gives tenant `3`.
+fn home_of(tenant: u64) -> u64 {
+    match tenant {
+        2 => 200,
+        3 => 300,
+        _ => 100,
+    }
+}
+
+/// What a sequence has probably done to the membership of the tenants, so that aimed operations name
+/// teams and invitations that exist (an approximation, as for records: a refused operation still counts).
+#[derive(Clone, Default)]
+struct Members {
+    /// Tenant 3 was (probably) created.
+    created3: bool,
+    /// How many teams `team1`.. the sequence defined, per tenant.
+    teams: [u64; 4],
+    /// The invitations made, per tenant: the address token and the time of the request.
+    invites: [Vec<(String, u64)>; 4],
+}
+
+/// The kernel orders a set of roles by the role id's text: `editor` (2), `owner` (0), `public` (1),
+/// `role<n>`, `writer` (3). The model takes a role list in the order given, so the generator writes the
+/// roles of an invitation in the kernel's order, and a refusal for two bad roles is the same on both
+/// sides.
+fn role_order(role: u64) -> String {
+    match role {
+        0 => "owner".to_string(),
+        1 => "public".to_string(),
+        2 => "editor".to_string(),
+        3 => "writer".to_string(),
+        n => format!("role{n}"),
+    }
+}
+
+fn sorted_roles(mut roles: Vec<u64>) -> Vec<u64> {
+    roles.sort_by_key(|r| role_order(*r));
+    roles.dedup();
+    roles
+}
+
+/// A user an assignment or a team names: the tenant's own users, strangers, now and then a reserved id.
+fn member_user(rng: &mut Lcg, home: u64) -> u64 {
+    match rng.below(14) {
+        0..=2 => home,
+        3..=5 => home + 1,
+        6 | 7 => home + 2,
+        8 => home + 3,
+        9 | 10 => 150,
+        11 => 160,
+        12 => home + 4,
+        _ => RESERVED_USER + rng.below(2),
+    }
+}
+
+/// A role number: owner, editor and writer mostly, now and then `public` or one the tenant does not define.
+fn member_role(rng: &mut Lcg) -> u64 {
+    match rng.below(14) {
+        0..=2 => 0,
+        3 => 1,
+        4..=7 => 2,
+        8..=11 => 3,
+        _ => 9,
+    }
+}
+
+/// The caller of a membership operation: mostly the tenant's owner or editor, who may manage members,
+/// otherwise a writer, a stranger, the system, an anonymous caller, another tenant's owner or a
+/// reserved id.
+fn member_caller(rng: &mut Lcg, home: u64) -> Caller {
+    match rng.below(22) {
+        0..=8 => Caller::User(home),
+        9..=13 => Caller::User(home + 1),
+        14 | 15 => Caller::User(home + 2),
+        16 => Caller::User(999),
+        17 => Caller::System,
+        18 => Caller::Anonymous,
+        19 => Caller::User(RESERVED_USER + 1),
+        _ => Caller::User(if home == 100 { 201 } else { 101 }),
+    }
+}
+
+/// The address an invitation names: with capitals or spaces to be normalised, or with no `@`.
+fn invite_address(rng: &mut Lcg) -> String {
+    match rng.below(7) {
+        0 => "s:ann@x.org".to_string(),
+        1 => "s:Bob@X.com".to_string(),
+        2 => "s:_cy@x.org_".to_string(),
+        3 => "s:dave".to_string(),
+        4 => "s:EVE@x.org".to_string(),
+        5 => "s:_@_".to_string(),
+        _ => "s:fay@x.org".to_string(),
+    }
+}
+
+/// An address that is the same once normalised (trimmed and lowercased), written differently, or another.
+fn verified_address(rng: &mut Lcg, named: &str) -> Option<String> {
+    match rng.below(10) {
+        0 => None,
+        1 | 2 => Some("s:zed@x.org".to_string()),
+        3 | 4 => Some(named.to_uppercase().replacen("S:", "s:", 1)),
+        5 => Some(format!("s:_{}_", &named[2..])),
+        _ => Some(named.to_string()),
+    }
+}
+
+/// The roles an invitation offers.
+fn invite_roles(rng: &mut Lcg) -> Vec<u64> {
+    sorted_roles(match rng.below(10) {
+        0 => vec![],
+        1 => vec![0],
+        2 => vec![1],
+        3 => vec![9],
+        4 | 5 => vec![2],
+        6 | 7 => vec![3],
+        8 => vec![2, 3],
+        _ => vec![1, 9],
+    })
+}
+
+/// The time of a redemption, around the expiry of an invitation issued at `at`.
+fn redeem_time(rng: &mut Lcg, at: u64) -> u64 {
+    match rng.below(8) {
+        0 => at + FORTNIGHT_MS - 1,
+        1 => at + FORTNIGHT_MS,
+        2 => at + FORTNIGHT_MS + 1,
+        3 => at.saturating_sub(1),
+        _ => at + 1 + rng.below(1000),
+    }
+}
+
+/// One iteration of the generator that is about membership: a creation of tenant 3, a scripted
+/// sequence that builds a lifecycle (an invitation made, redeemed, revoked, expired; an owner team;
+/// the last owner), or one random operation.
+fn member_ops(rng: &mut Lcg, ms: &mut Members) -> Vec<Op> {
+    let tenant = match rng.below(10) {
+        0..=2 => 3,
+        3 | 4 => 2,
+        _ => 1,
+    };
+    let t = tenant as usize;
+    let home = home_of(tenant);
+    let mut ops = Vec::new();
+    let mk = |principal: Caller, kind: OpKind| Op {
+        tenant,
+        principal,
+        object: 1,
+        kind,
+    };
+    // Tenant 3 does not exist until the system creates it. Creations are mostly right; some name a
+    // blank name, a reserved owner or a tenant that exists, or are made by someone else.
+    if tenant == 3 && (!ms.created3 || rng.below(10) == 0) {
+        let owner = match rng.below(10) {
+            0 => RESERVED_USER,
+            1 => 301,
+            _ => 300,
+        };
+        let name = if rng.below(8) == 0 { "s:_" } else { "s:acme" };
+        let (at, who) = match rng.below(12) {
+            0 => (3, Caller::User(300)),
+            1 => (3, Caller::Anonymous),
+            2 => (rng.pick(&[1u64, 2]), Caller::System),
+            3 => (3, Caller::User(RESERVED_USER + 1)),
+            _ => (3, Caller::System),
+        };
+        ms.created3 |= at == 3 && who == Caller::System && owner < RESERVED_USER && name != "s:_";
+        ops.push(Op {
+            tenant: at,
+            principal: who,
+            object: 1,
+            kind: OpKind::CreateTenant(owner, name.to_string()),
+        });
+        return ops;
+    }
+    // Scripted sequences.
+    if rng.below(8) == 0 {
+        let inv = 1 + ms.invites[t].len() as u64;
+        let address = ["s:ann@x.org", "s:Bob@X.com", "s:_cy@x.org_"][rng.below(3) as usize];
+        let at = 1_000 + 1_000 * rng.below(5);
+        let issuer = if rng.below(3) == 0 { home + 1 } else { home };
+        let roles = sorted_roles(match rng.below(4) {
+            0 => vec![2],
+            1 => vec![3],
+            2 => vec![2, 3],
+            _ => vec![0],
+        });
+        let invite = |i: u64, who: u64, at: u64| {
+            mk(
+                Caller::User(who),
+                OpKind::Invite(i, address.to_string(), roles.clone(), at),
+            )
+        };
+        let redeem = |i: u64, who: u64, at: u64, verified: Option<&str>| {
+            mk(
+                Caller::User(who),
+                OpKind::Redeem(i, at, verified.map(str::to_string)),
+            )
+        };
+        match rng.below(7) {
+            // The invitation is made, redeemed, redeemed again and revoked too late.
+            0 => {
+                ops.push(invite(inv, issuer, at));
+                ops.push(redeem(inv, 150, at + 5, Some(address)));
+                ops.push(redeem(inv, 160, at + 6, Some(address)));
+                ops.push(mk(Caller::User(home), OpKind::InviteRevoke(inv)));
+            }
+            // The invitation is revoked, then redeemed.
+            1 => {
+                ops.push(invite(inv, issuer, at));
+                ops.push(mk(Caller::User(issuer), OpKind::InviteRevoke(inv)));
+                ops.push(mk(Caller::User(issuer), OpKind::InviteRevoke(inv)));
+                ops.push(redeem(inv, 150, at + 5, Some(address)));
+            }
+            // The expiry: the last millisecond and the first one after.
+            2 => {
+                ops.push(invite(inv, issuer, at));
+                ops.push(redeem(inv, 150, at + FORTNIGHT_MS, Some(address)));
+                ops.push(redeem(inv, 150, at + FORTNIGHT_MS - 1, Some(address)));
+            }
+            // The issuer loses the right to manage members before the invitation is redeemed.
+            3 => {
+                ops.push(invite(inv, home + 1, at));
+                ops.push(mk(Caller::User(home), OpKind::Revoke(home + 1, 2)));
+                ops.push(redeem(inv, 150, at + 5, Some(address)));
+            }
+            // The wrong address, no verified address, then the right one.
+            4 => {
+                ops.push(invite(inv, issuer, at));
+                ops.push(redeem(inv, 150, at + 5, Some("s:zed@x.org")));
+                ops.push(redeem(inv, 150, at + 5, None));
+                ops.push(redeem(inv, 150, at + 5, Some(address)));
+            }
+            // An owner team: the owner can drop its own role while the team keeps an owner.
+            5 => {
+                let team = 1 + ms.teams[t].min(2);
+                ms.teams[t] = ms.teams[t].max(team);
+                ops.push(mk(
+                    Caller::User(home),
+                    OpKind::Team(team, "s:ops".to_string()),
+                ));
+                ops.push(mk(Caller::User(home), OpKind::TeamAssign(team, 0)));
+                ops.push(mk(Caller::User(home), OpKind::TeamAdd(team, 150)));
+                ops.push(mk(Caller::User(home), OpKind::Revoke(home, 0)));
+                ops.push(mk(Caller::User(150), OpKind::TeamRemove(team, 150)));
+                ops.push(mk(Caller::User(home), OpKind::TeamRemove(team, 150)));
+            }
+            // The last owner: the owner takes its role away, with and without a second owner.
+            _ => {
+                ops.push(mk(Caller::User(home), OpKind::Revoke(home, 0)));
+                ops.push(mk(Caller::User(home), OpKind::Assign(home + 1, 0)));
+                ops.push(mk(Caller::User(home), OpKind::Revoke(home, 0)));
+                ops.push(mk(Caller::User(home + 1), OpKind::Revoke(home + 1, 0)));
+            }
+        }
+        if ops.iter().any(|op| matches!(op.kind, OpKind::Invite(..))) {
+            ms.invites[t].push((address.to_string(), at));
+        }
+        return ops;
+    }
+    // One random operation.
+    let caller = member_caller(rng, home);
+    let team = |rng: &mut Lcg, ms: &Members| {
+        if rng.below(10) == 0 {
+            7
+        } else {
+            1 + rng.below(ms.teams[t].clamp(1, 3))
+        }
+    };
+    let kind = match rng.below(26) {
+        0..=3 => OpKind::Assign(member_user(rng, home), member_role(rng)),
+        4..=6 => OpKind::Revoke(member_user(rng, home), member_role(rng)),
+        7 | 8 => {
+            let n = 1 + rng.below(3);
+            ms.teams[t] = ms.teams[t].max(n);
+            let label = if rng.below(5) == 0 { "s:_" } else { "s:ops" };
+            OpKind::Team(n, label.to_string())
+        }
+        9 | 10 => OpKind::TeamAssign(team(rng, ms), member_role(rng)),
+        11 => OpKind::TeamRevoke(team(rng, ms), member_role(rng)),
+        12..=14 => OpKind::TeamAdd(team(rng, ms), member_user(rng, home)),
+        15 => OpKind::TeamRemove(team(rng, ms), member_user(rng, home)),
+        16..=19 => {
+            let inv = if rng.below(6) == 0 {
+                1 + rng.below(3)
+            } else {
+                1 + ms.invites[t].len() as u64
+            };
+            let address = invite_address(rng);
+            let at = 1_000 + 1_000 * rng.below(5);
+            if inv as usize == ms.invites[t].len() + 1 {
+                ms.invites[t].push((address.clone(), at));
+            }
+            OpKind::Invite(inv, address, invite_roles(rng), at)
+        }
+        20 => OpKind::InviteRevoke(1 + rng.below(3)),
+        _ => {
+            let made = ms.invites[t].len() as u64;
+            if made == 0 || rng.below(8) == 0 {
+                OpKind::Redeem(
+                    1 + rng.below(3),
+                    1_000 + rng.below(5_000),
+                    Some("s:ann@x.org".to_string()),
+                )
+            } else {
+                let inv = 1 + rng.below(made);
+                let (named, at) = ms.invites[t][inv as usize - 1].clone();
+                let verified = verified_address(rng, &named);
+                OpKind::Redeem(inv, redeem_time(rng, at), verified)
+            }
+        }
+    };
+    // A redemption is made by whoever redeems, not by a manager: a user who may have no role.
+    let caller = if matches!(kind, OpKind::Redeem(..)) {
+        match rng.below(10) {
+            0 => Caller::System,
+            1 => Caller::Anonymous,
+            2 => Caller::User(home),
+            3 => Caller::User(RESERVED_USER + 1),
+            4 | 5 => Caller::User(160),
+            _ => Caller::User(150),
+        }
+    } else {
+        caller
+    };
+    ops.push(mk(caller, kind));
+    ops
+}
+
 /// One sequence, deterministic in `seed`.
 pub fn generate(seed: u64) -> Scenario {
     let mut rng = Lcg(seed ^ 0x9e37_79b9_7f4a_7c15);
@@ -522,13 +922,21 @@ pub fn generate(seed: u64) -> Scenario {
     let mut versions: [Vec<u64>; 4] = Default::default();
     // Whether the tenant may hold a record near the record bound: patches there stay small.
     let mut big = [false; 4];
+    // What the sequence has probably done to the tenants' membership (slice 7).
+    let mut members = Members::default();
     for _ in 0..(8 + rng.below(20)) {
+        // One iteration in four is about membership: a creation of tenant 3, a scripted sequence, or
+        // one random operation.
+        if rng.below(4) == 0 {
+            ops.extend(member_ops(&mut rng, &mut members));
+            continue;
+        }
         let tenant = match rng.below(12) {
             0 => 3,
             1 | 2 => 2,
             _ => 1,
         };
-        let home = if tenant == 2 { 200 } else { 100 };
+        let home = home_of(tenant);
         let principal = match rng.below(14) {
             0 => 999,
             1 => {
@@ -850,6 +1258,17 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::Unique(_, true) => "unique-strict",
         OpKind::Unique(_, false) => "unique-lax",
         OpKind::Composite(_) => "composite",
+        OpKind::CreateTenant(..) => "create-tenant",
+        OpKind::Assign(..) => "assign",
+        OpKind::Revoke(..) => "revoke",
+        OpKind::Team(..) => "team",
+        OpKind::TeamAssign(..) => "team-assign",
+        OpKind::TeamRevoke(..) => "team-revoke",
+        OpKind::TeamAdd(..) => "team-add",
+        OpKind::TeamRemove(..) => "team-remove",
+        OpKind::Invite(..) => "invite",
+        OpKind::InviteRevoke(..) => "invite-revoke",
+        OpKind::Redeem(..) => "redeem",
     }
 }
 
@@ -911,9 +1330,21 @@ pub fn diff_batch_counted(
 fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
     match kind {
         OpKind::Create(f) | OpKind::Update(_, _, f) | OpKind::Patch(_, _, f) => Some(f),
-        OpKind::Delete(..) | OpKind::Require(..) | OpKind::Unique(..) | OpKind::Composite(..) => {
-            None
-        }
+        OpKind::Delete(..)
+        | OpKind::Require(..)
+        | OpKind::Unique(..)
+        | OpKind::Composite(..)
+        | OpKind::CreateTenant(..)
+        | OpKind::Assign(..)
+        | OpKind::Revoke(..)
+        | OpKind::Team(..)
+        | OpKind::TeamAssign(..)
+        | OpKind::TeamRevoke(..)
+        | OpKind::TeamAdd(..)
+        | OpKind::TeamRemove(..)
+        | OpKind::Invite(..)
+        | OpKind::InviteRevoke(..)
+        | OpKind::Redeem(..) => None,
     }
 }
 
@@ -1026,6 +1457,35 @@ pub const REQUIRED_PER_INTENT: &[&str] = &[
     "require-strict err migration_rejected",
     "require-strict err unauthorized",
     "delete err unauthorized",
+    "create-tenant ok",
+    "create-tenant err unauthorized",
+    "create-tenant err invalid_intent",
+    "create-tenant err tenant_exists",
+    "assign ok",
+    "assign err unauthorized",
+    "assign err unknown_role",
+    "assign err invalid_intent",
+    "revoke ok",
+    "revoke err unauthorized",
+    "revoke err last_owner",
+    "team ok",
+    "team err invalid_intent",
+    "team-assign ok",
+    "team-assign err invalid_intent",
+    "team-assign err unknown_role",
+    "team-revoke ok",
+    "team-add ok",
+    "team-add err invalid_intent",
+    "team-remove ok",
+    "invite ok",
+    "invite err unauthorized",
+    "invite err invalid_intent",
+    "invite err unknown_role",
+    "invite-revoke ok",
+    "invite-revoke err invalid_intent",
+    "redeem ok",
+    "redeem err unauthorized",
+    "redeem err invalid_intent",
 ];
 
 /// Fail when the batch did not reach every outcome kind often enough: `ok`, every error the model

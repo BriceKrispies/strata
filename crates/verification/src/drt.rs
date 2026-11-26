@@ -226,7 +226,7 @@ fn minimise_disagreement(
 /// The accepted outcome kinds, one per intent kind of the scenario format: the intent's name
 /// followed by `ok`. `require` and `unique` are split by their mode, as the model's strict and lax
 /// schema outcomes differ.
-pub const ACCEPTED_KINDS: [&str; 9] = [
+pub const ACCEPTED_KINDS: [&str; 20] = [
     "create ok",
     "update ok",
     "patch ok",
@@ -236,6 +236,17 @@ pub const ACCEPTED_KINDS: [&str; 9] = [
     "unique-strict ok",
     "unique-lax ok",
     "composite ok",
+    "create-tenant ok",
+    "assign ok",
+    "revoke ok",
+    "team ok",
+    "team-assign ok",
+    "team-revoke ok",
+    "team-add ok",
+    "team-remove ok",
+    "invite ok",
+    "invite-revoke ok",
+    "redeem ok",
 ];
 
 /// Outcome kinds the model can print that no scenario can reach, each with the reason. They are
@@ -276,7 +287,9 @@ impl Totals {
 }
 
 /// The intent of an `op` line, as the coverage names it: `create`, `update`, `patch`, `delete`,
-/// `require-strict`, `require-lax`, `unique-strict`, `unique-lax` or `composite`.
+/// `require-strict`, `require-lax`, `unique-strict`, `unique-lax`, `composite`, or one of the membership
+/// intents of slice 7 (`create-tenant`, `assign`, `revoke`, `team`, `team-assign`, `team-revoke`,
+/// `team-add`, `team-remove`, `invite`, `invite-revoke`, `redeem`).
 fn intent_of(op: &str) -> &'static str {
     let mut tokens: Vec<&str> = op.split_whitespace().collect();
     // `op <tenant> <principal> type <n> <intent> ..` names an object type; the intent follows it.
@@ -293,6 +306,17 @@ fn intent_of(op: &str) -> &'static str {
         Some("unique") if tokens.get(5).copied() == Some("strict") => "unique-strict",
         Some("unique") => "unique-lax",
         Some("composite") => "composite",
+        Some("create-tenant") => "create-tenant",
+        Some("assign") => "assign",
+        Some("revoke") => "revoke",
+        Some("team") => "team",
+        Some("team-assign") => "team-assign",
+        Some("team-revoke") => "team-revoke",
+        Some("team-add") => "team-add",
+        Some("team-remove") => "team-remove",
+        Some("invite") => "invite",
+        Some("invite-revoke") => "invite-revoke",
+        Some("redeem") => "redeem",
         _ => "unknown",
     }
 }

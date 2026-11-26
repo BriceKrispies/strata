@@ -1712,3 +1712,311 @@ op 1 100 delete 1
 op 1 100 patch 2 2=i:3
 op 1 100 delete 1
 end
+scenario h-the-system-creates-a-tenant
+op 3 100 assign 301 2
+op 3 system create-tenant 300 s:acme
+op 3 300 assign 301 2
+op 3 301 assign 302 3
+op 3 302 assign 303 3
+op 3 system create-tenant 300 s:acme
+end
+scenario h-only-the-system-creates-a-tenant
+op 3 300 create-tenant 300 s:acme
+op 3 anon create-tenant 300 s:acme
+op 3 100 create-tenant 100 s:acme
+op 3 300 assign 301 2
+op 3 system create-tenant 300 s:acme
+op 3 300 assign 301 2
+end
+scenario h-a-tenant-needs-a-name
+op 3 system create-tenant 300 s:_
+op 3 300 create-tenant 300 s:_
+op 3 system create-tenant 300 s:__
+op 3 300 assign 301 2
+op 3 system create-tenant 300 s:a
+op 3 300 assign 301 2
+end
+scenario h-a-tenant-that-exists-is-not-created-again
+op 1 system create-tenant 100 s:acme
+op 1 100 create-tenant 100 s:acme
+op 1 150 create-tenant 150 s:acme
+op 2 system create-tenant 200 s:_
+op 3 system create-tenant 300 s:acme
+op 3 system create-tenant 301 s:acme
+op 3 300 team 1 s:ops
+end
+scenario h-a-reserved-id-is-refused-before-anything-else
+op 1 1000001 create 1=s:oak 2=i:1
+op 9 1000001 assign 150 2
+op 1 1000001 team 1 s:ops
+op 1 100 assign 1000000 2
+op 9 100 assign 1000000 2
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 2
+op 1 100 team-add 1 1000000
+op 1 100 team-add 1 150
+op 1 1000001 redeem 1 @1000 verified=s:a@b.org
+op 3 system create-tenant 1000000 s:acme
+op 1 system create-tenant 1000000 s:acme
+op 3 1000001 create-tenant 300 s:acme
+op 3 system create-tenant 300 s:acme
+end
+scenario h-the-owner-assigns-and-revokes-a-role
+op 1 100 assign 150 2
+op 1 150 create 1=s:oak 2=i:1
+op 1 100 assign 150 3
+op 1 100 revoke 150 2
+op 1 150 patch 1 1=s:ash
+op 1 100 revoke 150 3
+op 1 150 create 1=s:oak 2=i:1
+op 1 100 revoke 150 3
+end
+scenario h-only-a-manager-assigns-roles
+op 1 102 assign 150 3
+op 1 999 assign 150 3
+op 1 system assign 150 3
+op 1 anon assign 150 3
+op 1 201 assign 150 3
+op 1 102 assign 150 9
+op 1 102 assign 150 1
+op 1 102 revoke 100 0
+end
+scenario h-the-role-is-checked-before-the-conferring
+op 1 100 assign 150 9
+op 1 100 assign 150 1
+op 1 100 revoke 150 9
+op 1 100 revoke 150 1
+op 1 101 assign 150 9
+op 1 101 assign 150 1
+op 1 101 assign 150 0
+op 1 101 revoke 100 0
+op 1 101 revoke 150 0
+end
+scenario h-an-editor-confers-what-it-holds
+op 1 101 assign 150 3
+op 1 101 assign 151 2
+op 1 150 create 1=s:oak 2=i:1
+op 1 151 create 1=s:ash 2=i:1
+op 1 151 assign 152 2
+op 1 151 assign 152 0
+op 1 100 assign 152 0
+op 1 152 revoke 100 0
+op 1 152 revoke 152 0
+op 1 152 revoke 101 0
+op 1 101 revoke 150 3
+op 1 101 revoke 151 2
+end
+scenario h-the-last-owner-stays
+op 1 100 revoke 100 0
+op 1 100 assign 101 0
+op 1 100 revoke 100 0
+op 1 101 revoke 101 0
+op 1 101 revoke 150 0
+op 1 101 assign 100 0
+op 1 100 revoke 101 0
+op 1 100 revoke 100 0
+end
+scenario h-the-owner-of-tenant-two-is-another-user
+op 2 200 assign 100 0
+op 2 100 revoke 200 0
+op 1 100 assign 200 0
+op 1 200 revoke 100 0
+op 1 100 revoke 100 0
+op 1 100 revoke 200 0
+op 1 200 revoke 200 0
+end
+scenario h-a-team-is-defined-by-a-manager
+op 1 100 team 1 s:ops
+op 1 100 team 1 s:dev
+op 1 101 team 2 s:support
+op 1 102 team 3 s:nobody
+op 1 100 team 4 s:_
+op 1 100 team 1 s:_
+op 1 100 team 1 s:a_b
+op 1 system team 1 s:ops
+op 1 anon team 1 s:ops
+end
+scenario h-a-team-must-exist
+op 1 100 team-assign 7 2
+op 1 100 team-assign 7 9
+op 1 100 team-revoke 7 2
+op 1 100 team-add 7 150
+op 1 100 team-remove 7 150
+op 1 102 team-add 7 150
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 9
+op 1 100 team-assign 1 1
+op 1 100 team-assign 1 2
+op 1 100 team-add 1 150
+op 1 100 team-remove 1 150
+end
+scenario h-a-team-gives-its-members-its-roles
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 3
+op 1 150 create 1=s:oak 2=i:1
+op 1 100 team-add 1 150
+op 1 150 create 1=s:oak 2=i:1
+op 1 150 patch 1 1=s:ash
+op 1 100 team-assign 1 2
+op 1 150 delete 1
+op 1 100 team-revoke 1 3
+op 1 100 team-revoke 1 2
+op 1 150 create 1=s:oak 2=i:1
+op 1 100 team-add 1 150
+op 1 100 team-remove 1 150
+op 1 100 team-remove 1 150
+end
+scenario h-a-team-can-be-given-the-power-to-manage-members
+op 1 150 assign 151 3
+op 1 100 team 1 s:leads
+op 1 100 team-assign 1 2
+op 1 100 team-add 1 150
+op 1 150 assign 151 3
+op 1 150 assign 151 0
+op 1 150 team 2 s:more
+op 1 150 invite 1 s:a@b.org 3 @1000
+end
+scenario h-adding-to-a-team-asks-to-confer-its-roles
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 0
+op 1 101 team-assign 1 3
+op 1 101 team-add 1 150
+op 1 100 team-add 1 150
+op 1 101 team-remove 1 150
+op 1 101 team-revoke 1 0
+op 1 100 team-revoke 1 0
+op 1 101 team-add 1 150
+op 1 101 team-remove 1 150
+end
+scenario h-a-team-that-holds-owner-keeps-an-owner
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 0
+op 1 100 team-add 1 150
+op 1 100 revoke 100 0
+op 1 150 team-remove 1 150
+op 1 150 team-revoke 1 0
+op 1 150 assign 100 0
+op 1 150 team-remove 1 150
+op 1 100 team-revoke 1 0
+op 1 100 team-add 1 150
+op 1 100 revoke 100 0
+end
+scenario h-a-team-that-holds-the-only-owner-role
+op 1 100 team 1 s:ops
+op 1 100 team-assign 1 0
+op 1 100 team-add 1 100
+op 1 100 revoke 100 0
+op 1 100 team-revoke 1 0
+op 1 100 team-remove 1 100
+op 1 100 assign 100 0
+op 1 100 team-revoke 1 0
+op 1 100 revoke 100 0
+end
+scenario h-an-invitation-is-made-and-redeemed
+op 1 150 redeem 1 @1000 verified=s:ann@x.org
+op 1 100 invite 1 s:Ann@X.org 2 @1000
+op 1 150 redeem 1 @1005 verified=s:_ann@x.org_
+op 1 150 create 1=s:oak 2=i:1
+op 1 151 redeem 1 @1006 verified=s:ann@x.org
+op 1 100 invite-revoke 1
+op 1 100 invite 1 s:ann@x.org 2 @1000
+end
+scenario h-redeeming-adds-to-the-roles-held
+op 1 100 invite 1 s:ann@x.org 3 @1000
+op 1 101 redeem 1 @1001 verified=s:ann@x.org
+op 1 101 team 1 s:ops
+op 1 100 invite 2 s:ann@x.org 2,3 @1000
+op 1 102 redeem 2 @1001 verified=s:ann@x.org
+op 1 102 team 1 s:ops
+op 1 100 team 1 s:ops
+end
+scenario h-redeeming-is-checked-in-order
+op 1 system redeem 1 @1000 verified=s:ann@x.org
+op 1 anon redeem 1 @1000 verified=s:ann@x.org
+op 1 150 redeem 1 @1000 verified=s:ann@x.org
+op 1 100 invite 1 s:ann@x.org 2 @1000
+op 1 150 redeem 1 @1001
+op 1 150 redeem 1 @1001 verified=s:zed@x.org
+op 1 150 redeem 1 @1001 verified=s:ann@x.org
+op 1 151 redeem 1 @1002 verified=s:zed@x.org
+op 1 151 redeem 1 @1002 verified=s:ann@x.org
+op 1 150 redeem 2 @1001 verified=s:ann@x.org
+end
+scenario h-an-invitation-expires-after-fourteen-days
+op 1 100 invite 1 s:ann@x.org 2 @1000
+op 1 100 invite 2 s:bob@x.org 2 @2000
+op 1 100 invite 3 s:cy@x.org 2 @0
+op 1 150 redeem 1 @1209601000 verified=s:ann@x.org
+op 1 150 redeem 1 @1209601001 verified=s:ann@x.org
+op 1 150 redeem 2 @1209601999 verified=s:bob@x.org
+op 1 151 redeem 3 @1209599999 verified=s:cy@x.org
+op 1 152 redeem 3 @1209600000 verified=s:cy@x.org
+end
+scenario h-a-revoked-invitation-is-not-redeemed
+op 1 100 invite 1 s:ann@x.org 2 @1000
+op 1 102 invite-revoke 1
+op 1 100 invite-revoke 1
+op 1 100 invite-revoke 1
+op 1 150 redeem 1 @1001 verified=s:ann@x.org
+op 1 100 invite-revoke 9
+op 1 system invite-revoke 1
+op 1 100 invite 1 s:ann@x.org 2 @1000
+end
+scenario h-an-invitation-is-checked-in-order
+op 1 102 invite 1 s:dave 9 @1000
+op 1 system invite 1 s:ann@x.org 2 @1000
+op 1 anon invite 1 s:ann@x.org 2 @1000
+op 1 100 invite 1 s:dave 9 @1000
+op 1 100 invite 1 s:ann@x.org - @1000
+op 1 100 invite 1 s:_@_ 2 @1000
+op 1 100 invite 1 s:ann@x.org 9 @1000
+op 1 100 invite 1 s:ann@x.org 1 @1000
+op 1 100 invite 1 s:ann@x.org 2 @1000
+op 1 100 invite 1 s:dave@x.org 9 @1000
+op 1 100 invite 2 s:dave@x.org 9 @1000
+op 1 100 invite 2 s:dave@x.org 1,9 @1000
+op 1 100 invite 2 s:dave@x.org 0,1 @1000
+op 1 101 invite 3 s:ann@x.org 0 @1000
+op 1 101 invite 3 s:ann@x.org 2,3 @1000
+op 1 101 invite 1 s:ann@x.org 2 @1000
+end
+scenario h-the-issuer-must-still-hold-the-authority
+op 1 101 invite 1 s:ann@x.org 3 @1000
+op 1 100 revoke 101 2
+op 1 150 redeem 1 @1001 verified=s:ann@x.org
+op 1 100 assign 101 2
+op 1 150 redeem 1 @1002 verified=s:ann@x.org
+op 1 101 invite 2 s:bob@x.org 2 @1000
+op 1 100 invite 3 s:cy@x.org 0 @1000
+op 1 101 invite-revoke 3
+op 1 100 invite-revoke 3
+end
+scenario h-an-invitation-can-make-an-owner
+op 1 100 invite 1 s:ann@x.org 0 @1000
+op 1 150 redeem 1 @1001 verified=s:ann@x.org
+op 1 150 revoke 100 0
+op 1 100 revoke 150 0
+op 1 100 revoke 100 0
+end
+scenario h-redeeming-by-a-tenants-own-owner
+op 1 100 invite 1 s:ann@x.org 3 @1000
+op 1 100 redeem 1 @1001 verified=s:ann@x.org
+op 1 100 revoke 100 0
+op 1 100 revoke 100 3
+end
+scenario h-the-state-shows-a-created-tenant-and-the-fixtures-membership
+op 3 system create-tenant 300 s:acme
+op 3 300 assign 301 0
+op 3 300 team 2 s:ops
+op 3 301 team-assign 2 0
+op 3 300 team-add 2 302
+op 3 300 invite 4 s:_Bob@X.com_ 0 @5000
+op 3 300 invite 2 s:a@b 0 @6000
+op 3 302 redeem 4 @5001 verified=s:BOB@x.com
+op 3 301 revoke 300 0
+op 3 300 revoke 301 0
+op 1 100 team 5 s:eng
+op 1 100 invite 3 s:z@y 2,3 @100
+op 2 100 assign 100 2
+op 2 200 assign 100 2
+end

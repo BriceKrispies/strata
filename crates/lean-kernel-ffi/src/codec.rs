@@ -29,6 +29,16 @@
 //! one. A field's default is an expression, and an object type lists its constraints after its
 //! records. The nesting of an expression is bounded by [`MAX_EXPR_DEPTH`].
 //!
+//! Slice 7 adds the membership of a tenant: after its limits a tenant carries its roles (a list of
+//! naturals), its teams (a list of entries, each the id and then the label, the members and the roles)
+//! and its invitations (each the id, then the address, the roles, the issuer, the expiry, the redeemer
+//! and the revoker, the last two optional). The kernel's refusals `InvalidIntent`, `UnknownRole`,
+//! `LastOwner` and `TenantExists` are tags `14` to `17`. An intent is tag `6` for a creation of a tenant
+//! (its owner, then its name) or `7` for a membership intent: a second tag (`0` assign a role, `1`
+//! revoke one, `2` define a team, `3` and `4` give a team a role and take one away, `5` and `6` add a
+//! team member and remove one, `7` create an invitation, `8` revoke one, `9` redeem one) and its fields
+//! in declaration order.
+//!
 //! Every value has one encoding and the decoders accept nothing else: [`decode_all`] requires the
 //! input to be consumed exactly.
 //!
@@ -222,9 +232,31 @@ pub struct ObjType {
     pub constraints: Vec<Expr>,
 }
 
+/// A team (slice 7): its label, its members and the roles those members hold through it. Lean's
+/// `TeamDef`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TeamDef {
+    pub label: String,
+    pub members: Vec<u64>,
+    pub roles: Vec<u64>,
+}
+
+/// An invitation (slice 7): the address it names, the roles it offers, who issued it, when it expires
+/// (a number of milliseconds), and who redeemed it or revoked it, if anyone. Lean's `InvitationDef`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvitationDef {
+    pub address: String,
+    pub roles: Vec<u64>,
+    pub created_by: u64,
+    pub expires_at: u64,
+    pub redeemed_by: Option<u64>,
+    pub revoked_by: Option<u64>,
+}
+
 /// Everything one tenant owns, as the boundary carries it: its object types by id, its members
-/// (each user with its roles), what each role grants, its policies, the next record id, and the size
-/// bounds. The owner is a member holding role `0`.
+/// (each user with its roles), what each role grants, its policies, the next record id, the size
+/// bounds, and (slice 7) the roles its schema defines, its teams and its invitations. The owner is a
+/// member holding role `0`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tenant {
     pub types: Vec<(u64, ObjType)>,
@@ -233,6 +265,9 @@ pub struct Tenant {
     pub policies: Vec<Policy>,
     pub next_id: u64,
     pub limits: Limits,
+    pub roles: Vec<u64>,
+    pub teams: Vec<(u64, TeamDef)>,
+    pub invitations: Vec<(u64, InvitationDef)>,
 }
 
 /// The acting context of a step: which tenant, and who is acting.
@@ -259,6 +294,57 @@ pub enum Refusal {
     UnknownObject,
     ConstraintViolated,
     Evaluation,
+    InvalidIntent,
+    UnknownRole,
+    LastOwner,
+    TenantExists,
+}
+
+/// A membership intent (slice 7). Lean's `MemberIntent`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MemberIntent {
+    AssignRole {
+        user: u64,
+        role: u64,
+    },
+    RevokeRole {
+        user: u64,
+        role: u64,
+    },
+    DefineTeam {
+        team: u64,
+        label: String,
+    },
+    AssignTeamRole {
+        team: u64,
+        role: u64,
+    },
+    RevokeTeamRole {
+        team: u64,
+        role: u64,
+    },
+    AddTeamMember {
+        team: u64,
+        user: u64,
+    },
+    RemoveTeamMember {
+        team: u64,
+        user: u64,
+    },
+    CreateInvitation {
+        invitation: u64,
+        address: String,
+        roles: Vec<u64>,
+        now: u64,
+    },
+    RevokeInvitation {
+        invitation: u64,
+    },
+    RedeemInvitation {
+        invitation: u64,
+        now: u64,
+        verified: Option<String>,
+    },
 }
 
 /// What a caller asks the kernel to do. Each intent names the object type it acts on.
@@ -293,6 +379,13 @@ pub enum Intent {
         ty: u64,
         fields: Vec<u64>,
     },
+    /// Create a tenant owned by `owner` (slice 7).
+    CreateTenant {
+        owner: u64,
+        name: String,
+    },
+    /// A membership intent of an existing tenant (slice 7).
+    Member(MemberIntent),
 }
 
 /// The result of a step: the refusal, or the tenant after the change (Lean's `Except Err Tenant`).
@@ -630,6 +723,34 @@ fn put_type_entry(out: &mut Vec<u8>, e: &(u64, ObjType)) {
     put_obj_type(out, &e.1);
 }
 
+/// A team: its label, its members, then its roles (`encTeamDef`).
+fn put_team_def(out: &mut Vec<u8>, d: &TeamDef) {
+    put_str(out, &d.label);
+    put_u64_list(out, &d.members);
+    put_u64_list(out, &d.roles);
+}
+
+fn put_team_entry(out: &mut Vec<u8>, e: &(u64, TeamDef)) {
+    put_nat(out, e.0);
+    put_team_def(out, &e.1);
+}
+
+/// An invitation: the address, the roles, the issuer, the expiry, the redeemer, the revoker
+/// (`encInvitationDef`).
+fn put_invitation_def(out: &mut Vec<u8>, d: &InvitationDef) {
+    put_str(out, &d.address);
+    put_u64_list(out, &d.roles);
+    put_nat(out, d.created_by);
+    put_nat(out, d.expires_at);
+    put_opt_nat(out, d.redeemed_by);
+    put_opt_nat(out, d.revoked_by);
+}
+
+fn put_invitation_entry(out: &mut Vec<u8>, e: &(u64, InvitationDef)) {
+    put_nat(out, e.0);
+    put_invitation_def(out, &e.1);
+}
+
 fn put_tenant(out: &mut Vec<u8>, t: &Tenant) {
     put_list(out, t.types.as_slice(), put_type_entry);
     put_list(out, t.members.as_slice(), put_member);
@@ -637,6 +758,82 @@ fn put_tenant(out: &mut Vec<u8>, t: &Tenant) {
     put_list(out, t.policies.as_slice(), put_policy);
     put_nat(out, t.next_id);
     put_limits(out, &t.limits);
+    put_u64_list(out, &t.roles);
+    put_list(out, t.teams.as_slice(), put_team_entry);
+    put_list(out, t.invitations.as_slice(), put_invitation_entry);
+}
+
+/// A membership intent: its tag, then its fields (`encMemberIntent`).
+fn put_member_intent(out: &mut Vec<u8>, j: &MemberIntent) {
+    match j {
+        MemberIntent::AssignRole { user, role } => {
+            out.push(0);
+            put_nat(out, *user);
+            put_nat(out, *role);
+        }
+        MemberIntent::RevokeRole { user, role } => {
+            out.push(1);
+            put_nat(out, *user);
+            put_nat(out, *role);
+        }
+        MemberIntent::DefineTeam { team, label } => {
+            out.push(2);
+            put_nat(out, *team);
+            put_str(out, label);
+        }
+        MemberIntent::AssignTeamRole { team, role } => {
+            out.push(3);
+            put_nat(out, *team);
+            put_nat(out, *role);
+        }
+        MemberIntent::RevokeTeamRole { team, role } => {
+            out.push(4);
+            put_nat(out, *team);
+            put_nat(out, *role);
+        }
+        MemberIntent::AddTeamMember { team, user } => {
+            out.push(5);
+            put_nat(out, *team);
+            put_nat(out, *user);
+        }
+        MemberIntent::RemoveTeamMember { team, user } => {
+            out.push(6);
+            put_nat(out, *team);
+            put_nat(out, *user);
+        }
+        MemberIntent::CreateInvitation {
+            invitation,
+            address,
+            roles,
+            now,
+        } => {
+            out.push(7);
+            put_nat(out, *invitation);
+            put_str(out, address);
+            put_u64_list(out, roles);
+            put_nat(out, *now);
+        }
+        MemberIntent::RevokeInvitation { invitation } => {
+            out.push(8);
+            put_nat(out, *invitation);
+        }
+        MemberIntent::RedeemInvitation {
+            invitation,
+            now,
+            verified,
+        } => {
+            out.push(9);
+            put_nat(out, *invitation);
+            put_nat(out, *now);
+            match verified {
+                None => out.push(0),
+                Some(address) => {
+                    out.push(1);
+                    put_str(out, address);
+                }
+            }
+        }
+    }
 }
 
 fn put_ctx(out: &mut Vec<u8>, c: &Ctx) {
@@ -686,6 +883,15 @@ fn put_intent(out: &mut Vec<u8>, i: &Intent) {
             put_nat(out, *ty);
             put_list(out, fields.as_slice(), put_u64);
         }
+        Intent::CreateTenant { owner, name } => {
+            out.push(6);
+            put_nat(out, *owner);
+            put_str(out, name);
+        }
+        Intent::Member(j) => {
+            out.push(7);
+            put_member_intent(out, j);
+        }
     }
 }
 
@@ -705,6 +911,10 @@ fn put_refusal(out: &mut Vec<u8>, e: &Refusal) {
         Refusal::UnknownObject => 11,
         Refusal::ConstraintViolated => 12,
         Refusal::Evaluation => 13,
+        Refusal::InvalidIntent => 14,
+        Refusal::UnknownRole => 15,
+        Refusal::LastOwner => 16,
+        Refusal::TenantExists => 17,
     });
 }
 
@@ -760,6 +970,13 @@ pub fn encode_tenant(t: &Tenant) -> Vec<u8> {
 pub fn encode_policy(p: &Policy) -> Vec<u8> {
     let mut out = Vec::new();
     put_policy(&mut out, p);
+    out
+}
+
+/// The canonical bytes of a membership intent.
+pub fn encode_member_intent(j: &MemberIntent) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_member_intent(&mut out, j);
     out
 }
 
@@ -1171,6 +1388,44 @@ fn get_type_entry(r: &mut Reader<'_>) -> Option<(u64, ObjType)> {
     Some((id, obj))
 }
 
+fn get_team_def(r: &mut Reader<'_>) -> Option<TeamDef> {
+    let label = get_str(r)?;
+    let members = get_u64_list(r)?;
+    let roles = get_u64_list(r)?;
+    Some(TeamDef {
+        label,
+        members,
+        roles,
+    })
+}
+
+fn get_team_entry(r: &mut Reader<'_>) -> Option<(u64, TeamDef)> {
+    let id = get_nat(r)?;
+    Some((id, get_team_def(r)?))
+}
+
+fn get_invitation_def(r: &mut Reader<'_>) -> Option<InvitationDef> {
+    let address = get_str(r)?;
+    let roles = get_u64_list(r)?;
+    let created_by = get_nat(r)?;
+    let expires_at = get_nat(r)?;
+    let redeemed_by = get_opt_nat(r)?;
+    let revoked_by = get_opt_nat(r)?;
+    Some(InvitationDef {
+        address,
+        roles,
+        created_by,
+        expires_at,
+        redeemed_by,
+        revoked_by,
+    })
+}
+
+fn get_invitation_entry(r: &mut Reader<'_>) -> Option<(u64, InvitationDef)> {
+    let id = get_nat(r)?;
+    Some((id, get_invitation_def(r)?))
+}
+
 fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
     let types = get_list(r, get_type_entry)?;
     let members = get_list(r, get_member)?;
@@ -1178,6 +1433,9 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
     let policies = get_list(r, get_policy)?;
     let next_id = get_nat(r)?;
     let limits = get_limits(r)?;
+    let roles = get_u64_list(r)?;
+    let teams = get_list(r, get_team_entry)?;
+    let invitations = get_list(r, get_invitation_entry)?;
     Some(Tenant {
         types,
         members,
@@ -1185,7 +1443,81 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
         policies,
         next_id,
         limits,
+        roles,
+        teams,
+        invitations,
     })
+}
+
+fn get_member_intent(r: &mut Reader<'_>) -> Option<MemberIntent> {
+    match r.byte()? {
+        0 => {
+            let user = get_nat(r)?;
+            let role = get_nat(r)?;
+            Some(MemberIntent::AssignRole { user, role })
+        }
+        1 => {
+            let user = get_nat(r)?;
+            let role = get_nat(r)?;
+            Some(MemberIntent::RevokeRole { user, role })
+        }
+        2 => {
+            let team = get_nat(r)?;
+            let label = get_str(r)?;
+            Some(MemberIntent::DefineTeam { team, label })
+        }
+        3 => {
+            let team = get_nat(r)?;
+            let role = get_nat(r)?;
+            Some(MemberIntent::AssignTeamRole { team, role })
+        }
+        4 => {
+            let team = get_nat(r)?;
+            let role = get_nat(r)?;
+            Some(MemberIntent::RevokeTeamRole { team, role })
+        }
+        5 => {
+            let team = get_nat(r)?;
+            let user = get_nat(r)?;
+            Some(MemberIntent::AddTeamMember { team, user })
+        }
+        6 => {
+            let team = get_nat(r)?;
+            let user = get_nat(r)?;
+            Some(MemberIntent::RemoveTeamMember { team, user })
+        }
+        7 => {
+            let invitation = get_nat(r)?;
+            let address = get_str(r)?;
+            let roles = get_u64_list(r)?;
+            let now = get_nat(r)?;
+            Some(MemberIntent::CreateInvitation {
+                invitation,
+                address,
+                roles,
+                now,
+            })
+        }
+        8 => {
+            let invitation = get_nat(r)?;
+            Some(MemberIntent::RevokeInvitation { invitation })
+        }
+        9 => {
+            let invitation = get_nat(r)?;
+            let now = get_nat(r)?;
+            let verified = match r.byte()? {
+                0 => None,
+                1 => Some(get_str(r)?),
+                _ => return None,
+            };
+            Some(MemberIntent::RedeemInvitation {
+                invitation,
+                now,
+                verified,
+            })
+        }
+        _ => None,
+    }
 }
 
 fn get_ctx(r: &mut Reader<'_>) -> Option<Ctx> {
@@ -1236,6 +1568,12 @@ fn get_intent(r: &mut Reader<'_>) -> Option<Intent> {
             let fields = get_u64_list(r)?;
             Some(Intent::DefineUnique { ty, fields })
         }
+        6 => {
+            let owner = get_nat(r)?;
+            let name = get_str(r)?;
+            Some(Intent::CreateTenant { owner, name })
+        }
+        7 => Some(Intent::Member(get_member_intent(r)?)),
         _ => None,
     }
 }
@@ -1256,6 +1594,10 @@ fn get_refusal(r: &mut Reader<'_>) -> Option<Refusal> {
         11 => Some(Refusal::UnknownObject),
         12 => Some(Refusal::ConstraintViolated),
         13 => Some(Refusal::Evaluation),
+        14 => Some(Refusal::InvalidIntent),
+        15 => Some(Refusal::UnknownRole),
+        16 => Some(Refusal::LastOwner),
+        17 => Some(Refusal::TenantExists),
         _ => None,
     }
 }
@@ -1300,6 +1642,11 @@ pub fn decode_tenant(bytes: &[u8]) -> Option<Tenant> {
 /// The policy of `bytes`, if they are exactly its canonical encoding.
 pub fn decode_policy(bytes: &[u8]) -> Option<Policy> {
     decode_all(bytes, get_policy)
+}
+
+/// The membership intent of `bytes`, if they are exactly its canonical encoding.
+pub fn decode_member_intent(bytes: &[u8]) -> Option<MemberIntent> {
+    decode_all(bytes, get_member_intent)
 }
 
 /// The context of `bytes`, if they are exactly its canonical encoding.

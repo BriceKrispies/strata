@@ -2,12 +2,13 @@
 //! one thread and from many tokio worker threads at once.
 
 use strata_lean_kernel_ffi::codec::{
-    decode_ctx, decode_field_def, decode_intent, decode_policy, decode_record, decode_refusal, decode_step_result,
-    decode_tenant, decode_ty, decode_val, encode_ctx, encode_field_def, encode_intent,
-    encode_policy, encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
-    Action, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, Limits, ObjType, OnDelete, Policy,
-    Principal, Record, Refusal, Resource, Scope, StepResult, Tenant, Ty, Val, MAX_EXPR_DEPTH,
-    MAX_TY_DEPTH,
+    decode_ctx, decode_field_def, decode_intent, decode_member_intent, decode_policy,
+    decode_record, decode_refusal, decode_step_result, decode_tenant, decode_ty, decode_val,
+    encode_ctx, encode_field_def, encode_intent, encode_member_intent, encode_policy,
+    encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
+    Action, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, InvitationDef, Limits, MemberIntent,
+    ObjType, OnDelete, Policy, Principal, Record, Refusal, Resource, Scope, StepResult, TeamDef,
+    Tenant, Ty, Val, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
 };
 use strata_lean_kernel_ffi::{step, step_reference};
 
@@ -73,12 +74,49 @@ fn fixture_tenant() -> Tenant {
         policies: vec![],
         next_id: 1,
         limits: Limits::KERNEL,
+        roles: vec![0, 1],
+        teams: vec![],
+        invitations: vec![],
     }
 }
 
 const FIXTURE_TENANT: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128,
-    16,
+    16, 2, 0, 1, 0, 0,
+];
+
+/// The fixture tenant with a role `2`, a team and an invitation (`fxTenantM` in
+/// `lean/Strata/Codec/Fixtures.lean`): team `5` labelled `ab` with member 7 holding role 2, and
+/// invitation `9` to `a@b` for role 2, issued by 7, expiring at 300 and revoked by 7.
+fn fixture_tenant_members() -> Tenant {
+    Tenant {
+        roles: vec![0, 1, 2],
+        teams: vec![(
+            5,
+            TeamDef {
+                label: "ab".into(),
+                members: vec![7],
+                roles: vec![2],
+            },
+        )],
+        invitations: vec![(
+            9,
+            InvitationDef {
+                address: "a@b".into(),
+                roles: vec![2],
+                created_by: 7,
+                expires_at: 300,
+                redeemed_by: None,
+                revoked_by: Some(7),
+            },
+        )],
+        ..fixture_tenant()
+    }
+}
+
+const FIXTURE_TENANT_MEMBERS: &[u8] = &[
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128,
+    16, 3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1, 7,
 ];
 
 #[test]
@@ -119,6 +157,85 @@ fn codec_fixtures_match_the_lean_encoder() {
     };
     assert_eq!(encode_record(&anonymous_record), vec![0, 1, 1, 2, 3, 1]);
     assert_eq!(encode_tenant(&fixture_tenant()), FIXTURE_TENANT);
+    assert_eq!(
+        encode_tenant(&fixture_tenant_members()),
+        FIXTURE_TENANT_MEMBERS
+    );
+    // The membership intents and refusals of slice 7 (`fix_intent_*` and `fix_err_*` in
+    // `Fixtures.lean`).
+    assert_eq!(
+        encode_intent(&Intent::CreateTenant {
+            owner: 7,
+            name: "ab".into()
+        }),
+        vec![6, 7, 2, 97, 98]
+    );
+    assert_eq!(
+        encode_intent(&Intent::Member(MemberIntent::AssignRole {
+            user: 9,
+            role: 2
+        })),
+        vec![7, 0, 9, 2]
+    );
+    assert_eq!(
+        encode_intent(&Intent::Member(MemberIntent::DefineTeam {
+            team: 5,
+            label: "ab".into()
+        })),
+        vec![7, 2, 5, 2, 97, 98]
+    );
+    assert_eq!(
+        encode_intent(&Intent::Member(MemberIntent::CreateInvitation {
+            invitation: 3,
+            address: "a@b".into(),
+            roles: vec![2],
+            now: 300
+        })),
+        vec![7, 7, 3, 3, 97, 64, 98, 1, 2, 172, 2]
+    );
+    assert_eq!(
+        encode_member_intent(&MemberIntent::RevokeInvitation { invitation: 3 }),
+        vec![8, 3]
+    );
+    assert_eq!(
+        encode_intent(&Intent::Member(MemberIntent::RedeemInvitation {
+            invitation: 3,
+            now: 300,
+            verified: Some("a@b".into())
+        })),
+        vec![7, 9, 3, 172, 2, 1, 3, 97, 64, 98]
+    );
+    assert_eq!(
+        encode_intent(&Intent::Member(MemberIntent::RedeemInvitation {
+            invitation: 3,
+            now: 300,
+            verified: None
+        })),
+        vec![7, 9, 3, 172, 2, 0]
+    );
+    assert_eq!(encode_refusal(&Refusal::InvalidIntent), vec![14]);
+    assert_eq!(encode_refusal(&Refusal::UnknownRole), vec![15]);
+    assert_eq!(encode_refusal(&Refusal::LastOwner), vec![16]);
+    assert_eq!(encode_refusal(&Refusal::TenantExists), vec![17]);
+    assert_eq!(
+        decode_tenant(FIXTURE_TENANT_MEMBERS),
+        Some(fixture_tenant_members())
+    );
+    assert_eq!(
+        decode_member_intent(&[9, 3, 172, 2, 0]),
+        Some(MemberIntent::RedeemInvitation {
+            invitation: 3,
+            now: 300,
+            verified: None
+        })
+    );
+    assert_eq!(
+        decode_intent(&[6, 7, 2, 97, 98]),
+        Some(Intent::CreateTenant {
+            owner: 7,
+            name: "ab".into()
+        })
+    );
     // A policy naming the tenant's membership: role 1, resource tag 3, one action (manage, tag 4),
     // no condition (`fix_policy_members` in `Fixtures.lean`).
     let members_policy = Policy {
@@ -463,6 +580,34 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
         max_unique: gen_nat(rng),
         max_record: gen_nat(rng),
     };
+    let roles = gen_ids(rng, 4);
+    let mut teams = Vec::new();
+    for _ in 0..rng.below(3) {
+        let id = gen_nat(rng);
+        teams.push((
+            id,
+            TeamDef {
+                label: gen_string(rng),
+                members: gen_ids(rng, 3),
+                roles: gen_ids(rng, 3),
+            },
+        ));
+    }
+    let mut invitations = Vec::new();
+    for _ in 0..rng.below(3) {
+        let id = gen_nat(rng);
+        invitations.push((
+            id,
+            InvitationDef {
+                address: gen_string(rng),
+                roles: gen_ids(rng, 3),
+                created_by: gen_nat(rng),
+                expires_at: gen_nat(rng),
+                redeemed_by: gen_opt(rng),
+                revoked_by: gen_opt(rng),
+            },
+        ));
+    }
     Tenant {
         types,
         members,
@@ -470,6 +615,9 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
         policies,
         next_id,
         limits,
+        roles,
+        teams,
+        invitations,
     }
 }
 
@@ -537,8 +685,64 @@ fn gen_opt(rng: &mut Rng) -> Option<u64> {
     }
 }
 
+fn gen_member_intent(rng: &mut Rng) -> MemberIntent {
+    match rng.below(10) {
+        0 => MemberIntent::AssignRole {
+            user: gen_nat(rng),
+            role: gen_nat(rng),
+        },
+        1 => MemberIntent::RevokeRole {
+            user: gen_nat(rng),
+            role: gen_nat(rng),
+        },
+        2 => MemberIntent::DefineTeam {
+            team: gen_nat(rng),
+            label: gen_string(rng),
+        },
+        3 => MemberIntent::AssignTeamRole {
+            team: gen_nat(rng),
+            role: gen_nat(rng),
+        },
+        4 => MemberIntent::RevokeTeamRole {
+            team: gen_nat(rng),
+            role: gen_nat(rng),
+        },
+        5 => MemberIntent::AddTeamMember {
+            team: gen_nat(rng),
+            user: gen_nat(rng),
+        },
+        6 => MemberIntent::RemoveTeamMember {
+            team: gen_nat(rng),
+            user: gen_nat(rng),
+        },
+        7 => MemberIntent::CreateInvitation {
+            invitation: gen_nat(rng),
+            address: gen_string(rng),
+            roles: gen_ids(rng, 3),
+            now: gen_nat(rng),
+        },
+        8 => MemberIntent::RevokeInvitation {
+            invitation: gen_nat(rng),
+        },
+        _ => MemberIntent::RedeemInvitation {
+            invitation: gen_nat(rng),
+            now: gen_nat(rng),
+            verified: if rng.coin() {
+                Some(gen_string(rng))
+            } else {
+                None
+            },
+        },
+    }
+}
+
 fn gen_intent(rng: &mut Rng) -> Intent {
-    match rng.below(6) {
+    match rng.below(8) {
+        6 => Intent::CreateTenant {
+            owner: gen_nat(rng),
+            name: gen_string(rng),
+        },
+        7 => Intent::Member(gen_member_intent(rng)),
         0 => Intent::Create {
             ty: gen_nat(rng),
             fields: gen_fields(rng),
@@ -584,7 +788,7 @@ fn gen_intent(rng: &mut Rng) -> Intent {
 }
 
 fn gen_refusal(rng: &mut Rng) -> Refusal {
-    match rng.below(14) {
+    match rng.below(18) {
         0 => Refusal::NoTenant,
         1 => Refusal::Unauthorized,
         2 => Refusal::NotFound,
@@ -598,7 +802,11 @@ fn gen_refusal(rng: &mut Rng) -> Refusal {
         10 => Refusal::InvalidSchema,
         11 => Refusal::UnknownObject,
         12 => Refusal::ConstraintViolated,
-        _ => Refusal::Evaluation,
+        13 => Refusal::Evaluation,
+        14 => Refusal::InvalidIntent,
+        15 => Refusal::UnknownRole,
+        16 => Refusal::LastOwner,
+        _ => Refusal::TenantExists,
     }
 }
 
@@ -682,6 +890,16 @@ fn damaged_encodings_do_not_decode() {
         decode_intent,
     );
     check_refuses_damage(FIXTURE_TENANT, decode_tenant);
+    check_refuses_damage(FIXTURE_TENANT_MEMBERS, decode_tenant);
+    check_refuses_damage(
+        &encode_intent(&Intent::Member(MemberIntent::CreateInvitation {
+            invitation: 3,
+            address: "a@b".into(),
+            roles: vec![2],
+            now: 300,
+        })),
+        decode_intent,
+    );
 }
 
 #[test]

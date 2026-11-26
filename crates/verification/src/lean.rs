@@ -28,6 +28,20 @@
 //! | `Err.uniqueViolated`, `Err.invalidSchema` | `UniqueViolated`, `InvalidSchema` |
 //! | `Err.unknownObject` | `UnknownObject` (the owner's refusal of a type the tenant does not have) |
 //! | `Err.versionConflict`, `Err.limitExceeded` | `VersionConflict`, `LimitExceeded` |
+//! | tenant `3` | a tenant that does not exist until a system `create-tenant` makes it (no object types) |
+//! | role `n` | `0` is `owner`, `1` `public`, `2` `editor`, `3` `writer`, any other number the unknown role `role<n>` |
+//! | user `n`, `n` below `1000000` | principal `p<n>`; from `1000000` up the reserved principal `team:p<n>` (the model's `reservedId`) |
+//! | team `n`, invitation `n` | `team<n>`, `inv<n>` |
+//! | `create-tenant <owner> <name>` | `CreateTenant` (the context's principal is the caller) |
+//! | `assign <user> <role>`, `revoke <user> <role>` | `AssignRole`, `RevokeRole` |
+//! | `team <team> <label>` | `DefineTeam` |
+//! | `team-assign`, `team-revoke <team> <role>` | `AssignTeamRole`, `RevokeTeamRole` |
+//! | `team-add`, `team-remove <team> <user>` | `AddTeamMember`, `RemoveTeamMember` |
+//! | `invite <inv> <address> <roles> @<now>` | `CreateInvitation`, in a context whose `now` is `<now>` |
+//! | `invite-revoke <inv>` | `RevokeInvitation` |
+//! | `redeem <inv> @<now> [verified=<address>]` | `RedeemInvitation`, in a context whose `now` is `<now>` and whose `verified_address` is the address |
+//! | `Err.invalidIntent`, `unknownRole`, `lastOwner`, `tenantExists` | `InvalidIntent`, `UnknownRole`, `LastOwner`, `TenantExists` |
+//! | the editor role's `manage` power | the policy `editors_manage_members` (`manage` on `Resource::Members`, no condition) |
 //!
 //! # The Main.lean protocol
 //!
@@ -41,7 +55,15 @@
 //!                              one intent, as `create f=v ..`, `update <id> [v=n] f=v ..`,
 //!                              `patch <id> [v=n] f=v ..`, `delete <id> [v=n]`,
 //!                              `require <field> strict|lax`
-//!                              `unique <field> strict|lax`, `composite <field> ..`
+//!                              `unique <field> strict|lax`, `composite <field> ..`, or a membership intent
+//!                              (slice 7): `create-tenant <owner> <name>`, `assign <user> <role>`,
+//!                              `revoke <user> <role>`, `team <team> <label>`, `team-assign <team> <role>`,
+//!                              `team-revoke <team> <role>`, `team-add <team> <user>`,
+//!                              `team-remove <team> <user>`, `invite <inv> <address> <roles> @<now>`,
+//!                              `invite-revoke <inv>`, `redeem <inv> @<now> [verified=<address>]`.
+//!                              A text (name, label, address) is `s:<text>` with `_` for a space; roles
+//!                              are numbers separated by commas, or `-` for none; `@<now>` is the time of
+//!                              the request in milliseconds
 //! end                          prints the final state and returns to the initial world
 //! ```
 //!
@@ -49,7 +71,9 @@
 //! `r:<id>`, or a list: `l:<element>,<element>,..` (`l:` is empty) or `l*<count>:<element>`.
 //!
 //! Output: `scenario <name>`, then `ok` or `err <kind>` per op (`unparsed <line>` for a line it
-//! cannot read), then `state`, the state lines and `end`. A new intent is a new `op` arm in
+//! cannot read), then `state`, the state lines and `end`. A tenant's state lines end with its
+//! membership (`roles`, `member`, `team` and `invitation` lines, sorted) when that is not the one the
+//! fixture starts it with, and always for tenant 3, which is printed only when it exists. A new intent is a new `op` arm in
 //! `parseOp`; `crate::lean_diff` generates every such intent (and a test fails if one is missing).
 //! The differential harness is `crate::lean_diff`.
 //!
@@ -428,8 +452,165 @@ fn fallback_field(object: &ObjectTypeId, n: u64) -> FieldDef {
     }
 }
 
+/// The user numbers from this one up are the kernel's reserved principal ids (the model's
+/// `reservedFrom`): the harness writes such a user `team:p<n>`, which `refuse_reserved_principals`
+/// refuses as a caller and as a named user.
+const RESERVED_FROM: u64 = 1_000_000;
+
+/// The principal id of user `n`.
+fn principal_id(n: u64) -> PrincipalId {
+    if n >= RESERVED_FROM {
+        id(format!("team:p{n}"))
+    } else {
+        id(format!("p{n}"))
+    }
+}
+
 fn principal(n: u64) -> Principal {
-    Principal::User(id(format!("p{n}")))
+    Principal::User(principal_id(n))
+}
+
+/// The role numbered `n` in the scenario format: `0` owner, `1` public, `2` editor, `3` writer, and
+/// any other number a role the tenant does not define.
+fn role_id(n: u64) -> RoleId {
+    id(match n {
+        0 => "owner".to_string(),
+        1 => "public".to_string(),
+        2 => "editor".to_string(),
+        3 => "writer".to_string(),
+        n => format!("role{n}"),
+    })
+}
+
+/// The number of a role: the inverse of [`role_id`].
+fn role_number(role: &RoleId) -> u64 {
+    match role.as_str() {
+        "owner" => 0,
+        "public" => 1,
+        "editor" => 2,
+        "writer" => 3,
+        other => other["role".len()..]
+            .parse()
+            .expect("fixture roles are role<number>"),
+    }
+}
+
+/// The number of a user: the digits after the `p`.
+fn user_number(user: &PrincipalId) -> u64 {
+    user.as_str()
+        .trim_start_matches("team:")
+        .trim_start_matches('p')
+        .parse()
+        .expect("fixture users are p<number>")
+}
+
+/// A text token of the scenario format: `s:<text>`, `_` for a space.
+fn parse_text(token: &str) -> Option<String> {
+    token.strip_prefix("s:").map(|text| text.replace('_', " "))
+}
+
+/// A text as the state lines print it.
+fn show_text(text: &str) -> String {
+    format!("s:{}", text.replace(' ', "_"))
+}
+
+/// A set of numbers, sorted, separated by commas; `-` for none.
+fn show_numbers(mut numbers: Vec<u64>) -> String {
+    numbers.sort_unstable();
+    if numbers.is_empty() {
+        "-".to_string()
+    } else {
+        numbers
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+/// The roles of an invitation as the scenario format writes them: numbers separated by commas, or
+/// `-` for none.
+fn parse_roles(token: &str) -> Option<BTreeSet<RoleId>> {
+    if token == "-" {
+        return Some(BTreeSet::new());
+    }
+    token
+        .split(',')
+        .map(|n| n.parse::<u64>().ok().map(role_id))
+        .collect()
+}
+
+/// The time of a request: `@<milliseconds>`.
+fn parse_now(token: &str) -> Option<Timestamp> {
+    token
+        .strip_prefix('@')
+        .and_then(|n| n.parse::<i64>().ok())
+        .map(Timestamp)
+}
+
+/// A membership or creation line of the scenario format (slice 7), or `None` for a line it cannot
+/// read. The two that carry the time and the verified address of the request set them in `ctx`.
+fn parse_member_op(rest: &[&str], ctx: &mut Context) -> Option<Intent> {
+    let number = |token: &str| token.parse::<u64>().ok();
+    Some(match rest {
+        ["create-tenant", owner, name] => Intent::CreateTenant {
+            name: parse_text(name)?,
+            owner: principal_id(number(owner)?),
+        },
+        ["assign", user, role] => Intent::AssignRole {
+            principal: principal_id(number(user)?),
+            role: role_id(number(role)?),
+        },
+        ["revoke", user, role] => Intent::RevokeRole {
+            principal: principal_id(number(user)?),
+            role: role_id(number(role)?),
+        },
+        ["team", team, label] => Intent::DefineTeam {
+            team: id(format!("team{}", number(team)?)),
+            label: parse_text(label)?,
+        },
+        ["team-assign", team, role] => Intent::AssignTeamRole {
+            team: id(format!("team{}", number(team)?)),
+            role: role_id(number(role)?),
+        },
+        ["team-revoke", team, role] => Intent::RevokeTeamRole {
+            team: id(format!("team{}", number(team)?)),
+            role: role_id(number(role)?),
+        },
+        ["team-add", team, user] => Intent::AddTeamMember {
+            team: id(format!("team{}", number(team)?)),
+            principal: principal_id(number(user)?),
+        },
+        ["team-remove", team, user] => Intent::RemoveTeamMember {
+            team: id(format!("team{}", number(team)?)),
+            principal: principal_id(number(user)?),
+        },
+        ["invite", invitation, address, roles, now] => {
+            ctx.now = parse_now(now)?;
+            Intent::CreateInvitation {
+                invitation: id(format!("inv{}", number(invitation)?)),
+                address: parse_text(address)?,
+                roles: parse_roles(roles)?,
+            }
+        }
+        ["invite-revoke", invitation] => Intent::RevokeInvitation {
+            invitation: id(format!("inv{}", number(invitation)?)),
+        },
+        ["redeem", invitation, now] => {
+            ctx.now = parse_now(now)?;
+            Intent::RedeemInvitation {
+                invitation: id(format!("inv{}", number(invitation)?)),
+            }
+        }
+        ["redeem", invitation, now, verified] => {
+            ctx.now = parse_now(now)?;
+            ctx.verified_address = Some(parse_text(verified.strip_prefix("verified=")?)?);
+            Intent::RedeemInvitation {
+                invitation: id(format!("inv{}", number(invitation)?)),
+            }
+        }
+        _ => return None,
+    })
 }
 
 /// A principal token of the scenario format: a number is that user, `system` the system and `anon` an
@@ -578,6 +759,15 @@ fn initial_world() -> World {
                 &[Action::Create],
                 Some(Expr::IsNull(Box::new(Expr::Principal))),
             ),
+            // An editor may manage the tenant's members (slice 7), so a manager who is not the owner
+            // is in the fixture: it may confer the roles whose powers it holds.
+            SchemaChange::DefinePolicy(PolicyDef {
+                id: id("editors_manage_members".to_string()),
+                role: id("editor".to_string()),
+                resource: Resource::Members,
+                actions: BTreeSet::from([Action::Manage]),
+                condition: None,
+            }),
         ]);
         world = run(
             &world,
@@ -728,21 +918,125 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::UnknownObject => "unknown_object",
         ErrorKind::ConstraintViolated => "constraint_violated",
         ErrorKind::Evaluation => "evaluation",
+        ErrorKind::InvalidIntent => "invalid_intent",
+        ErrorKind::UnknownRole => "unknown_role",
+        ErrorKind::LastOwner => "last_owner",
+        ErrorKind::TenantExists => "tenant_exists",
         _ => "unmodelled",
     }
 }
 
+/// The membership of a tenant, one line each: its roles, its members, its teams and its invitations,
+/// sorted by number, lists sorted (the model's `membershipLines`).
+fn membership_lines(n: u64, tenant: &TenantState) -> Vec<String> {
+    let mut out = vec![format!(
+        "roles {n} {}",
+        show_numbers(tenant.schema.roles.keys().map(role_number).collect())
+    )];
+    let mut members: Vec<(u64, String)> = tenant
+        .members
+        .iter()
+        .map(|(user, roles)| {
+            (
+                user_number(user),
+                show_numbers(roles.iter().map(role_number).collect()),
+            )
+        })
+        .collect();
+    members.sort();
+    out.extend(
+        members
+            .iter()
+            .map(|(user, roles)| format!("member {n} {user} {roles}")),
+    );
+    let mut teams: Vec<(u64, String)> = tenant
+        .schema
+        .all_teams()
+        .map(|team| {
+            (
+                team.id.as_str()["team".len()..]
+                    .parse()
+                    .expect("fixture teams are team<number>"),
+                format!(
+                    "{} {} {}",
+                    show_text(&team.label),
+                    show_numbers(team.members.iter().map(user_number).collect()),
+                    show_numbers(team.roles.iter().map(role_number).collect())
+                ),
+            )
+        })
+        .collect();
+    teams.sort();
+    out.extend(
+        teams
+            .iter()
+            .map(|(team, rest)| format!("team {n} {team} {rest}")),
+    );
+    let user_or_dash = |user: &Option<PrincipalId>| {
+        user.as_ref()
+            .map_or_else(|| "-".to_string(), |u| user_number(u).to_string())
+    };
+    let mut invitations: Vec<(u64, String)> = tenant
+        .schema
+        .all_invitations()
+        .map(|invitation| {
+            (
+                invitation.id.as_str()["inv".len()..]
+                    .parse()
+                    .expect("fixture invitations are inv<number>"),
+                format!(
+                    "{} {} by={} expires={} redeemed={} revoked={}",
+                    show_text(&invitation.address),
+                    show_numbers(invitation.roles.iter().map(role_number).collect()),
+                    user_number(&invitation.created_by),
+                    invitation
+                        .expires_at
+                        .map_or_else(|| "-".to_string(), |at| at.0.to_string()),
+                    user_or_dash(&invitation.redeemed_by),
+                    user_or_dash(&invitation.revoked_by)
+                ),
+            )
+        })
+        .collect();
+    invitations.sort();
+    out.extend(
+        invitations
+            .iter()
+            .map(|(invitation, rest)| format!("invitation {n} {invitation} {rest}")),
+    );
+    out
+}
+
+/// The membership lines of the fixture's own tenants (`1` and `2`), which a tenant's state prints its
+/// membership against.
+fn initial_membership() -> &'static [Vec<String>; 2] {
+    static INITIAL: std::sync::OnceLock<[Vec<String>; 2]> = std::sync::OnceLock::new();
+    INITIAL.get_or_init(|| {
+        let world = initial_world();
+        [1u64, 2].map(|n| {
+            let tenant = &world.tenants[&id::<TenantId>(format!("t{n}"))];
+            membership_lines(n, tenant)
+        })
+    })
+}
+
 fn show_world(world: &World) -> Vec<String> {
     let mut out = Vec::new();
-    for n in [1u64, 2] {
+    // Tenants 1 and 2 are always printed, `absent` when they are; tenant 3 only when a creation made it.
+    for n in [1u64, 2, 3] {
         let Some(tenant) = world.tenants.get(&id::<TenantId>(format!("t{n}"))) else {
-            out.push(format!("tenant {n} absent"));
+            if n != 3 {
+                out.push(format!("tenant {n} absent"));
+            }
             continue;
         };
         // The required fields of an object type, by number, as the model's `requiredOf` prints
         // them. Fields print in the model's order, by number (`f10` after `f6`), not by name.
         let required_text = |object: &ObjectTypeId| -> String {
-            let mut required: Vec<u64> = tenant.schema.objects[object]
+            let Some(definition) = tenant.schema.objects.get(object) else {
+                return String::new();
+            };
+            let mut required: Vec<u64> = definition
                 .fields
                 .values()
                 .filter(|f| f.required)
@@ -760,6 +1054,9 @@ fn show_world(world: &World) -> Vec<String> {
         // The item's records, then the part type's (the model's type `2`), with its own header.
         for (object, pre) in [(item(), ""), (part(), "type 2 ")] {
             if !pre.is_empty() {
+                if !tenant.schema.objects.contains_key(&object) {
+                    continue;
+                }
                 out.push(format!("type 2 required={}", required_text(&object)));
             }
             for record in tenant.records_of(&object) {
@@ -789,6 +1086,11 @@ fn show_world(world: &World) -> Vec<String> {
                     .to_string(),
                 );
             }
+        }
+        // The membership, when it is not the one the fixture starts the tenant with.
+        let lines = membership_lines(n, tenant);
+        if n == 3 || lines != initial_membership()[n as usize - 1] {
+            out.extend(lines);
         }
     }
     out
@@ -838,7 +1140,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                     _ => (item(), after_who),
                 };
                 at += 1;
-                let ctx = Context {
+                let mut ctx = Context {
                     tenant: id(format!("t{tenant}")),
                     principal: parse_principal(who),
                     session: None,
@@ -954,10 +1256,13 @@ pub fn kernel_output(scenarios: &str) -> String {
                             existing: ExistingData::Reject,
                         }
                     }
-                    _ => {
-                        out.push(format!("unparsed {line}"));
-                        continue;
-                    }
+                    _ => match parse_member_op(rest, &mut ctx) {
+                        Some(intent) => intent,
+                        None => {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                    },
                 };
                 match world.step(&intent, &ctx) {
                     Ok((next, _)) => {
