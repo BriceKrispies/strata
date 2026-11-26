@@ -91,6 +91,14 @@ theorem fix_tenant : encTenant fxTenant =
     encNat_big, tag, List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil,
     List.cons_append, List.nil_append, Nat.reduceMod, Nat.reduceAdd, Nat.reduceDiv, Nat.reduceLT]
 
+/-- A policy naming the tenant's membership: role 1, the `members` resource (tag 3), one action
+    (manage, tag 4), no condition. -/
+theorem fix_policy_members :
+    encPolicy ⟨1, .members, [.manage], none⟩ = [1, 3, 1, 4, 0] := by
+  simp +decide only [encPolicy, encIso, encPair, encOpt, encList, encResource, encAction, encNat_small,
+    tag, List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil, List.cons_append,
+    List.nil_append]
+
 /-! ## Intents, the context, errors and the result -/
 
 theorem fix_intent_setRequired : encIntent (.setRequired 1 2 false) = [3, 1, 2, 0] := by

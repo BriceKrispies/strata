@@ -2,9 +2,9 @@
 //! one thread and from many tokio worker threads at once.
 
 use strata_lean_kernel_ffi::codec::{
-    decode_ctx, decode_field_def, decode_intent, decode_record, decode_refusal, decode_step_result,
+    decode_ctx, decode_field_def, decode_intent, decode_policy, decode_record, decode_refusal, decode_step_result,
     decode_tenant, decode_ty, decode_val, encode_ctx, encode_field_def, encode_intent,
-    encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
+    encode_policy, encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
     Action, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, Limits, ObjType, OnDelete, Policy,
     Principal, Record, Refusal, Resource, Scope, StepResult, Tenant, Ty, Val, MAX_EXPR_DEPTH,
     MAX_TY_DEPTH,
@@ -119,6 +119,16 @@ fn codec_fixtures_match_the_lean_encoder() {
     };
     assert_eq!(encode_record(&anonymous_record), vec![0, 1, 1, 2, 3, 1]);
     assert_eq!(encode_tenant(&fixture_tenant()), FIXTURE_TENANT);
+    // A policy naming the tenant's membership: role 1, resource tag 3, one action (manage, tag 4),
+    // no condition (`fix_policy_members` in `Fixtures.lean`).
+    let members_policy = Policy {
+        role: 1,
+        resource: Resource::Members,
+        actions: vec![Action::Manage],
+        condition: None,
+    };
+    assert_eq!(encode_policy(&members_policy), vec![1, 3, 1, 4, 0]);
+    assert_eq!(decode_policy(&[1, 3, 1, 4, 0]), Some(members_policy));
     assert_eq!(
         encode_ctx(&Ctx {
             tenant: 3,
@@ -482,10 +492,11 @@ fn gen_action(rng: &mut Rng) -> Action {
 }
 
 fn gen_resource(rng: &mut Rng) -> Resource {
-    match rng.below(3) {
+    match rng.below(4) {
         0 => Resource::Object(gen_nat(rng)),
         1 => Resource::AnyObject,
-        _ => Resource::Schema,
+        2 => Resource::Schema,
+        _ => Resource::Members,
     }
 }
 

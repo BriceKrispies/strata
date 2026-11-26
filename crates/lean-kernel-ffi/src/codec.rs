@@ -129,13 +129,14 @@ pub enum Action {
     Manage,
 }
 
-/// What a policy names: an object type (`0`, its id), every object type (`1`) or the schema (`2`).
-/// Lean's `Resource`.
+/// What a policy names: an object type (`0`, its id), every object type (`1`), the schema (`2`) or
+/// the tenant's membership (`3`). Lean's `Resource`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Resource {
     Object(u64),
     AnyObject,
     Schema,
+    Members,
 }
 
 /// What a role grants: a capability (`0`, its id), or an action on the records of an object type
@@ -548,7 +549,8 @@ fn put_action(out: &mut Vec<u8>, a: &Action) {
     });
 }
 
-/// A resource: an object type `0` and its id, every object type `1`, the schema `2` (`encResource`).
+/// A resource: an object type `0` and its id, every object type `1`, the schema `2`, the membership
+/// `3` (`encResource`).
 fn put_resource(out: &mut Vec<u8>, r: &Resource) {
     match r {
         Resource::Object(ty) => {
@@ -557,6 +559,7 @@ fn put_resource(out: &mut Vec<u8>, r: &Resource) {
         }
         Resource::AnyObject => out.push(1),
         Resource::Schema => out.push(2),
+        Resource::Members => out.push(3),
     }
 }
 
@@ -750,6 +753,13 @@ pub fn encode_record(r: &Record) -> Vec<u8> {
 pub fn encode_tenant(t: &Tenant) -> Vec<u8> {
     let mut out = Vec::new();
     put_tenant(&mut out, t);
+    out
+}
+
+/// The canonical bytes of a policy.
+pub fn encode_policy(p: &Policy) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_policy(&mut out, p);
     out
 }
 
@@ -1076,6 +1086,7 @@ fn get_resource(r: &mut Reader<'_>) -> Option<Resource> {
         0 => Some(Resource::Object(get_nat(r)?)),
         1 => Some(Resource::AnyObject),
         2 => Some(Resource::Schema),
+        3 => Some(Resource::Members),
         _ => None,
     }
 }
@@ -1284,6 +1295,11 @@ pub fn decode_record(bytes: &[u8]) -> Option<Record> {
 /// The tenant of `bytes`, if they are exactly its canonical encoding.
 pub fn decode_tenant(bytes: &[u8]) -> Option<Tenant> {
     decode_all(bytes, get_tenant)
+}
+
+/// The policy of `bytes`, if they are exactly its canonical encoding.
+pub fn decode_policy(bytes: &[u8]) -> Option<Policy> {
+    decode_all(bytes, get_policy)
 }
 
 /// The context of `bytes`, if they are exactly its canonical encoding.
