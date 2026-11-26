@@ -101,6 +101,7 @@ jobs:
           name: gate-runs
           path: |
             var/runs
+            var/test-results
             test-results
             playwright-report
           if-no-files-found: ignore
