@@ -78,12 +78,15 @@ fn fixture_tenant() -> Tenant {
         roles: vec![0, 1],
         teams: vec![],
         invitations: vec![],
+        revision: 0,
+        event_seq: 0,
+        schema_version: 1,
     }
 }
 
 const FIXTURE_TENANT: &[u8] = &[
-    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128,
-    16, 2, 0, 1, 0, 0,
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
+    128, 16, 2, 0, 1, 0, 0, 0, 0, 1,
 ];
 
 /// The fixture tenant with a role `2`, a team and an invitation (`fxTenantM` in
@@ -116,8 +119,46 @@ fn fixture_tenant_members() -> Tenant {
 }
 
 const FIXTURE_TENANT_MEMBERS: &[u8] = &[
-    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128,
-    16, 3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1, 7,
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
+    128, 16, 3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1,
+    7, 0, 0, 1,
+];
+
+/// The fixture tenant with one workflow on its object type `1` (slice 9): id `""`, field 1, initial
+/// state `open`, and one transition named `ship` from `open` to `closed` with no guard and no
+/// assignments. The workflow's bytes are those of `fix_workflow_open` in `Fixtures.lean` with the
+/// transition's name, source, target, guard (none) and assignments (none) added in the order of
+/// `encWfTransition`. The Lean fixture has no transition; these bytes are what evaluating `encTenant` on the
+/// same tenant in Lean gives.
+fn fixture_tenant_workflow() -> Tenant {
+    let mut t = fixture_tenant();
+    t.types[0].1.workflows = vec![Workflow {
+        id: String::new(),
+        field: 1,
+        initial: vec!["open".into()],
+        transitions: vec![WfTransition {
+            name: "ship".into(),
+            source: "open".into(),
+            target: "closed".into(),
+            guard: None,
+            set: vec![],
+        }],
+    }];
+    t
+}
+
+/// `FIXTURE_TENANT` with the workflow list of its object type (the zero before the members) holding
+/// the one workflow of `fixture_tenant_workflow`.
+const FIXTURE_TENANT_WORKFLOW: &[u8] = &[
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
+    0, // the type entry, its schema, uniques, records, constraints
+    1, // one workflow
+    0, 1, 1, 4, 111, 112, 101, 110, // id "", field 1, initial ["open"]
+    1, 4, 115, 104, 105, 112, // one transition, named "ship"
+    4, 111, 112, 101, 110, // from "open"
+    6, 99, 108, 111, 115, 101, 100, // to "closed"
+    0, 0, // no guard, no assignments
+    1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 2, 0, 1, 0, 0, 0, 0, 1,
 ];
 
 #[test]
@@ -222,6 +263,14 @@ fn codec_fixtures_match_the_lean_encoder() {
     assert_eq!(
         decode_tenant(FIXTURE_TENANT_MEMBERS),
         Some(fixture_tenant_members())
+    );
+    assert_eq!(
+        encode_tenant(&fixture_tenant_workflow()),
+        FIXTURE_TENANT_WORKFLOW
+    );
+    assert_eq!(
+        decode_tenant(FIXTURE_TENANT_WORKFLOW),
+        Some(fixture_tenant_workflow())
     );
     assert_eq!(
         decode_member_intent(&[9, 3, 172, 2, 0]),
@@ -560,6 +609,7 @@ fn gen_obj_type(rng: &mut Rng) -> ObjType {
 /// A workflow of the boundary generator (slice 8): a field, initial states and transitions with
 /// optional guards and assignments.
 fn gen_workflow(rng: &mut Rng) -> Workflow {
+    let id = gen_string(rng);
     let field = gen_nat(rng);
     let mut initial = Vec::new();
     for _ in 0..rng.below(3) {
@@ -567,6 +617,7 @@ fn gen_workflow(rng: &mut Rng) -> Workflow {
     }
     let mut transitions = Vec::new();
     for _ in 0..rng.below(3) {
+        let name = gen_string(rng);
         let source = gen_string(rng);
         let target = gen_string(rng);
         let guard = if rng.below(2) == 0 {
@@ -579,6 +630,7 @@ fn gen_workflow(rng: &mut Rng) -> Workflow {
             set.push((gen_nat(rng), gen_expr(rng, 0)));
         }
         transitions.push(WfTransition {
+            name,
             source,
             target,
             guard,
@@ -586,6 +638,7 @@ fn gen_workflow(rng: &mut Rng) -> Workflow {
         });
     }
     Workflow {
+        id,
         field,
         initial,
         transitions,
@@ -660,6 +713,9 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
         roles,
         teams,
         invitations,
+        revision: gen_nat(rng),
+        event_seq: gen_nat(rng),
+        schema_version: gen_nat(rng),
     }
 }
 
@@ -934,6 +990,7 @@ fn damaged_encodings_do_not_decode() {
     );
     check_refuses_damage(FIXTURE_TENANT, decode_tenant);
     check_refuses_damage(FIXTURE_TENANT_MEMBERS, decode_tenant);
+    check_refuses_damage(FIXTURE_TENANT_WORKFLOW, decode_tenant);
     check_refuses_damage(
         &encode_intent(&Intent::Member(MemberIntent::CreateInvitation {
             invitation: 3,

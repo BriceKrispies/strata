@@ -39,6 +39,10 @@
 //! team member and remove one, `7` create an invitation, `8` revoke one, `9` redeem one) and its fields
 //! in declaration order.
 //!
+//! Slice 9 adds the kernel's names and the revision of a tenant: a workflow is its id (a string) before
+//! its field, a transition is its name (a string) before its source, and a tenant ends with its revision,
+//! its event sequence and its schema version (three naturals, in that order, after its invitations).
+//!
 //! Every value has one encoding and the decoders accept nothing else: [`decode_all`] requires the
 //! input to be consumed exactly.
 //!
@@ -222,20 +226,23 @@ pub struct Record {
     pub fields: Vec<(u64, Val)>,
 }
 
-/// A transition of a workflow (slice 8): its source and target states, its guard (`None` when it always
-/// holds), and the fields it assigns with the expressions that give their values. Lean's `WfTransition`.
+/// A transition of a workflow (slice 8): its name (slice 9), its source and target states, its guard
+/// (`None` when it always holds), and the fields it assigns with the expressions that give their values.
+/// Lean's `WfTransition`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WfTransition {
+    pub name: String,
     pub source: String,
     pub target: String,
     pub guard: Option<Expr>,
     pub set: Vec<(u64, Expr)>,
 }
 
-/// A workflow over one field of an object type (slice 8): its field, its initial states and its
-/// transitions. Lean's `Workflow`.
+/// A workflow over one field of an object type (slice 8): its id (slice 9), its field, its initial states
+/// and its transitions. Lean's `Workflow`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Workflow {
+    pub id: String,
     pub field: u64,
     pub initial: Vec<String>,
     pub transitions: Vec<WfTransition>,
@@ -275,8 +282,8 @@ pub struct InvitationDef {
 
 /// Everything one tenant owns, as the boundary carries it: its object types by id, its members
 /// (each user with its roles), what each role grants, its policies, the next record id, the size
-/// bounds, and (slice 7) the roles its schema defines, its teams and its invitations. The owner is a
-/// member holding role `0`.
+/// bounds, (slice 7) the roles its schema defines, its teams and its invitations, and (slice 9) its
+/// revision, its event sequence and its schema version. The owner is a member holding role `0`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tenant {
     pub types: Vec<(u64, ObjType)>,
@@ -288,6 +295,9 @@ pub struct Tenant {
     pub roles: Vec<u64>,
     pub teams: Vec<(u64, TeamDef)>,
     pub invitations: Vec<(u64, InvitationDef)>,
+    pub revision: u64,
+    pub event_seq: u64,
+    pub schema_version: u64,
 }
 
 /// The acting context of a step: which tenant, and who is acting.
@@ -758,16 +768,18 @@ fn put_field_expr(out: &mut Vec<u8>, fe: &(u64, Expr)) {
     put_expr(out, &fe.1);
 }
 
-/// A transition of a workflow: its source, its target, its guard, then its assignments.
+/// A transition of a workflow: its name, its source, its target, its guard, then its assignments.
 fn put_wf_transition(out: &mut Vec<u8>, t: &WfTransition) {
+    put_str(out, &t.name);
     put_str(out, &t.source);
     put_str(out, &t.target);
     put_opt_expr(out, &t.guard);
     put_list(out, t.set.as_slice(), put_field_expr);
 }
 
-/// A workflow: its field, its initial states, then its transitions.
+/// A workflow: its id, its field, its initial states, then its transitions.
 fn put_workflow(out: &mut Vec<u8>, w: &Workflow) {
+    put_str(out, &w.id);
     put_nat(out, w.field);
     put_list(out, w.initial.as_slice(), put_string);
     put_list(out, w.transitions.as_slice(), put_wf_transition);
@@ -821,6 +833,9 @@ fn put_tenant(out: &mut Vec<u8>, t: &Tenant) {
     put_u64_list(out, &t.roles);
     put_list(out, t.teams.as_slice(), put_team_entry);
     put_list(out, t.invitations.as_slice(), put_invitation_entry);
+    put_nat(out, t.revision);
+    put_nat(out, t.event_seq);
+    put_nat(out, t.schema_version);
 }
 
 /// A membership intent: its tag, then its fields (`encMemberIntent`).
@@ -1461,11 +1476,13 @@ fn get_field_expr(r: &mut Reader<'_>) -> Option<(u64, Expr)> {
 }
 
 fn get_wf_transition(r: &mut Reader<'_>) -> Option<WfTransition> {
+    let name = get_str(r)?;
     let source = get_str(r)?;
     let target = get_str(r)?;
     let guard = get_opt_expr(r)?;
     let set = get_list(r, get_field_expr)?;
     Some(WfTransition {
+        name,
         source,
         target,
         guard,
@@ -1474,10 +1491,12 @@ fn get_wf_transition(r: &mut Reader<'_>) -> Option<WfTransition> {
 }
 
 fn get_workflow(r: &mut Reader<'_>) -> Option<Workflow> {
+    let id = get_str(r)?;
     let field = get_nat(r)?;
     let initial = get_list(r, get_str)?;
     let transitions = get_list(r, get_wf_transition)?;
     Some(Workflow {
+        id,
         field,
         initial,
         transitions,
@@ -1538,6 +1557,9 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
     let roles = get_u64_list(r)?;
     let teams = get_list(r, get_team_entry)?;
     let invitations = get_list(r, get_invitation_entry)?;
+    let revision = get_nat(r)?;
+    let event_seq = get_nat(r)?;
+    let schema_version = get_nat(r)?;
     Some(Tenant {
         types,
         members,
@@ -1548,6 +1570,9 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
         roles,
         teams,
         invitations,
+        revision,
+        event_seq,
+        schema_version,
     })
 }
 
