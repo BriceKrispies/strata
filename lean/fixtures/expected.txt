@@ -4213,3 +4213,140 @@ type 4 record 2 owner=100 v=1 1=s:open 2=i:2 3=s:urgent
 tenant 2 next=1 required=1
 type 2 required=
 end
+scenario h-schema-define-types-and-fields
+ok
+ok
+err unique_violated
+ok
+ok
+ok
+err invalid
+ok
+ok
+ok
+err dangling_reference
+scenario h-schema-expected-version
+ok
+err schema_conflict
+ok
+err schema_conflict
+err unauthorized
+ok
+scenario h-schema-refusals
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+err invalid_intent
+err invalid_intent
+err limit_exceeded
+err invalid_schema
+err invalid_schema
+err invalid_schema
+err invalid_schema
+err invalid_schema
+ok
+err invalid_schema
+err invalid_schema
+err no_tenant
+err invalid_schema
+scenario h-schema-required-over-records
+ok
+ok
+err migration_rejected
+ok
+ok
+err migration_rejected
+err migration_rejected
+ok
+err migration_rejected
+ok
+ok
+scenario h-schema-remove-field-strips-records
+ok
+ok
+ok
+ok
+ok
+err invalid_schema
+err migration_rejected
+ok
+err invalid
+ok
+ok
+scenario h-schema-remove-type-with-records
+ok
+ok
+ok
+ok
+err migration_rejected
+err migration_rejected
+ok
+err invalid_schema
+ok
+scenario h-schema-composite-under-change
+ok
+ok
+err invalid_schema
+ok
+err invalid_schema
+err invalid_schema
+err invalid_schema
+err invalid_schema
+scenario h-schema-reference-to-type
+ok
+ok
+ok
+err dangling_reference
+err invalid_schema
+ok
+ok
+ok
+err invalid_schema
+scenario h-require-and-unique-define-absent-fields
+ok
+err migration_rejected
+ok
+ok
+err migration_rejected
+ok
+ok
+ok
+err migration_rejected
+err unauthorized
+err invalid_schema
+err invalid
+err invalid_schema
+scenario h-schema-unique-over-duplicates
+ok
+ok
+ok
+err migration_rejected
+ok
+err unique_violated
+ok
+ok
+scenario h-schema-on-a-created-tenant
+err no_tenant
+ok
+ok
+ok
+ok
+err schema_conflict
+ok
+scenario h-schema-two-types-events-in-order
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+scenario h-define-field-checked-in-id-order
+ok
+err invalid
+err invalid
+ok
+err invalid
+ok
