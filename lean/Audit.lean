@@ -5315,3 +5315,15 @@ end Strata
 #print axioms Strata.step_entered_iff
 #print axioms Strata.step_exited_iff
 #print axioms Strata.member_change_entry_iff
+
+-- WG-5677: no cross-site scripting in the browser client
+#print axioms Strata.Client.Dom.sanitizeTag_mem
+#print axioms Strata.Client.Dom.allowed_not_forbidden
+#print axioms Strata.Client.Dom.allowed_attr_not_forbidden
+#print axioms Strata.Client.Dom.urlOk_head
+#print axioms Strata.Client.Dom.urlOk_not_script
+#print axioms Strata.Client.Dom.renderNode_good
+#print axioms Strata.Client.Dom.renderList_good
+#print axioms Strata.Client.Dom.script_output_emits_no_script_element
+#print axioms Strata.Client.Dom.script_output_sets_no_handler_style_or_url
+#print axioms Strata.Client.Dom.text_is_only_text
