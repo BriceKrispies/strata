@@ -1009,3 +1009,26 @@ import Strata
 #print axioms Strata.applySets_get_mem
 #print axioms Strata.wf_lookup_filter_none
 #print axioms Strata.lookup_filter_of_ne
+
+-- Slice 9: events, revisions and effects (`Strata/EventProofs.lean`).
+#print axioms Strata.transition_ok
+#print axioms Strata.transition_refused
+#print axioms Strata.eventBodies_commit
+#print axioms Strata.transition_existing
+#print axioms Strata.numberEvents_map_seq
+#print axioms Strata.numberEvents_length
+#print axioms Strata.transition_seqs
+#print axioms Strata.transition_publish
+#print axioms Strata.transition_revision
+#print axioms Strata.transition_created
+#print axioms Strata.typ_of_stepTenant_create
+#print axioms Strata.transition_create
+#print axioms Strata.transition_update
+#print axioms Strata.stored_of_stepTenant_delete
+#print axioms Strata.transition_delete
+#print axioms Strata.transition_setRequired
+#print axioms Strata.Impl.absW_commitWorldI
+#print axioms Strata.Impl.transitionI_refines
+#print axioms Strata.Impl.absX_commitWorldX
+#print axioms Strata.Impl.transitionX_refines
+#print axioms Strata.commitI_abs

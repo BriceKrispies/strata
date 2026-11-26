@@ -65,5 +65,7 @@ import Strata.Impl.XProofs
 import Strata.Impl.XDelete
 import Strata.Impl.XSchema
 import Strata.Impl.XWorld
+import Strata.Impl.Transition
+import Strata.EventProofs
 import Strata.Fixture
 import Strata.Bench

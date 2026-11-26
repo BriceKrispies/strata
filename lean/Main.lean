@@ -11,6 +11,7 @@ The Rust kernel is run on the same scenarios and must print the same text. See
 -/
 
 import Strata.Impl.World
+import Strata.Impl.Transition
 import Strata.Bench
 
 open Strata
@@ -295,24 +296,67 @@ def showWorld (w : World) : List String :=
     | none => [])
 
 
-/-- One kernel the scenario runner drives: its start state, its transition function and how it
-    prints its state. -/
+/-- The text of a record's stored form: its creator, its version and its fields. -/
+def recordBody (r : Record) : String :=
+  let fields := (sortBy (fun (fv : FieldId × Val) => fv.1) r.fields).map fun fv => s!"{fv.1}={showVal fv.2}"
+  trimEnd s!"owner={ownerText r.owner} v={r.version} {" ".intercalate fields}"
+
+def showPrincipal : Principal → String
+  | .user n => toString n
+  | .system => "system"
+  | .anonymous => "anon"
+
+def showSchemaLine : SchemaLine → String
+  | .field ty f => s!"field:{ty}.{f}"
+  | .unique ty fs => s!"unique:{ty}:{",".intercalate (fs.map toString)}"
+
+/-- The workflow transitions an update fired, by workflow id (the kernel's map is sorted by id); `-` for none. -/
+def showFired (fs : List (String × String)) : String :=
+  if fs.isEmpty then "-"
+  else ",".intercalate ((fs.mergeSort (fun a b => decide (a.1 ≤ b.1))).map fun p => s!"{p.1}:{p.2}")
+
+/-- One domain event as its line: the sequence number, the revision, the principal and the body. -/
+def showEvent (e : DomainEvent) : String :=
+  let body := match e.body with
+    | .tenantCreated name => s!"tenant-created name={name}"
+    | .schemaChanged v summary g =>
+      let items := if summary.isEmpty then "-" else ";".intercalate (summary.map showSchemaLine)
+      s!"schema-changed version={v} grandfathered={g} summary={items}"
+    | .recordCreated ty id r => s!"record-created type={ty} id={id} {recordBody r}"
+    | .recordUpdated ty id b a fired =>
+      s!"record-updated type={ty} id={id} before=[{recordBody b}] after=[{recordBody a}] fired={showFired fired}"
+    | .recordDeleted ty id b => s!"record-deleted type={ty} id={id} before=[{recordBody b}]"
+    | .memberChanged who roles =>
+      let name := match who with
+        | .user n => toString n
+        | .team t => s!"team:{t}"
+      s!"member-changed who={name} roles={showNats roles}"
+  s!"event {e.seq} rev={e.revision} by={showPrincipal e.principal} {body}"
+
+/-- One kernel the scenario runner drives: its start state, its transition (the world after an accepted step,
+    with the events it emits), the revision of a tenant, and how it prints its state. -/
 structure Kernel (W : Type) where
   init : W
-  step : W → Intent → Ctx → Except Err W
+  step : W → Intent → Ctx → Except Err (W × List DomainEvent)
+  revision : W → TenantId → Option Nat
   render : W → List String
 
-/-- The spec's kernel: the model as written. -/
+/-- The spec's kernel: the model as written, with its transition. -/
 def specKernel : Kernel World :=
-  { init := initialWorld, step := step, render := showWorld }
+  { init := initialWorld,
+    step := fun w i c => (transition w i c).map (fun tr => (tr.world, tr.events)),
+    revision := fun w x => (w x).map (fun t => t.revision),
+    render := showWorld }
 
 /-- The executable kernel: the slots, printed through the abstraction. -/
 def implKernel : Kernel IWorld :=
-  { init := implInitial, step := stepI, render := fun w => showWorld (absW w) }
+  { init := implInitial, step := fun w i c => transitionI w i c,
+    revision := fun w x => (w x).map (fun t => t.revision), render := fun w => showWorld (absW w) }
 
 /-- The indexed kernel: slots and indexes, printed through the abstraction. -/
 def xKernel : Kernel XWorld :=
-  { init := xInitial, step := stepX, render := fun w => showWorld (absX w) }
+  { init := xInitial, step := fun w i c => transitionX w i c,
+    revision := fun w x => (w x).map (fun t => t.core.revision), render := fun w => showWorld (absX w) }
 
 partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (out : Array String) :
     Array String :=
@@ -329,7 +373,12 @@ partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (ou
       | none => runLines K rest w (out.push s!"unparsed {line}")
       | some (c, i) =>
         match K.step w i c with
-        | .ok w' => runLines K rest w' (out.push "ok")
+        | .ok (w', evs) =>
+          -- An accepted step: `ok`, the tenant's revision after it, then each event and its `Publish` effect.
+          let rev := (K.revision w' c.tenant).getD 0
+          let lines := ["ok", s!"revision {rev}"] ++ evs.map showEvent ++
+            evs.map (fun e => s!"effect publish {e.seq}")
+          runLines K rest w' (lines.foldl (fun a l => a.push l) out)
         | .error e => runLines K rest w (out.push s!"err {showErr e}")
 
 def runScenarios {W : Type} (K : Kernel W) (path : String) : IO Unit := do

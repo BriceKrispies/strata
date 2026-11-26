@@ -229,6 +229,12 @@ inductive SchemaLine where
   | unique (ty : TypeId) (fs : List FieldId)
   deriving DecidableEq, Repr
 
+/-- Who a membership event names: a user, or a team, whose principal the kernel writes as `team:<id>`. -/
+inductive Member where
+  | user (p : PrincipalId)
+  | team (t : TeamId)
+  deriving DecidableEq, Repr
+
 /-- The body of a domain event (the kernel's `EventBody`). A record event names the record as stored before
     and after; an update names the workflow transitions it fired, by workflow id, and a delete names the
     record it removed. -/
@@ -238,6 +244,8 @@ inductive EventBody where
   | recordCreated (ty : TypeId) (id : RecordId) (r : Record)
   | recordUpdated (ty : TypeId) (id : RecordId) (before after : Record) (fired : List (String × String))
   | recordDeleted (ty : TypeId) (id : RecordId) (before : Record)
+  /-- A principal's effective roles changed: its direct roles and those of its teams (slice 9). -/
+  | memberChanged (who : Member) (roles : List RoleId)
   deriving Repr
 
 /-- A domain event: its sequence number (gapless per tenant), the revision it was committed at, the principal
@@ -278,6 +286,38 @@ def Intent.line : Intent → Option SchemaLine
   | .defineUnique ty fs => some (.unique ty fs)
   | _ => none
 
+/-- The roles a user holds directly and through its teams, each once (the kernel's `assigned_roles`; `public` is
+    not among them, as the kernel's membership events do not name it). -/
+def effRoles (m : MTenant) (p : PrincipalId) : List RoleId :=
+  (m.directOf p ++ m.teamRoles p).eraseDups
+
+/-- The events of a team's state: the team's principal with its roles, then each member, in the kernel's order
+    (by user id), with its effective roles. The membership is the one after the intent. -/
+def teamEvents (m : MTenant) (team : TeamId) : List EventBody :=
+  match m.teams.lookup team with
+  | some d =>
+    .memberChanged (.team team) d.roles.eraseDups ::
+      ((d.members.eraseDups.mergeSort (fun a b => decide (a ≤ b))).map
+        (fun u => .memberChanged (.user u) (effRoles m u)))
+  | none => []
+
+/-- The events of a membership intent (slice 7), read from the membership after it (`m`): a role change names the
+    user; a team change names the team and then its members; removing a member from a team names it first. A
+    redemption names the redeemer; invitations emit none. -/
+def memberBodies (p : Principal) : MemberIntent → MTenant → List EventBody
+  | .assignRole u _, m => [.memberChanged (.user u) (effRoles m u)]
+  | .revokeRole u _, m => [.memberChanged (.user u) (effRoles m u)]
+  | .defineTeam team _, m => teamEvents m team
+  | .assignTeamRole team _, m => teamEvents m team
+  | .revokeTeamRole team _, m => teamEvents m team
+  | .addTeamMember team _, m => teamEvents m team
+  | .removeTeamMember team u, m => .memberChanged (.user u) (effRoles m u) :: teamEvents m team
+  | .createInvitation _ _ _ _, _ => []
+  | .revokeInvitation _, _ => []
+  | .redeemInvitation _ _ _, m => match p.userId? with
+    | some r => [.memberChanged (.user r) (effRoles m r)]
+    | none => []
+
 /-- The events an accepted intent against a tenant that exists emits. `t` is the tenant before the step, `t'`
     the tenant the decision wrote (its revision and sequence not yet raised). -/
 def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventBody
@@ -292,6 +332,7 @@ def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventB
   | .delete ty id _, _ => match t.recordAt ty id with
     | some old => referrerEvents t ty id ++ [.recordDeleted ty id old]
     | none => []
+  | .member j, t' => memberBodies p j t'.mt
   | i, t' => match i.line with
     | some l => [.schemaChanged (t.schemaVersion + 1) [l] (violatedCount t.limits (scopedTypes t'.types (i.touched t)) t'.env)]
     | none => []
