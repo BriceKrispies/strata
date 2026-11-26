@@ -47,13 +47,19 @@ jobs:
       - name: Rust toolchain from rust-toolchain.toml
         run: rustup show
 
+      # The gate fails on known, unrelated checks today, so caches are saved whatever the outcome.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Tools the gate runs
         run: |
           cargo install cargo-audit --locked
           curl -sSf https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          # Tests run lake from crate directories, where no lean-toolchain file applies; without a
+          # default toolchain elan refuses there and `lake --version` fails.
+          "$HOME/.elan/bin/elan" default "$(cat lean/lean-toolchain)"
 
       - name: Dependencies
         run: |
@@ -64,7 +70,8 @@ jobs:
       # Exegra's engine and its Lean core (src/engine/lean/exegra-lean.wasm) are build products the
       # Exegra repository does not commit. The wasm build downloads emsdk and the Lean runtime sources
       # into ~/.cache/exegra/formal-wasm; both that cache and formal/.lake are kept between runs.
-      - uses: actions/cache@v4
+      - id: formal-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/exegra/formal-wasm
@@ -82,6 +89,15 @@ jobs:
           cargo install wasm-bindgen-cli --version "$bindgen" --locked
           npm run build:engine --prefix exegra
           npm run build:formal-wasm --prefix exegra
+
+      # Saved straight after the build, not at the end of the job, so a failing gate still keeps it.
+      - if: steps.formal-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/exegra/formal-wasm
+            exegra/formal/.lake
+          key: ${{ steps.formal-cache.outputs.cache-primary-key }}
 
       # The correspondence tests in crates/verification run `lake exe strata_model` while cargo test
       # runs; on a fresh runner that first call would also install the toolchain and build the model.
