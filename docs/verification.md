@@ -26,8 +26,10 @@ the tenant lacks is refused. Slice 5 adds expressions, constraints and expressio
 roles and policies as data (the owner role, role permissions, policies with conditions, capabilities,
 the system and the anonymous principal). Slice 7 adds members, teams and invitations, and slice 8 adds
 workflows: a workflow over a string field of an object type, with its initial states, its transitions
-and their guards and assignments, decided by the same `step`. The model has no queries, events or
-scopes: the assumptions below list each
+and their guards and assignments, decided by the same `step`. Slice 9 adds events and revisions: `transition`
+returns the world with the tenant's revision, event sequence and schema version committed, the domain events
+the step emits, and one `Publish` effect per event; `step` itself is unchanged. The model has no queries or
+scopes, and its events are only those listed in the slice 9 review note: the assumptions below list each
 omission, and the gap analysis further down says which slice will add each. The theorems are
 about this model. The Rust kernel is compared with it on generated scenarios, which is evidence and
 not a proof.
@@ -111,7 +113,27 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `update_writes_patched`, `update_keeps_unnamed`, `update_ok_parts`, `update_refs_resolve`, `update_refused_dangling_across_types`, `update_within_limits` | Restated with the hypothesis `Tenant.Plain` (no transition assigns a field): these describe the patched record as the record written, which holds only when no assignment changes it (see the slice 8 review note) |
 | | `update_duplicate_refused`, `create_duplicate_refused`, `create_refused_over_record_bound`, `create_constraint_refused`, `update_constraint_refused` | Restated with the workflow checks an otherwise valid write must pass: `initialsOk` on a create, and for an update that the workflows leave the patched record as it is and its states hold |
 
-`lake build` checks them. `lake env lean Audit.lean` prints the axioms each depends on: only
+`lake build` checks them.
+
+Slice 9 (events, revisions and effects; `lean/Strata/EventProofs.lean`, and the executable transitions in
+`lean/Strata/Impl/Transition.lean`; the statements below are about `Strata.transition`, whose world is `step`'s
+with the tenant committed):
+
+| Property | Theorems | Statement |
+|---|---|---|
+| Revision and sequence | `transition_revision`, `transition_seqs` | An accepted step against a tenant that exists raises its revision by exactly one; its events are numbered after the tenant's event sequence, one each, with consecutive sequence numbers |
+| | `transition_created` | An accepted creation of a tenant leaves it at revision 1 and emits its one `TenantCreated` event as the first of the sequence |
+| | `transition_refused` | A refused step has no transition: it emits no event, and no new state exists, so the revision stays where it was |
+| Events of record writes | `transition_create` | An accepted create emits exactly one `RecordCreated` event carrying the record it writes under the next id |
+| | `transition_update` | An accepted update emits exactly one `RecordUpdated` event: the stored record before, the record after, and the workflow transitions it fired |
+| | `transition_delete` | An accepted delete emits one `RecordUpdated` event per record it rewrites (the count of referrers), in the kernel's order, then the `RecordDeleted` event of the record |
+| Events of schema changes | `transition_setRequired` | An accepted change of a field's required flag emits one `SchemaChanged` event: the version it made, the field, and the count of records the touched types leave violating |
+| Publish effects | `transition_publish`, `transition_ok` | An accepted step's effects are one `Publish` per event, in the events' order; an accepted transition is a step, its world the committed world |
+| Commit | `eventBodies_commit`, `numberEvents_map_seq`, `numberEvents_length` | The events do not depend on the revision, sequence or schema version they are read from; the numbering is consecutive |
+| Executable kernels | `Impl.transitionI_refines`, `Impl.transitionX_refines`, `Impl.absW_commitWorldI`, `Impl.absX_commitWorldX`, `Impl.commitI_abs` | Each executable transition, on both stages, has the spec's world and events on the abstraction |
+
+`lake build` checks them. `lake env lean Audit.lean` prints the axioms of each: the standard `propext`,
+`Classical.choice` and `Quot.sound`, with no `sorryAx`. `lake env lean Audit.lean` prints the axioms each depends on: only
 Lean's standard `propext`, `Classical.choice` and `Quot.sound`. There is no `sorry`, no `admit`
 and no added axiom; a test fails if the sources contain one or the audit reports `sorryAx`.
 
@@ -385,7 +407,7 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 | Delete: another record of any type referring through a `restrict` field, or through a required single reference, blocks it; a record referring to itself does not | `StillReferenced` | covered for references and lists, across types too (a required list never blocks) | 1, 2, 4 |
 | A delete clears a referrer's reference and would leave the referrer violating a constraint | | covered: the delete is refused with `constraintViolated` (`brk_delete_refused`), so the invariant is kept (WG-5664) | 5 |
 | Accepted delete: the record removed; every other reference to it cleared (a list loses the element); each cleared record's version + 1 | | covered within the one type | 1, 2 |
-| Events: `RecordCreated`, `RecordUpdated` (naming the transitions fired), `RecordDeleted`, an update event per cleared referrer; revision + 1; one `Publish` effect per event | | not covered | 9 |
+| Events: `RecordCreated`, `RecordUpdated` (naming the transitions fired), `RecordDeleted`, an update event per cleared referrer; revision + 1; one `Publish` effect per event | | covered for the record intents (`transition_create`, `transition_update`, `transition_delete`), the schema changes of the required and unique flags and the membership intents (`eventBodies`, `memberBodies`); revision, sequence and `Publish` effects (`transition_revision`, `transition_seqs`, `transition_publish`). Not covered: the effects other than `Publish`, the kernel's time and correlation, and the other event kinds (settings, ledger, operations, automations) | 9 |
 
 ### Schema: `ChangeSchema`
 
@@ -405,7 +427,7 @@ From `transition::change_schema`, `plan_migration`, `apply_change` and `schema::
 | A field change whose stored values cannot be carried | `MigrationRejected` | not covered | 11 |
 | Settings effects, such as a setting retyped while overrides exist | `InvalidSchema` | not covered | 12 |
 | `Reject` and a record violates the new schema, constraints included | `MigrationRejected` | covered for making a field required (`strict`) and for the constraints of the touched types (slice 5); not for a unique field, which slice 3 covers | 0, 3, 5, 11 |
-| `Grandfather`: violating records stay, counted in the event | | covered for making a field required (`lax`); the count not | 0, 9 |
+| `Grandfather`: violating records stay, counted in the event | | covered for making a field required (`lax`), and the count is the number of records of the touched types that violate the schema the change leaves (`violatedCount`, `transition_setRequired`); the count's agreement with the kernel's per-record validation is checked by the differential run, not proved | 0, 9 |
 | An object type removed while it has records and the change does not delete them; a role removed while held | `MigrationRejected`, `InvalidSchema` | not covered | 11 |
 | Accepted: the new schema at version + 1, rewritten and deleted records, `SchemaChanged` | | partly: the required flag | 11 |
 
@@ -564,7 +586,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **6 (done)** | Roles and policies as data, replacing the fixed tiers: the owner role, role permissions, policies with conditions, capabilities, the system and anonymous principals | 5 |
 | **7 (done)** | Tenants, members, teams, invitations, conferring, the owner rule, reserved principal ids. The decisions are in `Strata/Members.lean`, the theorems in `Strata/MembersProofs.lean`, and the intents are in `Intent` and decided by `step`; the executable kernels, the working set, the codec of tenants (Lean and Rust) and the differential harness, scenarios and generator cover them (see the slice 7 review note) | 6 |
 | **8 (done)** | Workflows: the workflow of an object type (field, initial states, transitions with guards and assignments), the create and update decisions, the state check and the invariant (`lean/Strata/Workflows.lean`); the executable kernels, the codec (Lean and Rust), the harness with the ticket type (id 4), the h- scenarios and the generator cover them (see the slice 8 review note). Approvals are not in this slice: they decide automation steps, which slice 15 adds | 5, 6 |
-| 9 | Events and revisions: event bodies, sequence numbers, the revision, `Publish` effects, the grandfathered count | 1 to 8, for their content |
+| **9 (done)** | Events and revisions: event bodies, sequence numbers, the revision, `Publish` effects, the grandfathered count (`lean/Strata/EventProofs.lean`, see the slice 9 review note) | 1 to 8, for their content |
 | 10 | Reads: visibility, field read rules, record reads, named queries (filter, order, pages), search, aggregates | 5, 6 |
 | 11 | Schema change in general: the change kinds, `SchemaConflict`, the abstract validity predicate, `Reject` and `Grandfather`, object and role removal, and the evolution model's acceptance as the rule for breaking changes | 3 to 8 |
 | 12 | Settings | 6, 7 |
@@ -1005,6 +1027,57 @@ cover the decisions.
   workflows, and the static validity of a workflow (slice 11); computed fields (slice 10). A later assignment overwriting an
   earlier workflow's assignment is the record the step writes, stated by `update_writes_fired`, not as a theorem about
   each field.
+
+### Slice 9 review note: what was abstracted
+
+Slice 9 is events, revisions and effects. The state is in `lean/Strata/ModelBase.lean` (the tenant's `revision`,
+`eventSeq` and `schemaVersion`; a workflow's id and a transition's name), the decisions in `lean/Strata/Model.lean`
+(`SchemaLine`, `Member`, `EventBody`, `DomainEvent`, `Effect`, `referrerEvents`, `eventBodies`, `memberBodies`,
+`commitT`, `commitWorld`, `stepEvents`, `transition`), the theorems in `lean/Strata/EventProofs.lean`, the executable
+transitions in `lean/Strata/Impl/Transition.lean`, the codec of the tenant and of the workflows in
+`lean/Strata/Codec/Boundary.lean`, and the printing in `lean/Main.lean` and `crates/verification/src/lean.rs`.
+
+- **`step` is unchanged; `transition` is new.** `step` keeps its type and statement, so every earlier theorem is
+  the same statement, now about the same function. `transition w i c` returns `step`'s world with the addressed tenant
+  committed (`commitWorld`, `commitT`): its revision raised by one, its event sequence by the number of events it
+  emits, its schema version by one for a schema change; with its events and one `Publish` effect per event. A refused
+  step has no transition. So the revision is part of the transition's world and not of `step`'s: `step` is the
+  transition's world projected to the records and the membership, which is what the earlier invariants are about.
+- **Events are derived, not carried.** `eventBodies` computes an accepted intent's events from the tenant before the
+  step, the principal, the intent and the tenant the decision wrote. Each case is the kernel's emission for that intent
+  (`transition::create_record`, `update_record`, `delete_record`, `change_schema`, `change_member`, `put_team`,
+  `team_member`, `redeem_invitation`, and `create_tenant`). The derivation is the model's statement of the kernel's
+  emission, checked by the differential run; the theorems state it for accepted writes. The executable kernels apply
+  the same derivation to their abstraction (`Impl.transitionI`, `Impl.transitionX`), so their events agree with the
+  model's by the refinement of the worlds.
+- **The transitions an update fired.** `firedAll` gives the workflow id and the transition name of each workflow whose
+  field changed, in the order `fireAll` applies them. The kernel keeps them in a map sorted by workflow id; the printed
+  form sorts them the same way.
+- **Referrer order.** A delete's rewritten referrers come in the order of (object type, record id). The kernel sorts by
+  the object type's name; the model by the type's number. For the fixture's names (`item`, `part`, `ticket`, numbers
+  `1`, `2`, `4`) the two orders agree.
+- **Schema summary.** The kernel's summary is text. The model names the change by its ids: `SchemaLine.field` (the
+  kernel's `redefine field <object>.<field>`, which every schema intent of the model writes) and `SchemaLine.unique`. The
+  harness prints the change, not the text.
+- **Grandfathered count.** `violatedCount` counts, per touched record, the write checks that refuse it (`problem`, with
+  its own unique values compared with the other records) and the constraints that refuse it, over the types the change
+  leaves. The kernel counts the records with a violation in `validate_record` over the touched types. The two agree on
+  the checks the model has; the kernel's reference and computed checks are outside the model (slice 10 and 11).
+- **Membership events.** A role change names the user with its direct and team roles after the change; a team change
+  names the team with its roles and then each member, in id order, with its effective roles; removing a member names
+  the member first; a redemption names the redeemer; invitations emit none. Role sets leave out `public`, as the
+  kernel's membership events do.
+- **Fixture revisions.** The fixture tenants are installed by six accepted steps (the creation, two schema changes,
+  three role assignments), so they start at revision 6, event sequence 6, and schema version 3. A tenant the scenarios
+  create starts at revision 1, sequence 1, schema version 1 (`genesisTenant`).
+- **Effects.** Only `Publish` is modelled. The kernel also emits `RevokeSessions` effects, when a change leaves a
+  principal without any role, and automation effects; they are not in the model and not printed.
+- **Not covered.** The events of settings, ledger, operations, triggers, automations and segments; the kernel's `at`
+  and `correlation` (the model has no clock or correlation); the events of the schema changes the model does not make
+  (defining or removing object types, roles, policies, workflows, settings; field definitions other than the
+  required and unique flags); computed-field events; the codec of events (the step result still
+  encodes a tenant, so the events are not in the foreign interface). `EventProofs.lean` proves the schema event for the
+  required flag only (`transition_setRequired`); the unique flag and the composite constraint use the same derivation.
 
 ### Slice 6 review note: what was abstracted
 

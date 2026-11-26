@@ -1,9 +1,11 @@
 /-
 The abstract model as a program. Reads scenarios from the file named on the command line,
-runs each through `Strata.step`, and prints every outcome and the final state.
+runs each through `Strata.transition`, and prints every outcome and the final state. An accepted
+step prints `ok`, then `revision <n>` (the addressed tenant's revision after it), one `event` line per
+domain event and one `effect publish <seq>` line per event (slice 9). Refusals print `err <kind>`.
 
 With `--impl` before the file name, the same scenarios run through the executable kernel
-(`Strata.Impl.stepI`, the records held in slots) and print the same text, the state read back
+(`Strata.Impl.transitionI`, the records held in slots) and print the same text, the state read back
 through the abstraction. The differential harness compares both with the Rust kernel.
 
 The Rust kernel is run on the same scenarios and must print the same text. See
