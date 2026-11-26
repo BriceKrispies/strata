@@ -1466,6 +1466,7 @@ and `SchemaChangeProofs.lean` (the theorems), `Impl/SchemaI.lean` (the executabl
   `setRequired_schema_absent`, `setUnique_schema_declared`, `setUnique_schema_absent`). The single-type intents keep
   their own decision (the check around the write differs: see the comment above those theorems); `defineUnique` stays
   its own decision, since a composite constraint is not one of the changes of the model.
+- **Field order.** The kernel checks a record's fields in the order of their ids. A field a change defines (or `setRequired`/`setUnique` declares) is entered at its place by id (`insertField`), so the schema stays sorted as the fixture's is and the write checks and the conformance of a strict change meet the first failing field in the kernel's order (DRT found `require 0` on a part, then an oversized field 1: the kernel says `invalid` for the absent required field 0 first).
 - **Executable kernels.** Stage 1 decides the change on slots: the changes on the object types, the records rewritten
   slot by slot, the schema rules and the impact rule asked of the abstraction (`changeSchemaI_refines`, `changeSchemaI_inv`).
   The indexed kernel takes stage 1's tenant and builds its three indexes again from every record

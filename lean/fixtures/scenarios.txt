@@ -2518,3 +2518,10 @@ op 1 100 schema strict define-field 5 2 int ; define-field 6 2 int ; define-fiel
 op 1 100 type 5 patch 2 3=s:x
 op 1 100 type 6 patch 1 2=i:4
 op 1 100 schema strict remove-field 6 1 ; remove-field 5 3
+scenario h-define-field-checked-in-id-order
+op 1 100 type 2 require 0 lax
+op 1 100 type 2 create 1=s*65537:x
+op 1 100 type 2 create 0=s:a 1=s*65537:x
+op 1 100 schema strict define-field 2 3 int required ; define-field 2 0 str required
+op 1 100 type 2 create 1=r:1 4=i:2 3=s:x
+op 1 100 type 2 create 0=s:a 3=i:1

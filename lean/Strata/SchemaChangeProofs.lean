@@ -363,12 +363,25 @@ theorem setRequired_schema_declared (s : Schema) (f : FieldId) (d : FieldDef) (h
   · simp [hb]
 
 /-- A field its type lacks: `setRequired` writes the schema of a `defineField` of the plain field made required. -/
+theorem map_insertField (g : FieldId × FieldDef → FieldId × FieldDef) (hg : ∀ x, (g x).1 = x.1)
+    (s : Schema) (e : FieldId × FieldDef) : (insertField s e).map g = insertField (s.map g) (g e) := by
+  induction s with
+  | nil => rfl
+  | cons x xs ih =>
+    unfold insertField
+    by_cases h : e.1 < x.1
+    · have h' : (g e).1 < (g x).1 := by rw [hg, hg]; exact h
+      simp [h, h']
+    · have h' : ¬ (g e).1 < (g x).1 := by rw [hg, hg]; exact h
+      simp [h, h', ih]
+
 theorem setRequired_schema_absent (s : Schema) (f : FieldId) (hd : s.lookup f = none) :
     makeRequired (ensureField s f) f = setField s f { plainField with required := true } := by
   have hany := sc_absent_not_any s f hd
   have hnot := sc_lookup_none_not_key s f hd
   unfold ensureField setField makeRequired
-  rw [if_neg hany, if_neg hany, List.map_append]
+  rw [if_neg hany, if_neg hany]
+  rw [map_insertField _ (fun x => by dsimp only; split <;> rfl)]
   have h1 : s.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with required := true }) else fd) = s.map id :=
     List.map_congr_left (fun fd hfd => by simp [hnot fd hfd])
   rw [h1, List.map_id]
@@ -398,7 +411,8 @@ theorem setUnique_schema_absent (s : Schema) (f : FieldId) (hd : s.lookup f = no
   have hany := sc_absent_not_any s f hd
   have hnot := sc_lookup_none_not_key s f hd
   unfold ensureField setField makeUnique
-  rw [if_neg hany, if_neg hany, List.map_append]
+  rw [if_neg hany, if_neg hany]
+  rw [map_insertField _ (fun x => by dsimp only; split <;> rfl)]
   have h1 : s.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with unique := true }) else fd) = s.map id :=
     List.map_congr_left (fun fd hfd => by simp [hnot fd hfd])
   rw [h1, List.map_id]

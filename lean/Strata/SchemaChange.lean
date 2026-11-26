@@ -61,10 +61,10 @@ def Change.line : Change → SchemaLine
   | .defineType ty => .defineType ty
   | .removeType ty _ => .removeType ty
 
-/-- A schema with field `f` defined as `d`: a redefinition replaces the definition in place, a new field is last. -/
+/-- A schema with field `f` defined as `d`: a redefinition replaces the definition in place, a new field goes at its place by id. -/
 def setField (schema : Schema) (f : FieldId) (d : FieldDef) : Schema :=
   if schema.any (fun fd => fd.1 == f) then schema.map (fun fd => if fd.1 == f then (f, d) else fd)
-  else schema ++ [(f, d)]
+  else insertField schema (f, d)
 
 /-! ## The schema rules
 

@@ -166,14 +166,23 @@ theorem ens_makeUnique_ty' (s : Schema) (f g : FieldId) :
   · left; rw [h]
   · right; refine ⟨h0, ?_⟩; rw [h1]; rfl
 
+theorem ukeysOf_insertPlain (S : TypeId) (s : Schema) (f : FieldId) (r : Record) :
+    ukeysOf S (insertField s (f, plainField)) r = ukeysOf S s r := by
+  unfold ukeysOf
+  induction s with
+  | nil => simp [insertField, plainField]
+  | cons x xs ih =>
+    unfold insertField
+    split
+    · simp [plainField]
+    · simp only [List.filterMap_cons, ih]
+
 theorem ukeysOf_ensureField (S : TypeId) (s : Schema) (f : FieldId) (r : Record) :
     ukeysOf S (ensureField s f) r = ukeysOf S s r := by
   unfold ensureField
   split
   · rfl
-  · unfold ukeysOf
-    rw [List.filterMap_append]
-    simp [plainField]
+  · exact ukeysOf_insertPlain S s f r
 
 theorem ukeysOf_ens_makeRequired (S : TypeId) (s : Schema) (f : FieldId) (r : Record) :
     ukeysOf S (makeRequired (ensureField s f) f) r = ukeysOf S s r := by

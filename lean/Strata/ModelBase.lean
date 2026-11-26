@@ -1169,9 +1169,16 @@ def versionClash : Option Nat → Record → Bool
     the intent then makes required or unique (the kernel's harness defines the field afresh, `DefineField`). -/
 def plainField : FieldDef := { ty := .bool, required := false }
 
-/-- The schema with field `f` declared: as it is when it is, otherwise with the plain definition last. -/
+/-- A field entered in a schema at its place by id: the kernel checks a record's fields in the order of their ids, so a
+    schema that keeps its fields sorted by id (the fixture's are) is checked in that order whatever fields a change
+    defines. -/
+def insertField : Schema → FieldId × FieldDef → Schema
+  | [], e => [e]
+  | x :: xs, e => if e.1 < x.1 then e :: x :: xs else x :: insertField xs e
+
+/-- The schema with field `f` declared: as it is when it is, otherwise with the plain definition at its place. -/
 def ensureField (schema : Schema) (f : FieldId) : Schema :=
-  if schema.any (fun fd => fd.1 == f) then schema else schema ++ [(f, plainField)]
+  if schema.any (fun fd => fd.1 == f) then schema else insertField schema (f, plainField)
 
 def makeRequired (schema : Schema) (f : FieldId) : Schema :=
   schema.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with required := true }) else fd)

@@ -164,6 +164,58 @@ theorem sc_keys_nodup_lookup_none (l : List (TypeId × ObjType)) (k : TypeId) :
 
 /-! ## Schemas -/
 
+/-! ## A field entered at its place by id -/
+
+theorem insertField_perm (s : Schema) (e : FieldId × FieldDef) : (insertField s e).Perm (e :: s) := by
+  induction s with
+  | nil => exact List.Perm.refl _
+  | cons x xs ih =>
+    unfold insertField
+    split
+    · exact List.Perm.refl _
+    · exact (List.Perm.cons x ih).trans (List.Perm.swap e x xs)
+
+theorem mem_insertField (s : Schema) (e x : FieldId × FieldDef) : x ∈ insertField s e ↔ x = e ∨ x ∈ s := by
+  rw [(insertField_perm s e).mem_iff]; simp
+
+theorem not_any_key (s : Schema) (f : FieldId) (h : ¬ s.any (fun fd => fd.1 == f) = true) :
+    ∀ y ∈ s, y.1 ≠ f := by
+  intro y hy e
+  exact h (List.any_eq_true.mpr ⟨y, hy, by simp [e]⟩)
+
+theorem keys_insertField (s : Schema) (e : FieldId × FieldDef) (h : (s.map Prod.fst).Nodup)
+    (hne : ∀ y ∈ s, y.1 ≠ e.1) : ((insertField s e).map Prod.fst).Nodup := by
+  have hp := (insertField_perm s e).map Prod.fst
+  rw [hp.nodup_iff]
+  refine List.nodup_cons.mpr ⟨?_, h⟩
+  intro hm
+  obtain ⟨y, hy, hk⟩ := List.mem_map.mp hm
+  exact hne y hy hk
+
+theorem lookup_insertField (s : Schema) (e : FieldId × FieldDef) (k : FieldId) (hne : ∀ y ∈ s, y.1 ≠ e.1) :
+    (insertField s e).lookup k = if k = e.1 then some e.2 else s.lookup k := by
+  induction s with
+  | nil =>
+    by_cases hk : k = e.1
+    · subst hk; simp [insertField, List.lookup]
+    · have : (k == e.1) = false := by simpa using hk
+      simp [insertField, List.lookup, this, hk]
+  | cons x xs ih =>
+    have hx : x.1 ≠ e.1 := hne x List.mem_cons_self
+    have hxs : ∀ y ∈ xs, y.1 ≠ e.1 := fun y hy => hne y (List.mem_cons_of_mem _ hy)
+    unfold insertField
+    split
+    · by_cases hk : k = e.1
+      · subst hk; simp [List.lookup]
+      · have hb : (k == e.1) = false := by simpa using hk
+        simp [List.lookup, hb, hk]
+    · by_cases hk : k = x.1
+      · have hk' : k ≠ e.1 := fun h => hx (hk.symm.trans h)
+        have hb : (k == x.1) = true := by simpa using hk
+        simp [List.lookup, hb, hk']
+      · have hb : (k == x.1) = false := by simpa using hk
+        simp [List.lookup, hb, ih hxs]
+
 theorem sc_setField_keys_nodup (schema : Schema) (f : FieldId) (d : FieldDef)
     (h : (schema.map Prod.fst).Nodup) : ((setField schema f d).map Prod.fst).Nodup := by
   unfold setField
@@ -175,17 +227,8 @@ theorem sc_setField_keys_nodup (schema : Schema) (f : FieldId) (d : FieldDef)
       · simp [hb]
       · simp [hb]
     rw [this]; exact h
-  · rw [if_neg hany, List.map_append]
-    simp only [List.map_cons, List.map_nil]
-    refine List.nodup_append.mpr ⟨h, List.nodup_cons.mpr ⟨by simp, List.nodup_nil⟩, ?_⟩
-    intro a ha b hb
-    simp only [List.mem_singleton] at hb
-    subst hb
-    intro hab
-    subst hab
-    apply hany
-    obtain ⟨fd, hfd, rfl⟩ := List.mem_map.mp ha
-    exact List.any_eq_true.mpr ⟨fd, hfd, by simp⟩
+  · rw [if_neg hany]
+    exact keys_insertField _ _ h (not_any_key _ _ hany)
 
 theorem sc_filter_keys_nodup (schema : Schema) (p : FieldId × FieldDef → Bool)
     (h : (schema.map Prod.fst).Nodup) : ((schema.filter p).map Prod.fst).Nodup :=
@@ -1112,52 +1155,30 @@ theorem ensureField_lookup (s : Schema) (f k : FieldId) :
   unfold ensureField
   by_cases hany : s.any (fun fd => fd.1 == f) = true
   · rw [if_pos hany]; exact Or.inl rfl
-  · rw [if_neg hany]
-    induction s with
-    | nil =>
-      by_cases hk : k = f
-      · subst hk; right; simp [List.lookup]
-      · left
-        have : (k == f) = false := by simpa using hk
-        simp [List.lookup, this]
-    | cons e es ih =>
-      obtain ⟨j, d⟩ := e
-      have hjf : (j == f) = false := by
-        simp only [List.any_cons, Bool.or_eq_true, not_or] at hany
-        simpa using hany.1
-      have hes : ¬ es.any (fun fd => fd.1 == f) = true := by
-        simp only [List.any_cons, Bool.or_eq_true, not_or] at hany
-        exact hany.2
-      by_cases hk : k = j
-      · subst hk; left; simp [List.lookup]
-      · have hb : (k == j) = false := by simpa using hk
-        have := ih hes
-        simp only [List.cons_append, List.lookup, hb]
-        exact this
+  · rw [if_neg hany, lookup_insertField s _ k (not_any_key s f hany)]
+    by_cases hk : k = f
+    · right
+      refine ⟨?_, by simp [hk]⟩
+      subst hk
+      cases hl : s.lookup k with
+      | none => rfl
+      | some d => exact absurd (sc_declared_of_lookup s k d hl) hany
+    · left; simp [hk]
 
 theorem keys_ensureField (s : Schema) (f : FieldId) (h : (s.map Prod.fst).Nodup) :
     ((ensureField s f).map Prod.fst).Nodup := by
   unfold ensureField
   by_cases hany : s.any (fun fd => fd.1 == f) = true
   · rw [if_pos hany]; exact h
-  · rw [if_neg hany, List.map_append]
-    simp only [List.map_cons, List.map_nil]
-    refine List.nodup_append.mpr ⟨h, List.nodup_cons.mpr ⟨by simp, List.nodup_nil⟩, ?_⟩
-    intro a ha b hb
-    simp only [List.mem_singleton] at hb
-    subst hb
-    intro hab
-    subst hab
-    apply hany
-    obtain ⟨fd, hfd, rfl⟩ := List.mem_map.mp ha
-    exact List.any_eq_true.mpr ⟨fd, hfd, by simp⟩
+  · rw [if_neg hany]
+    exact keys_insertField _ _ h (not_any_key _ _ hany)
 
 theorem ensureField_declared (s : Schema) (f : FieldId) : declaredIn (ensureField s f) f = true := by
   unfold ensureField declaredIn
   by_cases hany : s.any (fun fd => fd.1 == f) = true
   · rw [if_pos hany]; exact hany
   · rw [if_neg hany]
-    simp [List.any_append]
+    exact List.any_eq_true.mpr ⟨(f, plainField), (mem_insertField _ _ _).mpr (Or.inl rfl), by simp⟩
 
 /-- Every field the schema declared stays declared. -/
 theorem ensureField_mem (s : Schema) (f : FieldId) (fd : FieldId × FieldDef) (h : fd ∈ s) :
@@ -1165,7 +1186,7 @@ theorem ensureField_mem (s : Schema) (f : FieldId) (fd : FieldId × FieldDef) (h
   unfold ensureField
   split
   · exact h
-  · exact List.mem_append_left _ h
+  · exact (mem_insertField _ _ _).mpr (Or.inr h)
 
 
 theorem ensureField_eq_of_lookup (s : Schema) (f : FieldId) (d : FieldDef) (h : s.lookup f = some d) :
