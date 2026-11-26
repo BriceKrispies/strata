@@ -302,7 +302,9 @@ end
 
 /-- Every element the render creates is of an allowed kind, and no allowed kind is script-capable:
 no `script`, `iframe`, `object`, `embed`, `base`, `link`, `meta`, `template`, SVG animation or `use`
-element is ever created, whatever the UI tree. -/
+element is ever created, whatever the UI tree.
+
+Verifies: FE-024 -/
 theorem script_output_emits_no_script_element (t : UINode) :
     ∀ tag, Op.createElement tag ∈ renderNode t → tag ∈ allowedTags ∧ tag ∉ forbiddenTags := by
   intro tag h
@@ -311,7 +313,9 @@ theorem script_output_emits_no_script_element (t : UINode) :
 
 /-- Every attribute the render sets is under an allowed name, never an event handler (`on*`),
 `style`, `srcdoc` or `formaction`; and a URL attribute is set only with a URL the policy accepts,
-which is never a `javascript:`, `vbscript:` or `data:` address. -/
+which is never a `javascript:`, `vbscript:` or `data:` address.
+
+Verifies: FE-025, FE-026 -/
 theorem script_output_sets_no_handler_style_or_url (t : UINode) :
     ∀ n v, Op.setAttribute n v ∈ renderNode t →
       forbiddenAttr n = false ∧ (urlAttr n = true → isScriptUrl v = false ∧ urlOk n v = true) := by
