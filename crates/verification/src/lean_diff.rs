@@ -132,6 +132,11 @@ pub enum OpKind {
     ReadRecords(Vec<String>),
     /// Read a named query: its name and its arguments (`k=v`, `page=<n>`, `cursor=<c>`).
     ReadQuery(String, Vec<String>),
+    /// Search (slice 10, second half): the object type (`*` or a number) and the words of the query, then its
+    /// arguments (`page=<n>`).
+    ReadSearch(String, Vec<String>, Vec<String>),
+    /// An aggregate of a named query: the query, the aggregate, and its arguments (`filter.<n>=<v>`, `k=v`).
+    ReadAggregate(String, String, Vec<String>),
 }
 
 pub type Scenario = Vec<Op>;
@@ -220,6 +225,22 @@ impl Op {
             ),
             OpKind::ReadQuery(name, args) => format!(
                 "read {} {} query {name}{}",
+                self.tenant,
+                self.principal.token(),
+                args.iter().map(|arg| format!(" {arg}")).collect::<String>()
+            ),
+            OpKind::ReadSearch(ty, words, args) => format!(
+                "read {} {} search {ty}{}{}",
+                self.tenant,
+                self.principal.token(),
+                words
+                    .iter()
+                    .map(|word| format!(" {word}"))
+                    .collect::<String>(),
+                args.iter().map(|arg| format!(" {arg}")).collect::<String>()
+            ),
+            OpKind::ReadAggregate(query, aggregate, args) => format!(
+                "read {} {} aggregate {query} {aggregate}{}",
                 self.tenant,
                 self.principal.token(),
                 args.iter().map(|arg| format!(" {arg}")).collect::<String>()
@@ -1342,6 +1363,127 @@ fn with_reads(seed: u64, mut ops: Scenario) -> Scenario {
     ops
 }
 
+/// The principal of a read of a tenant whose home is `home`: the system, an anonymous caller, a user the
+/// tenant lacks, or one of its members.
+fn read_caller(rng: &mut Lcg, home: u64) -> Caller {
+    match rng.below(20) {
+        0 => Caller::System,
+        1 | 2 => Caller::Anonymous,
+        3 => Caller::User(999),
+        4 => Caller::User(if home == 100 { 201 } else { 101 }),
+        5..=7 => Caller::User(home),
+        8..=10 => Caller::User(home + 1),
+        11..=15 => Caller::User(home + 2),
+        _ => Caller::User(home + 3),
+    }
+}
+
+/// A search (slice 10, second half): an object type or all of them, a query of known words, none, too many
+/// or too long, a page size (none, 0, 201, or 1 to 3).
+fn search_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(12) {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    let principal = read_caller(rng, home_of(tenant));
+    let object = match rng.below(8) {
+        0 => "*",
+        1 => "9",
+        2 => "2",
+        3 => "4",
+        _ => "1",
+    };
+    let words: Vec<String> = match rng.below(12) {
+        0 => Vec::new(),
+        1 => ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
+            .iter()
+            .map(|w| w.to_string())
+            .collect(),
+        2 => vec!["a".repeat(201)],
+        _ => (0..1 + rng.below(2))
+            .map(|_| word(rng).to_string())
+            .collect(),
+    };
+    let mut args: Vec<String> = Vec::new();
+    match rng.below(10) {
+        0 => args.push("page=0".to_string()),
+        1 => args.push("page=201".to_string()),
+        2..=5 => args.push(format!("page={}", 1 + rng.below(3))),
+        _ => {}
+    }
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::ReadSearch(object.to_string(), words, args),
+    }
+}
+
+/// An aggregate (slice 10, second half): a declared aggregate of one of the fixture's queries, or an
+/// undeclared one or query, with a filter or a parameter the query declares or does not.
+fn aggregate_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(12) {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    let principal = read_caller(rng, home_of(tenant));
+    let (query, aggregate) = match rng.below(14) {
+        0 => ("nope", "count"),
+        1 => ("items_by_rank", "nope"),
+        2 | 3 => ("items_by_rank", "bounded_count"),
+        4 | 5 => ("items_by_rank", "count_by_flag"),
+        6 => ("items_by_rank", "top_rank"),
+        7 => ("items_by_rank", "sum_rank"),
+        8 => ("items_by_rank", "min_rank"),
+        9 => ("items_by_rank", "max_rank"),
+        10 => ("items_not_elm", "count"),
+        11 => ("tickets_open", "max_note"),
+        12 => ("parts_ranked", "max"),
+        _ => ("tickets_open", "sum_votes"),
+    };
+    let mut args: Vec<String> = Vec::new();
+    match rng.below(8) {
+        0 => args.push("tag=s:x".to_string()),
+        1 => args.push("bogus=i:1".to_string()),
+        2 => args.push("filter.3=b:1".to_string()),
+        3 => args.push("filter.1=s:oak".to_string()),
+        _ => {}
+    }
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::ReadAggregate(query.to_string(), aggregate.to_string(), args),
+    }
+}
+
+/// The searches and aggregates placed among the operations of a scenario, from a stream of their own.
+fn with_queries(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7175_6572_795f_3130);
+    for _ in 0..4 {
+        rng.below(2);
+    }
+    for _ in 0..3 + rng.below(6) {
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let read = if rng.below(2) == 0 {
+            search_op(&mut rng)
+        } else {
+            aggregate_op(&mut rng)
+        };
+        ops.insert(at, read);
+    }
+    ops
+}
+
+/// The scenario of case `seed` with its searches and aggregates placed in (see `with_queries`). `generate`
+/// alone is what the fixture scenarios are made of, so the fixture does not change.
+pub fn generate_reads(seed: u64) -> Scenario {
+    with_queries(seed, generate(seed))
+}
+
 /// The seed of case `index` in a run with base seed `base`.
 pub fn case_seed(base: u64, index: usize) -> u64 {
     base.wrapping_add((index as u64).wrapping_mul(0x2545_f491_4f6c_dd1d))
@@ -1461,6 +1603,8 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::Redeem(..) => "redeem",
         OpKind::ReadRecords(_) => "read-records",
         OpKind::ReadQuery(..) => "read-query",
+        OpKind::ReadSearch(..) => "read-search",
+        OpKind::ReadAggregate(..) => "read-aggregate",
     }
 }
 
@@ -1545,7 +1689,9 @@ fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
         | OpKind::InviteRevoke(..)
         | OpKind::Redeem(..)
         | OpKind::ReadRecords(_)
-        | OpKind::ReadQuery(..) => None,
+        | OpKind::ReadQuery(..)
+        | OpKind::ReadSearch(..)
+        | OpKind::ReadAggregate(..) => None,
     }
 }
 
@@ -1738,7 +1884,7 @@ pub fn check_coverage(outcomes: &Outcomes, main_source: &str) -> Result<(), Stri
 pub fn run(lean_dir: &Path, base_seed: u64, cases: usize) -> Result<(), String> {
     build_model(lean_dir)?;
     let scenarios: Vec<Scenario> = (0..cases)
-        .map(|i| generate(case_seed(base_seed, i)))
+        .map(|i| generate_reads(case_seed(base_seed, i)))
         .collect();
     let (diffs, outcomes) = diff_batch_counted(lean_dir, &scenarios)?;
     let Some(first) = diffs.first() else {

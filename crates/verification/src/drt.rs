@@ -255,8 +255,13 @@ pub const ACCEPTED_KINDS: [&str; 22] = [
 /// The outcome kinds of reads that a run must also reach: the shapes of an accepted read (with rows and
 /// without, a next cursor, a cursor asked for) and the refusals of each kind of read. Reading a record
 /// the principal may not read and reading one that is missing print alike, so they are one outcome. The
-/// scan bound of a query (10,000 records) is not reachable: no tenant of the fixture holds that many.
-pub const READ_KINDS: [&str; 11] = [
+/// scan bound of a query (10,000 records) is not reachable: no tenant of the fixture holds that many. The
+/// search and aggregate outcomes (slice 10, second half) follow: a search with hits, without, with a next
+/// cursor, and its refusals; an aggregate ungrouped, grouped, with top rows, and its refusals. Not listed,
+/// because the fixture cannot reach them: an aggregate's unknown field (the kernel's definition checks refuse
+/// a declared field the object type lacks), its sum overflow (no fixture integer is near the limit) and its
+/// group bound (no field of the fixture has a thousand values).
+pub const READ_KINDS: [&str; 23] = [
     "read-records ok rows>0",
     "read-records ok rows=0",
     "read-records err limit_exceeded",
@@ -268,6 +273,18 @@ pub const READ_KINDS: [&str; 11] = [
     "read-query err unknown_query",
     "read-query err invalid_intent",
     "read-query err limit_exceeded",
+    "read-search ok hits>0",
+    "read-search ok hits=0",
+    "read-search ok next",
+    "read-search err invalid_intent",
+    "read-search err unknown_object",
+    "read-search err no_tenant",
+    "read-aggregate ok ungrouped",
+    "read-aggregate ok grouped",
+    "read-aggregate ok top",
+    "read-aggregate err unknown_query",
+    "read-aggregate err invalid_intent",
+    "read-aggregate err limit_exceeded scan-bound-exceeded",
 ];
 
 /// Outcome kinds the model can print that no scenario can reach, each with the reason. They are

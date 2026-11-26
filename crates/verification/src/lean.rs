@@ -99,6 +99,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
+use strata_kernel::search::{SearchRequest, SearchResult};
 use strata_kernel::types::{PageCursor, QueryId};
 use strata_kernel::*;
 
@@ -538,7 +539,7 @@ fn fixture_queries() -> Vec<SchemaChange> {
             tree: None,
         })
     };
-    vec![
+    let changes = vec![
         query(
             "items_by_rank",
             item(),
@@ -571,7 +572,198 @@ fn fixture_queries() -> Vec<SchemaChange> {
             vec![key("f02", false), key("f03", false)],
             Some(2),
         ),
-    ]
+    ];
+    changes.into_iter().map(with_aggregates).collect()
+}
+
+/// The aggregates and the declared fields of a fixture query (the model's `fixtureQueries`, slice 10, second
+/// half): what a request may filter or aggregate on, and the aggregates it declares by name. The queries
+/// with none are left as they are.
+fn with_aggregates(change: SchemaChange) -> SchemaChange {
+    let SchemaChange::DefineQuery(mut def) = change else {
+        return change;
+    };
+    let agg = |name: &str,
+               kind: AggregateKind,
+               field: Option<u64>,
+               group_by: Option<u64>,
+               n: Option<u32>,
+               descending: bool,
+               scan_bound: u32| AggregateDef {
+        id: id::<AggregateId>(name.to_string()),
+        kind,
+        field: field.map(field_id),
+        group_by: group_by.map(field_id),
+        group_by_second: None,
+        n,
+        descending,
+        scan_bound,
+    };
+    let (declared, aggregates): (Vec<u64>, Vec<AggregateDef>) = match def.id.0.as_str() {
+        "items_by_rank" => (
+            vec![2, 3],
+            vec![
+                agg(
+                    "count",
+                    AggregateKind::Count,
+                    None,
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "bounded_count",
+                    AggregateKind::Count,
+                    None,
+                    None,
+                    None,
+                    false,
+                    2,
+                ),
+                agg(
+                    "sum_rank",
+                    AggregateKind::Sum,
+                    Some(2),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "min_rank",
+                    AggregateKind::Minimum,
+                    Some(2),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "max_rank",
+                    AggregateKind::Maximum,
+                    Some(2),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "top_rank",
+                    AggregateKind::Top,
+                    Some(2),
+                    None,
+                    Some(2),
+                    true,
+                    10_000,
+                ),
+                agg(
+                    "count_by_flag",
+                    AggregateKind::Count,
+                    None,
+                    Some(3),
+                    None,
+                    false,
+                    10_000,
+                ),
+            ],
+        ),
+        "items_not_elm" => (
+            vec![2, 3],
+            vec![
+                agg(
+                    "count",
+                    AggregateKind::Count,
+                    None,
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "sum_rank",
+                    AggregateKind::Sum,
+                    Some(2),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+            ],
+        ),
+        "parts_ranked" => (
+            vec![4],
+            vec![
+                agg(
+                    "count",
+                    AggregateKind::Count,
+                    None,
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "sum",
+                    AggregateKind::Sum,
+                    Some(4),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "max",
+                    AggregateKind::Maximum,
+                    Some(4),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+            ],
+        ),
+        "tickets_open" => (
+            vec![2, 3],
+            vec![
+                agg(
+                    "count",
+                    AggregateKind::Count,
+                    None,
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "sum_votes",
+                    AggregateKind::Sum,
+                    Some(2),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+                agg(
+                    "max_note",
+                    AggregateKind::Maximum,
+                    Some(3),
+                    None,
+                    None,
+                    false,
+                    10_000,
+                ),
+            ],
+        ),
+        _ => (Vec::new(), Vec::new()),
+    };
+    if !declared.is_empty() {
+        def.declared_fields = Some(declared.iter().map(|n| field_id(*n)).collect());
+    }
+    if !aggregates.is_empty() {
+        def.aggregates = Some(aggregates);
+    }
+    SchemaChange::DefineQuery(def)
 }
 
 /// The object type of the tickets, the model's type `4` (slice 8): a state (`1`), a vote count (`2`)
@@ -1037,6 +1229,16 @@ fn initial_world() -> World {
         ]);
         // The named queries read the fields above and the policies decide who may read them.
         changes.extend(fixture_queries());
+        // The searchable fields (slice 10, second half): an item's text fields (`1`, `7`, `9` and `10`) and a
+        // ticket's state and note (`1` and `3`). A part has no text field.
+        changes.push(SchemaChange::SetSearchable {
+            object: item(),
+            fields: vec![field_id(1), field_id(7), field_id(9), field_id(10)],
+        });
+        changes.push(SchemaChange::SetSearchable {
+            object: ticket(),
+            fields: vec![field_id(1), field_id(3)],
+        });
         world = run(
             &world,
             principal(owner),
@@ -1625,6 +1827,156 @@ fn read_lines(result: &Result<ReadResult, DomainError>) -> Vec<String> {
     }
 }
 
+/// The request a search line asks, after its tenant and principal: `<type|*> <words..> [page=<n>]` (the
+/// model's `parseSearch`). The words are the tokens before a last `page=` token, joined by spaces.
+fn parse_search(tokens: &[&str]) -> Option<SearchRequest> {
+    let (ty, rest) = tokens.split_first()?;
+    let objects = match *ty {
+        "*" => Vec::new(),
+        number => vec![object_of(number.parse().ok()?)],
+    };
+    let (words, page_size): (&[&str], Option<u32>) = match rest.last() {
+        Some(last) if last.starts_with("page=") => (
+            &rest[..rest.len() - 1],
+            Some(last["page=".len()..].parse().ok()?),
+        ),
+        _ => (rest, None),
+    };
+    Some(SearchRequest {
+        query: words.join(" "),
+        objects,
+        page_size,
+        cursor: None,
+    })
+}
+
+/// The request an aggregate line asks, after its tenant and principal: `<query> <aggregate> [filter.<n>=<v>
+/// ..] [<param>=<v> ..]` (the model's `parseAggregate`). `filter.<n>` filters on field `n`; any other `k=v` is
+/// a parameter.
+fn parse_aggregate(tokens: &[&str]) -> Option<AggregateRequest> {
+    let [query, aggregate, args @ ..] = tokens else {
+        return None;
+    };
+    let mut params = BTreeMap::new();
+    let mut filter = BTreeMap::new();
+    for arg in args {
+        let (key, value) = arg.split_once('=')?;
+        match key.strip_prefix("filter.") {
+            Some(number) => {
+                filter.insert(field_id(number.parse().ok()?), parse_value(value));
+            }
+            None => {
+                params.insert(key.to_string(), parse_value(value));
+            }
+        }
+    }
+    Some(AggregateRequest {
+        query: id::<QueryId>(query.to_string()),
+        aggregate: id::<AggregateId>(aggregate.to_string()),
+        params,
+        filter,
+    })
+}
+
+/// The number the model gives an object type of the fixture (`item` is `1`, `part` `2`, `ticket` `4`).
+fn type_number(object: &ObjectTypeId) -> u64 {
+    match object.to_string().as_str() {
+        "item" => 1,
+        "part" => 2,
+        "ticket" => 4,
+        other => other
+            .strip_prefix("type")
+            .and_then(|number| number.parse().ok())
+            .unwrap_or(0),
+    }
+}
+
+/// The lines a search prints (the model's `showSearch`): `err <kind>`, or `ok`, `examined <n>`, `next <type>
+/// <id>` (`-` for none) and one `hit <type> <id> matched=<fields> <record>` line per hit, in order.
+fn search_lines(result: &Result<SearchResult, DomainError>) -> Vec<String> {
+    match result {
+        Err(error) => vec![format!("err {}", show_error(error.kind))],
+        Ok(found) => {
+            let next = match &found.next {
+                None => "-".to_string(),
+                Some(cursor) => format!("{} {}", type_number(&cursor.object), cursor.id.0),
+            };
+            let mut lines = vec![
+                "ok".to_string(),
+                format!("examined {}", found.examined),
+                format!("next {next}"),
+            ];
+            for hit in &found.hits {
+                let matched: Vec<String> = hit
+                    .matched
+                    .iter()
+                    .map(|field| field_number(field).to_string())
+                    .collect();
+                lines.push(format!(
+                    "hit {} {} matched={} {}",
+                    type_number(&hit.object),
+                    hit.record.id.0,
+                    matched.join(","),
+                    record_text(&hit.record)
+                ));
+            }
+            lines
+        }
+    }
+}
+
+/// The error line of an aggregate: a limit names its rule (`scan-bound-exceeded`, `sum-overflow` or
+/// `group-bound-exceeded`), and an unknown field is named as such (not as the write's `invalid`).
+fn aggregate_error_line(error: &DomainError) -> String {
+    match error.kind {
+        ErrorKind::LimitExceeded => match error.evidence.first() {
+            Some(check) => format!("err limit_exceeded {}", check.rule),
+            None => "err limit_exceeded".to_string(),
+        },
+        ErrorKind::UnknownField => "err unknown_field".to_string(),
+        kind => format!("err {}", show_error(kind)),
+    }
+}
+
+/// A top row's id and value, as the model prints them: the value as `show_value` writes a value.
+fn top_row_text(row: &ValueMap) -> Option<(u64, String)> {
+    let json: serde_json::Value = serde_json::from_str(row.as_str()).ok()?;
+    let id = json.get("id")?.as_u64()?;
+    let value = match json.get("value")? {
+        serde_json::Value::Null => "n".to_string(),
+        serde_json::Value::Bool(flag) => show_value(&Value::Bool(*flag)),
+        serde_json::Value::Number(number) => show_value(&Value::Int(number.as_i64()?)),
+        serde_json::Value::String(text) => show_value(&Value::Str(text.clone())),
+        _ => return None,
+    };
+    Some((id, value))
+}
+
+/// The lines an aggregate prints (the model's `showAgg`): `err <kind>`, or `ok`, `scanned <n>`, and for each
+/// group `group <key|-> <value|->` followed by its `top <id> <value>` rows.
+fn aggregate_lines(result: &Result<AggregateResult, DomainError>) -> Vec<String> {
+    match result {
+        Err(error) => vec![aggregate_error_line(error)],
+        Ok(found) => {
+            let shown = |value: Option<&Value>| value.map_or_else(|| "-".to_string(), show_value);
+            let mut lines = vec!["ok".to_string(), format!("scanned {}", found.scanned)];
+            for group in &found.groups {
+                lines.push(format!(
+                    "group {} {}",
+                    shown(group.key.as_ref()),
+                    shown(group.value.as_ref())
+                ));
+                for row in &group.rows {
+                    if let Some((id, value)) = top_row_text(row) {
+                        lines.push(format!("top {id} {value}"));
+                    }
+                }
+            }
+            lines
+        }
+    }
+}
+
 /// Run a scenario file through the Rust kernel and print what the Lean program prints.
 pub fn kernel_output(scenarios: &str) -> String {
     let initial = initial_world();
@@ -1816,9 +2168,21 @@ pub fn kernel_output(scenarios: &str) -> String {
                     hop: None,
                     agent: None,
                 };
-                match parse_read(rest) {
-                    Some(request) => out.extend(read_lines(&world.read(&request, &ctx))),
-                    None => out.push(format!("unparsed {line}")),
+                match rest {
+                    ["search", request @ ..] => match parse_search(request) {
+                        Some(request) => out.extend(search_lines(&world.search(&request, &ctx))),
+                        None => out.push(format!("unparsed {line}")),
+                    },
+                    ["aggregate", request @ ..] => match parse_aggregate(request) {
+                        Some(request) => {
+                            out.extend(aggregate_lines(&world.aggregate(&request, &ctx)))
+                        }
+                        None => out.push(format!("unparsed {line}")),
+                    },
+                    _ => match parse_read(rest) {
+                        Some(request) => out.extend(read_lines(&world.read(&request, &ctx))),
+                        None => out.push(format!("unparsed {line}")),
+                    },
                 }
             }
             _ => out.push(format!("unparsed {line}")),
@@ -1964,7 +2328,18 @@ pub fn parse_audit(output: &str) -> Vec<Checked> {
 /// a first line with the lines that follow it up to the next first line; the state lines at the end
 /// are not an operation's. The `k`th group is the outcome of the `k`th operation.
 pub fn op_outcomes<S: AsRef<str>>(output: &[S]) -> Vec<&[S]> {
-    const CONTINUATION: [&str; 5] = ["revision ", "event ", "effect ", "next ", "row "];
+    const CONTINUATION: [&str; 10] = [
+        "revision ",
+        "event ",
+        "effect ",
+        "next ",
+        "row ",
+        "examined ",
+        "hit ",
+        "scanned ",
+        "group ",
+        "top ",
+    ];
     let end = output
         .iter()
         .position(|line| line.as_ref() == "state")
@@ -1999,6 +2374,8 @@ pub fn read_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String> {
         return Vec::new();
     }
     let name = match words.nth(2) {
+        Some("search") => return search_shapes(group),
+        Some("aggregate") => return aggregate_shapes(group),
         Some("records") => "read-records",
         Some("query") => "read-query",
         _ => return Vec::new(),
@@ -2020,6 +2397,48 @@ pub fn read_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String> {
         }
         if rendered.contains(" cursor=") {
             shapes.push(format!("{name} ok cursor"));
+        }
+    }
+    shapes
+}
+
+/// The shapes of a search answer as the coverage counts them: its first line, and for an accepted search
+/// whether it holds hits and whether it names a next cursor.
+fn search_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
+    let first = group.first().map_or("", |line| line.as_ref());
+    let mut shapes = vec![format!("read-search {first}")];
+    if first == "ok" {
+        let hits = group.iter().any(|line| line.as_ref().starts_with("hit "));
+        shapes.push(format!(
+            "read-search ok hits{}",
+            if hits { ">0" } else { "=0" }
+        ));
+        if group
+            .iter()
+            .any(|line| line.as_ref().starts_with("next ") && line.as_ref() != "next -")
+        {
+            shapes.push("read-search ok next".to_string());
+        }
+    }
+    shapes
+}
+
+/// The shapes of an aggregate answer as the coverage counts them: its first line, and for an accepted one
+/// whether it is grouped (its groups have keys) and whether it lists top rows.
+fn aggregate_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
+    let first = group.first().map_or("", |line| line.as_ref());
+    let mut shapes = vec![format!("read-aggregate {first}")];
+    if first == "ok" {
+        let grouped = group.iter().any(|line| {
+            let line = line.as_ref();
+            line.starts_with("group ") && !line.starts_with("group - ")
+        });
+        shapes.push(format!(
+            "read-aggregate ok {}",
+            if grouped { "grouped" } else { "ungrouped" }
+        ));
+        if group.iter().any(|line| line.as_ref().starts_with("top ")) {
+            shapes.push("read-aggregate ok top".to_string());
         }
     }
     shapes
