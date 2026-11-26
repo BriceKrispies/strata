@@ -51,6 +51,10 @@ structure ITenant where
   /-- The triggers and automations the schema defines (slice 15), held as the spec holds them. -/
   triggers : List (Nat × TriggerDef) := []
   automations : List (Nat × AutomationDef) := []
+  /-- The segments, their memberships and their log (slice 16), held as the spec holds them. -/
+  segments : List (SegmentId × SegmentDef) := []
+  memberships : List Membership := []
+  segLog : List SegEvent := []
   /-- The revision, the event sequence and the schema version, as the spec holds them (slice 9). -/
   revision : Nat := 0
   eventSeq : Nat := 0
@@ -81,7 +85,8 @@ def ITenant.abs (t : ITenant) : Tenant :=
     schemaVersion := t.schemaVersion, settingDefs := t.settingDefs, overrides := t.overrides,
     settingRevs := t.settingRevs, ledgerDecls := t.ledgerDecls, ledger := t.ledger,
     ledgerPolicies := t.ledgerPolicies, operations := t.operations, triggers := t.triggers,
-    automations := t.automations }
+    automations := t.automations, segments := t.segments, memberships := t.memberships,
+    segLog := t.segLog }
 
 /-- The part of an implementation tenant the membership intents see. -/
 def ITenant.mt (t : ITenant) : MTenant :=

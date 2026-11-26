@@ -1,9 +1,10 @@
 /-
-The executable transitions (slices 9 and 15): the implementations of `Strata.transition` on both executable stages.
+The executable transitions (slices 9, 15 and 16): the implementations of `Strata.transition` on both executable stages.
 
 Each is its stage's `stepI` or `stepX` (the decision of the intent on the stored tenant), and then the spec's `afterStep`
-on the abstraction of the decided tenant: the events of the step, the automation suspensions and the trigger effects
-are the spec's, and the stored tenant takes the counters, the schema version and the automations the spec gives it.
+on the abstraction of the decided tenant, and then the spec's segment pass (`segAfterRecords`): the events of the step, the
+automation suspensions, the trigger effects and the segment log are the spec's, and the stored tenant takes the counters,
+the schema version, the automations and the segment rows the spec gives it.
 The refinement theorems carry the step to the transition: the world, the events and the effects are the spec's.
 -/
 
@@ -13,11 +14,12 @@ import Strata.Impl.XWorld
 namespace Strata
 namespace Impl
 
-/-- The spec's tenant after the decision (`afterStep`), as the stored tenant of stage 1: the decided tenant with the
-    counters, the schema version and the automations that the spec's tenant holds. -/
+/-- The spec's tenant after the decision (`afterStep`) and the segment pass, as the stored tenant of stage 1: the decided
+    tenant with the counters, the schema version, the automations and the segment rows that the spec's tenant holds. -/
 def ITenant.committed (t' : ITenant) (tf : Tenant) : ITenant :=
   { t' with revision := tf.revision, eventSeq := tf.eventSeq, schemaVersion := tf.schemaVersion,
-            automations := tf.automations }
+            automations := tf.automations, segments := tf.segments, memberships := tf.memberships,
+            segLog := tf.segLog }
 
 /-- The spec's `afterStep` keeps every field of the decided tenant except its automations, its counters and its schema
     version, which the suspensions and the commit may change. -/
@@ -48,15 +50,27 @@ theorem afterStep_shape (t t' : Tenant) (p : Principal) (i : Intent) (hop : Nat)
   simp only [ha]
   rfl
 
-/-- The stored tenant of stage 1 read through the abstraction is the spec's tenant after the decision. -/
+/-- The stored tenant of stage 1 read through the abstraction is the spec's tenant after the decision and the segment pass. -/
 theorem ITenant.committed_abs (t' : ITenant) (tf : Tenant)
-    (h : ∃ a rv es sv, tf = { t'.abs with automations := a, revision := rv, eventSeq := es, schemaVersion := sv }) :
+    (h : ∃ a rv es sv ms l, tf = { t'.abs with automations := a, revision := rv, eventSeq := es, schemaVersion := sv, memberships := ms, segLog := l }) :
     (ITenant.committed t' tf).abs = tf := by
-  obtain ⟨a, rv, es, sv, rfl⟩ := h
+  obtain ⟨a, rv, es, sv, ms, l, rfl⟩ := h
   rfl
 
-/-- The stage 1 transition: the decision of the intent, then the spec's `afterStep` on the abstraction of the decided
-    tenant. A creation of a tenant has no automations to decide on and emits its events only. -/
+/-- The accepted step of the spec, on the abstraction of the decided tenant, has the counters, the automations and the
+    segment rows its shape gives (slices 15 and 16). -/
+theorem acceptedT_shape (t t' : Tenant) (p : Principal) (i : Intent) (hop : Nat) :
+    ∃ a rv es sv ms l, (acceptedT t t' p i hop).1 =
+      { t' with automations := a, revision := rv, eventSeq := es, schemaVersion := sv, memberships := ms, segLog := l } := by
+  obtain ⟨a, rv, es, sv, hsh⟩ := afterStep_shape t t' p i hop
+  obtain ⟨ms, l, hseg⟩ := segAfterRecords_shape (afterStep t t' p i hop).1 (afterStep t t' p i hop).2.1 p hop
+  refine ⟨a, rv, es, sv, ms, l, ?_⟩
+  dsimp only [acceptedT]
+  rw [hseg, hsh]
+
+/-- The stage 1 transition: the decision of the intent, then the spec's accepted step (`acceptedT`: `afterStep` and the
+    segment pass) on the abstraction of the decided tenant. A creation of a tenant has no automations and no segments to
+    decide on and emits its events only. -/
 def transitionI (w : IWorld) (i : Intent) (c : Ctx) :
     Except Err (IWorld × List DomainEvent × List Effect) :=
   match stepI w i c with
@@ -64,8 +78,8 @@ def transitionI (w : IWorld) (i : Intent) (c : Ctx) :
   | .ok w' =>
     match w c.tenant, w' c.tenant with
     | some t, some t' =>
-      let (tf, evs, effs) := afterStep t.abs t'.abs c.principal i c.hop
-      .ok (fun x => if x = c.tenant then some (ITenant.committed t' tf) else w' x, evs, effs)
+      let r := acceptedT t.abs t'.abs c.principal i c.hop
+      .ok (fun x => if x = c.tenant then some (ITenant.committed t' r.1) else w' x, r.2.1, r.2.2)
     | _, _ =>
       let evs := stepEvents (absW w) (absW w') c i
       .ok (w', evs, evs.map (fun e => .publish e.seq))
@@ -103,12 +117,13 @@ theorem transitionI_refines (w : IWorld) (i : Intent) (c : Ctx) (hw : w.Inv) :
         by_cases hx : x = c.tenant <;> simp [commitWorld, hx, e1, e2]
       simp [e1, e2, hcw]
     · simp only [absW, hw1, hw2, Option.map_some, Except.map]
-      rcases hR : afterStep t.abs t'.abs c.principal i c.hop with ⟨tf, evs, effs⟩
-      obtain ⟨a, rv, es, sv, hsh⟩ := afterStep_shape t.abs t'.abs c.principal i c.hop
-      rw [hR] at hsh
-      have hcom : (ITenant.committed t' tf).abs = tf := ITenant.committed_abs t' tf ⟨a, rv, es, sv, hsh⟩
-      have hW : absW (fun x => if x = c.tenant then some (ITenant.committed t' tf) else w' x) =
-          fun x => if x = c.tenant then some tf else absW w' x := by
+      obtain ⟨a, rv, es, sv, ms, l, hsh⟩ := acceptedT_shape t.abs t'.abs c.principal i c.hop
+      have hcom : (ITenant.committed t' (acceptedT t.abs t'.abs c.principal i c.hop).1).abs =
+          (acceptedT t.abs t'.abs c.principal i c.hop).1 :=
+        ITenant.committed_abs t' _ ⟨a, rv, es, sv, ms, l, hsh⟩
+      have hW : absW (fun x => if x = c.tenant then
+            some (ITenant.committed t' (acceptedT t.abs t'.abs c.principal i c.hop).1) else w' x) =
+          fun x => if x = c.tenant then some (acceptedT t.abs t'.abs c.principal i c.hop).1 else absW w' x := by
         funext x
         by_cases hx : x = c.tenant
         · subst hx; simp [absW, hcom]
@@ -126,8 +141,8 @@ def transitionX (w : XWorld) (i : Intent) (c : Ctx) :
   | .ok w' =>
     match w c.tenant, w' c.tenant with
     | some t, some t' =>
-      let (tf, evs, effs) := afterStep t.abs t'.abs c.principal i c.hop
-      .ok (fun x => if x = c.tenant then some (XTenant.committed t' tf) else w' x, evs, effs)
+      let r := acceptedT t.abs t'.abs c.principal i c.hop
+      .ok (fun x => if x = c.tenant then some (XTenant.committed t' r.1) else w' x, r.2.1, r.2.2)
     | _, _ =>
       let evs := stepEvents (absX w) (absX w') c i
       .ok (w', evs, evs.map (fun e => .publish e.seq))
@@ -165,13 +180,13 @@ theorem transitionX_refines (w : XWorld) (i : Intent) (c : Ctx) (hw : w.Ok) :
         by_cases hx : x = c.tenant <;> simp [commitWorld, hx, e1, e2]
       simp [e1, e2, hcw]
     · simp only [absX, hw1, hw2, Option.map_some, Except.map]
-      rcases hR : afterStep t.abs t'.abs c.principal i c.hop with ⟨tf, evs, effs⟩
-      obtain ⟨a, rv, es, sv, hsh⟩ := afterStep_shape t.abs t'.abs c.principal i c.hop
-      rw [hR] at hsh
-      have hcom : (XTenant.committed t' tf).abs = tf :=
-        ITenant.committed_abs t'.core tf ⟨a, rv, es, sv, hsh⟩
-      have hW : absX (fun x => if x = c.tenant then some (XTenant.committed t' tf) else w' x) =
-          fun x => if x = c.tenant then some tf else absX w' x := by
+      obtain ⟨a, rv, es, sv, ms, l, hsh⟩ := acceptedT_shape t.abs t'.abs c.principal i c.hop
+      have hcom : (XTenant.committed t' (acceptedT t.abs t'.abs c.principal i c.hop).1).abs =
+          (acceptedT t.abs t'.abs c.principal i c.hop).1 :=
+        ITenant.committed_abs t'.core _ ⟨a, rv, es, sv, ms, l, hsh⟩
+      have hW : absX (fun x => if x = c.tenant then
+            some (XTenant.committed t' (acceptedT t.abs t'.abs c.principal i c.hop).1) else w' x) =
+          fun x => if x = c.tenant then some (acceptedT t.abs t'.abs c.principal i c.hop).1 else absX w' x := by
         funext x
         by_cases hx : x = c.tenant
         · subst hx; simp [absX, hcom]

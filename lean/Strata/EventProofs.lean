@@ -35,6 +35,25 @@ theorem afterStep_take (t t₁ : Tenant) (p : Principal) (i : Intent) (hop : Nat
   dsimp only
   exact List.take_left' (by simp)
 
+/-- The segment pass keeps the revision of the tenant it is given (slice 16). -/
+theorem segAfterRecords_revision (t : Tenant) (evs : List DomainEvent) (p : Principal) (hop : Nat) :
+    (segAfterRecords t evs p hop).1.revision = t.revision := by
+  obtain ⟨ms, l, h⟩ := segAfterRecords_shape t evs p hop
+  rw [h]
+
+/-- The publish effects of an accepted step lead its effects, the segment effects after them (slice 16). -/
+theorem acceptedT_take (t t' : Tenant) (p : Principal) (i : Intent) (hop : Nat) :
+    List.take (acceptedT t t' p i hop).2.1.length (acceptedT t t' p i hop).2.2 =
+      (acceptedT t t' p i hop).2.1.map (fun e => Effect.publish e.seq) := by
+  have h := afterStep_take t t' p i hop
+  unfold acceptedT
+  dsimp only
+  rw [List.take_append_of_le_length]
+  · exact h
+  · have hl := congrArg List.length h
+    simp only [List.length_take, List.length_map] at hl
+    omega
+
 /-- An accepted transition is a step: its world is the committed world, its events the events of the step, its
     effects one `Publish` per event (followed by the trigger effects). -/
 theorem transition_ok {w : World} {i : Intent} {c : Ctx} {tr : Transition}
@@ -51,7 +70,7 @@ theorem transition_ok {w : World} {i : Intent} {c : Ctx} {tr : Transition}
     simp only [hs] at h
     split at h
     · cases h
-      exact afterStep_take _ _ _ _ _
+      exact acceptedT_take _ _ _ _ _
     · cases h
       exact List.take_of_length_le (by simp)
 
@@ -82,6 +101,13 @@ theorem afterStep_revision (t t₁ : Tenant) (p : Principal) (i : Intent) (hop :
   unfold afterStep
   simp [commitT]
 
+/-- The accepted step of an existing tenant leaves it at the next revision (slice 16). -/
+theorem acceptedT_revision (t t' : Tenant) (p : Principal) (i : Intent) (hop : Nat) :
+    (acceptedT t t' p i hop).1.revision = t.revision + 1 := by
+  dsimp only [acceptedT]
+  rw [segAfterRecords_revision]
+  exact afterStep_revision t t' p i hop
+
 /-- An accepted step against a tenant that exists: the step of `stepTenant` on it, and the events of the intent,
     numbered after the tenant's event sequence and committed at the next revision, followed by the suspensions the
     intent makes (`suspensionsOf`). The committed tenant has the next revision. -/
@@ -107,8 +133,8 @@ theorem transition_existing {w : World} {i : Intent} {c : Ctx} {tr : Transition}
         cases hnone
     rw [hw', ht] at h
     cases h
-    refine ⟨t₁, hst, ⟨_, by simp, afterStep_revision t t₁ c.principal i c.hop⟩, ?_⟩
-    simp only [afterStep_events]
+    refine ⟨t₁, hst, ⟨_, by simp, acceptedT_revision t t₁ c.principal i c.hop⟩, ?_⟩
+    exact afterStep_events t t₁ c.principal i c.hop
 
 /-- The numbering of a list of events: the `k`-th is `s + k`, so the sequence numbers are consecutive. -/
 theorem numberEvents_map_seq (s r : Nat) (p : Principal) :

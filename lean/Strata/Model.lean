@@ -15,6 +15,7 @@ import Strata.LedgerModel
 import Strata.Operations
 import Strata.Events
 import Strata.Triggers
+import Strata.Segments
 
 namespace Strata
 
@@ -497,6 +498,14 @@ def afterStep (t t' : Tenant) (p : Principal) (i : Intent) (hop : Nat) :
   let evs := numberEvents (t.eventSeq + 1) tf.revision p 0 bodies
   (tf, evs, evs.map (fun e => .publish e.seq) ++ triggerEffects tf hop evs)
 
+/-- The accepted step of an existing tenant: the decision's tenant committed, its events, and its effects (the step's
+    own, then the trigger effects of its segment events). The segment pass (slice 16) is `segAfterRecords`: the memberships
+    of the persons the step's records changed, with their entry and exit events in the segment log. -/
+def acceptedT (t t' : Tenant) (p : Principal) (i : Intent) (hop : Nat) : Tenant × List DomainEvent × List Effect :=
+  let a := afterStep t t' p i hop
+  let seg := segAfterRecords a.1 a.2.1 p hop
+  (seg.1, a.2.1, a.2.2 ++ seg.2)
+
 /-- The transition of one intent (slice 9): the world after it, which is `step`'s with the tenant committed
     (`commitWorld`), the domain events it emits in order, and one `Publish` effect per event. A refused step
     has no transition, so it emits nothing and the revision stays where it was. `step` is the projection of
@@ -507,8 +516,8 @@ def transition (w : World) (i : Intent) (c : Ctx) : Except Err Transition :=
   | .ok w' =>
     match w c.tenant, w' c.tenant with
     | some t, some t' =>
-      let (tf, evs, effs) := afterStep t t' c.principal i c.hop
-      .ok { world := fun x => if x = c.tenant then some tf else w' x, events := evs, effects := effs }
+      let r := acceptedT t t' c.principal i c.hop
+      .ok { world := fun x => if x = c.tenant then some r.1 else w' x, events := r.2.1, effects := r.2.2 }
     | _, _ =>
       let w'' := commitWorld w w' c i
       let evs := stepEvents w w'' c i

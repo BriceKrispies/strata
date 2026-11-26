@@ -1,4 +1,6 @@
 import Strata.Model
+import Strata.Segments
+import Strata.SegmentsStep
 import Strata.SchemaChange
 import Strata.SchemaChangeProofs
 import Strata.Members
@@ -79,3 +81,4 @@ import Strata.Impl.Aggregates
 import Strata.EventProofs
 import Strata.Fixture
 import Strata.Bench
+import Strata.Impl.SegTransition

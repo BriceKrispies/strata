@@ -111,6 +111,10 @@ structure Header where
       decision reads, so the header holds the automations; the triggers are carried with them. -/
   triggers : List (Nat × TriggerDef) := []
   automations : List (Nat × AutomationDef) := []
+  /-- The segments, their memberships and their log (slice 16): the segment pass reads them after a step. -/
+  segments : List (SegmentId × SegmentDef) := []
+  memberships : List Membership := []
+  segLog : List SegEvent := []
 
 def TypeHead.ofObj (o : ObjType) : TypeHead :=
   { schema := o.schema, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows }
@@ -126,7 +130,8 @@ def _root_.Strata.Tenant.header (t : Tenant) : Header :=
     teams := t.teams, invitations := t.invitations, schemaVersion := t.schemaVersion,
     settingDefs := t.settingDefs, overrides := t.overrides, settingRevs := t.settingRevs,
     ledgerDecls := t.ledgerDecls, ledger := t.ledger, ledgerPolicies := t.ledgerPolicies,
-    operations := t.operations, triggers := t.triggers, automations := t.automations }
+    operations := t.operations, triggers := t.triggers, automations := t.automations,
+    segments := t.segments, memberships := t.memberships, segLog := t.segLog }
 
 /-- A header as a tenant with no records, so the model's permission functions apply to it. They
     read neither records nor the counter. -/
@@ -137,7 +142,7 @@ def Header.asTenant (h : Header) : Tenant :=
     schemaVersion := h.schemaVersion, settingDefs := h.settingDefs, overrides := h.overrides,
     settingRevs := h.settingRevs, ledgerDecls := h.ledgerDecls, ledger := h.ledger,
     ledgerPolicies := h.ledgerPolicies, operations := h.operations, triggers := h.triggers,
-    automations := h.automations }
+    automations := h.automations, segments := h.segments, memberships := h.memberships, segLog := h.segLog }
 
 /-- The records of each object type of a tenant, in the tenant's type order. -/
 def _root_.Strata.Tenant.tables (t : Tenant) : List (TypeId × Records) :=

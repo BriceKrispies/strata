@@ -1020,6 +1020,10 @@ inductive TriggerOn where
   | recordUpdated (ty : TypeId) (transition : Option String)
   | recordDeleted (ty : TypeId)
   | ledgerPosted (unit : Nat)
+  /-- An entry into the segment (slice 16): matched against the segment log, not the kernel's event sequence. -/
+  | segmentEntered (seg : Nat)
+  /-- An exit from the segment (slice 16). -/
+  | segmentExited (seg : Nat)
   deriving DecidableEq, Repr
 
 /-- A trigger (the kernel's `TriggerDef`): its id, its event, its condition (none for every event), the automation it
@@ -1051,6 +1055,63 @@ structure AutomationDef where
   definedBy : Option PrincipalId := none
   suspendedFor : Option RoleId := none
   state : AutoState := .active
+  deriving Repr
+
+/-! ## Segments (slice 16)
+
+A segment is a named set of people defined by a predicate over the record that stands for each person: the subject
+record, of the subject type, whose principal field holds the person's string `p<n>`. Its definition, its memberships and
+its log of entries and exits are held in the tenant, as the kernel's storage block holds them (`segments.rs`). The
+decisions are in `Strata/Segments.lean`. -/
+
+/-- A segment's id (the kernel's `SegmentId`; a number in the model). -/
+abbrev SegmentId := Nat
+
+/-- A segment as defined (the kernel's `Segment`, without its refresh interval, which only a time-dependent predicate has,
+    and without its visibility to members, which only reads consult). `version` is raised by every change of the predicate. -/
+structure SegmentDef where
+  id : SegmentId
+  name : String
+  subject : TypeId
+  predicate : Expr
+  version : Nat
+  principalField : FieldId
+  definedBy : Option PrincipalId := none
+  deriving Repr
+
+/-- One membership (the kernel's `Membership`): the segment, the person, and the version that decided it. The time of entry
+    is not modelled. -/
+structure Membership where
+  segment : SegmentId
+  person : PrincipalId
+  version : Nat
+  deriving DecidableEq, Repr
+
+/-- Whether a person entered or left a segment (the kernel's `SegmentDirection`). -/
+inductive SegDirection where
+  | entered
+  | exited
+  deriving DecidableEq, Repr
+
+/-- Why a segment's memberships were decided (the kernel's `SegmentReason`): a change of a record, or the rebuild that a
+    changed predicate starts. -/
+inductive SegReason where
+  | change
+  | predicateChange
+  deriving DecidableEq, Repr
+
+/-- An entry or exit event of the segment log (the kernel's `SegmentEvent`): the segment, the person, the direction, the
+    reason, the version that decided it, the revision of the change, the hop (the hop of the change plus one) and the
+    principal the change is made by. Its time and correlation are not modelled. -/
+structure SegEvent where
+  segment : SegmentId
+  person : PrincipalId
+  direction : SegDirection
+  reason : SegReason
+  version : Nat
+  revision : Nat
+  hop : Nat
+  principal : Principal
   deriving Repr
 
 /-- Everything one tenant owns. -/
@@ -1100,6 +1161,12 @@ structure Tenant where
   triggers : List (Nat × TriggerDef) := []
   /-- The automations, by id (slice 15). -/
   automations : List (Nat × AutomationDef) := []
+  /-- The segments, by id (slice 16). -/
+  segments : List (SegmentId × SegmentDef) := []
+  /-- The memberships, at most one for each segment and person (slice 16). -/
+  memberships : List Membership := []
+  /-- The entry and exit events, oldest first; the position of an event is its index plus one (slice 16). -/
+  segLog : List SegEvent := []
   deriving Repr
 
 /-- The part of a tenant the membership intents see. -/

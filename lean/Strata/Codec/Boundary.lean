@@ -1268,8 +1268,7 @@ def decObjType : Dec ObjType :=
   decIso (decPair (decList decSchemaEntry)
       (decPair (decList (decList decNat))
         (decPair (decList decRecordEntry) (decPair (decList decExpr) (decList decWorkflow)))))
-    (fun p => { schema := p.1, uniques := p.2.1, records := p.2.2.1, constraints := p.2.2.2.1,
-                workflows := p.2.2.2.2 })
+    (fun p => { schema := p.1, uniques := p.2.1, records := p.2.2.1, constraints := p.2.2.2.1, workflows := p.2.2.2.2 })
 
 theorem lawful_objType : Lawful encObjType decObjType :=
   lawful_iso (lawful_pair (lawful_list lawful_schemaEntry)
@@ -1317,8 +1316,7 @@ def encInvitationDef : InvitationDef → Bytes :=
 def decInvitationDef : Dec InvitationDef :=
   decIso (decPair decStr (decPair (decList decNat) (decPair decNat (decPair decNat
     (decPair (decOpt decNat) (decOpt decNat))))))
-    (fun p => { address := p.1, roles := p.2.1, createdBy := p.2.2.1, expiresAt := p.2.2.2.1,
-                redeemedBy := p.2.2.2.2.1, revokedBy := p.2.2.2.2.2 })
+    (fun p => { address := p.1, roles := p.2.1, createdBy := p.2.2.1, expiresAt := p.2.2.2.1, redeemedBy := p.2.2.2.2.1, revokedBy := p.2.2.2.2.2 })
 
 theorem lawful_invitationDef : Lawful encInvitationDef decInvitationDef :=
   lawful_iso (lawful_pair lawful_str (lawful_pair (lawful_list lawful_nat)
@@ -2068,8 +2066,7 @@ def encOpDef : OpDef → Bytes :=
 def decOpDef : Dec OpDef :=
   decIso (decPair decStr (decPair (decList decOpInput) (decPair decBool (decPair (decList decNat)
     (decPair (decOpt (decPair decNat decStr)) (decPair (decList decOpCond) (decList decOpStep)))))))
-    (fun p => { id := p.1, inputs := p.2.1, signedIn := p.2.2.1, roles := p.2.2.2.1,
-                subject := p.2.2.2.2.1, conditions := p.2.2.2.2.2.1, steps := p.2.2.2.2.2.2 })
+    (fun p => { id := p.1, inputs := p.2.1, signedIn := p.2.2.1, roles := p.2.2.2.1, subject := p.2.2.2.2.1, conditions := p.2.2.2.2.2.1, steps := p.2.2.2.2.2.2 })
 
 theorem lawful_opDef : Lawful encOpDef decOpDef :=
   lawful_iso (lawful_pair lawful_str (lawful_pair (lawful_list lawful_opInput) (lawful_pair lawful_bool
@@ -2095,6 +2092,8 @@ def encTriggerOn : TriggerOn → Bytes
   | .recordUpdated ty tr => tag 1 :: encPair encNat (encOpt encStr) (ty, tr)
   | .recordDeleted ty => tag 2 :: encNat ty
   | .ledgerPosted u => tag 3 :: encNat u
+  | .segmentEntered s => tag 4 :: encNat s
+  | .segmentExited s => tag 5 :: encNat s
 
 def decTriggerOn : Dec TriggerOn := fun bs =>
   match bs with
@@ -2105,6 +2104,8 @@ def decTriggerOn : Dec TriggerOn := fun bs =>
     | 1 => decIso (decPair decNat (decOpt decStr)) (fun p => TriggerOn.recordUpdated p.1 p.2) r
     | 2 => decIso decNat (fun ty => TriggerOn.recordDeleted ty) r
     | 3 => decIso decNat (fun u => TriggerOn.ledgerPosted u) r
+    | 4 => decIso decNat (fun s => TriggerOn.segmentEntered s) r
+    | 5 => decIso decNat (fun s => TriggerOn.segmentExited s) r
     | _ => none
 
 theorem lawful_triggerOn : Lawful encTriggerOn decTriggerOn := by
@@ -2117,12 +2118,14 @@ theorem lawful_triggerOn : Lawful encTriggerOn decTriggerOn := by
       simp [encTriggerOn, decTriggerOn, decIso, tag, hp]
     | recordDeleted ty => simp [encTriggerOn, decTriggerOn, decIso, tag, lawful_nat.1 ty rest]
     | ledgerPosted u => simp [encTriggerOn, decTriggerOn, decIso, tag, lawful_nat.1 u rest]
+    | segmentEntered s => simp [encTriggerOn, decTriggerOn, decIso, tag, lawful_nat.1 s rest]
+    | segmentExited s => simp [encTriggerOn, decTriggerOn, decIso, tag, lawful_nat.1 s rest]
   · intro bs x rest h
     cases bs with
     | nil => simp [decTriggerOn] at h
     | cons b r =>
-      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ 4 ≤ b.toNat by omega)
-        with hk | hk | hk | hk | hk
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨ b.toNat = 5 ∨ 6 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk
       · simp only [decTriggerOn, hk] at h
         obtain ⟨y, rfl, hy⟩ := dec_ctor_inv lawful_nat _ r x rest h
         simp [encTriggerOn, byte_eq_tag b 0 hk, ← hy]
@@ -2136,6 +2139,12 @@ theorem lawful_triggerOn : Lawful encTriggerOn decTriggerOn := by
       · simp only [decTriggerOn, hk] at h
         obtain ⟨y, rfl, hy⟩ := dec_ctor_inv lawful_nat _ r x rest h
         simp [encTriggerOn, byte_eq_tag b 3 hk, ← hy]
+      · simp only [decTriggerOn, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv lawful_nat _ r x rest h
+        simp [encTriggerOn, byte_eq_tag b 4 hk, ← hy]
+      · simp only [decTriggerOn, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv lawful_nat _ r x rest h
+        simp [encTriggerOn, byte_eq_tag b 5 hk, ← hy]
       · simp only [decTriggerOn] at h
         repeat' split at h
         all_goals first | omega | simp at h
@@ -2211,6 +2220,132 @@ def decAutomationEntry : Dec (Nat × AutomationDef) := decPair decNat decAutomat
 theorem lawful_automationEntry : Lawful encAutomationEntry decAutomationEntry :=
   lawful_pair lawful_nat lawful_automationDef
 
+/-! ## Segments (slice 16)
+
+A segment's definition is its id, name, subject type, predicate, version, principal field and definer (a natural, or none
+for the system). A membership is its segment, person and version. A segment event is its segment, person, direction (tag
+`0` entered, `1` exited), reason (tag `0` change, `1` predicate change), version, revision, hop and principal. The tenant
+holds the segments as entries of the id and the definition, then the memberships, then the log, after its other fields. -/
+
+def encSegDef : SegmentDef → Bytes :=
+  encIso (encPair encNat (encPair encStr (encPair encNat (encPair encExpr (encPair encNat (encPair encNat
+    (encOpt encNat)))))))
+    (fun d => (d.id, d.name, d.subject, d.predicate, d.version, d.principalField, d.definedBy))
+
+def decSegDef : Dec SegmentDef :=
+  decIso (decPair decNat (decPair decStr (decPair decNat (decPair decExpr (decPair decNat (decPair decNat
+    (decOpt decNat))))))) (fun p => { id := p.1, name := p.2.1, subject := p.2.2.1, predicate := p.2.2.2.1, version := p.2.2.2.2.1, principalField := p.2.2.2.2.2.1, definedBy := p.2.2.2.2.2.2 })
+
+theorem lawful_segDef : Lawful encSegDef decSegDef :=
+  lawful_iso (lawful_pair lawful_nat (lawful_pair lawful_str (lawful_pair lawful_nat (lawful_pair lawful_expr
+    (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_opt lawful_nat))))))) (fun _ => rfl) (fun _ => rfl)
+
+def encSegEntry : Nat × SegmentDef → Bytes := encPair encNat encSegDef
+
+def decSegEntry : Dec (Nat × SegmentDef) := decPair decNat decSegDef
+
+theorem lawful_segEntry : Lawful encSegEntry decSegEntry := lawful_pair lawful_nat lawful_segDef
+
+def encMembership : Membership → Bytes :=
+  encIso (encPair encNat (encPair encNat encNat)) (fun m => (m.segment, m.person, m.version))
+
+def decMembership : Dec Membership :=
+  decIso (decPair decNat (decPair decNat decNat)) (fun p => { segment := p.1, person := p.2.1, version := p.2.2 })
+
+theorem lawful_membership : Lawful encMembership decMembership :=
+  lawful_iso (lawful_pair lawful_nat (lawful_pair lawful_nat lawful_nat)) (fun _ => rfl) (fun _ => rfl)
+
+def encSegDirection : SegDirection → Bytes
+  | .entered => [tag 0]
+  | .exited => [tag 1]
+
+def decSegDirection : Dec SegDirection := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.entered, r)
+    | 1 => some (.exited, r)
+    | _ => none
+
+theorem lawful_segDirection : Lawful encSegDirection decSegDirection := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | entered => simp [encSegDirection, decSegDirection, tag]
+    | exited => simp [encSegDirection, decSegDirection, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decSegDirection] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ 2 ≤ b.toNat by omega) with hk | hk | hk
+      · simp only [decSegDirection, hk] at h
+        cases h
+        simp [encSegDirection, byte_eq_tag b 0 hk]
+      · simp only [decSegDirection, hk] at h
+        cases h
+        simp [encSegDirection, byte_eq_tag b 1 hk]
+      · simp only [decSegDirection] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+def encSegReason : SegReason → Bytes
+  | .change => [tag 0]
+  | .predicateChange => [tag 1]
+
+def decSegReason : Dec SegReason := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.change, r)
+    | 1 => some (.predicateChange, r)
+    | _ => none
+
+theorem lawful_segReason : Lawful encSegReason decSegReason := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | change => simp [encSegReason, decSegReason, tag]
+    | predicateChange => simp [encSegReason, decSegReason, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decSegReason] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ 2 ≤ b.toNat by omega) with hk | hk | hk
+      · simp only [decSegReason, hk] at h
+        cases h
+        simp [encSegReason, byte_eq_tag b 0 hk]
+      · simp only [decSegReason, hk] at h
+        cases h
+        simp [encSegReason, byte_eq_tag b 1 hk]
+      · simp only [decSegReason] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+def encSegEvent : SegEvent → Bytes :=
+  encIso (encPair encNat (encPair encNat (encPair encSegDirection (encPair encSegReason (encPair encNat
+    (encPair encNat (encPair encNat encPrincipal)))))))
+    (fun e => (e.segment, e.person, e.direction, e.reason, e.version, e.revision, e.hop, e.principal))
+
+def decSegEvent : Dec SegEvent :=
+  decIso (decPair decNat (decPair decNat (decPair decSegDirection (decPair decSegReason (decPair decNat
+    (decPair decNat (decPair decNat decPrincipal))))))) (fun p => { segment := p.1, person := p.2.1, direction := p.2.2.1, reason := p.2.2.2.1, version := p.2.2.2.2.1, revision := p.2.2.2.2.2.1, hop := p.2.2.2.2.2.2.1, principal := p.2.2.2.2.2.2.2 })
+
+theorem lawful_segEvent : Lawful encSegEvent decSegEvent :=
+  lawful_iso (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair lawful_segDirection
+    (lawful_pair lawful_segReason (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair lawful_nat
+    lawful_principal))))))) (fun _ => rfl) (fun _ => rfl)
+
+def encTenantSeg : List (Nat × SegmentDef) × List Membership × List SegEvent → Bytes :=
+  encPair (encList encSegEntry) (encPair (encList encMembership) (encList encSegEvent))
+
+def decTenantSeg : Dec (List (Nat × SegmentDef) × List Membership × List SegEvent) :=
+  decPair (decList decSegEntry) (decPair (decList decMembership) (decList decSegEvent))
+
+theorem lawful_tenantSeg : Lawful encTenantSeg decTenantSeg :=
+  lawful_pair (lawful_list lawful_segEntry) (lawful_pair (lawful_list lawful_membership) (lawful_list lawful_segEvent))
+
 /-- The tenant's fields as one nested product: its object types, members, grants, policies, next id,
     limits, the roles its schema defines (slice 7), its teams and its invitations, then (slice 9) its
     revision, its event sequence and its schema version. -/
@@ -2233,25 +2368,25 @@ theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
   lawful_pair (lawful_list lawful_typeEntry) (lawful_pair (lawful_list lawful_member) (lawful_pair (lawful_list lawful_grantEntry) (lawful_pair (lawful_list lawful_policy) (lawful_pair lawful_nat (lawful_pair lawful_limits (lawful_pair (lawful_list lawful_nat) (lawful_pair (lawful_list lawful_teamEntry) (lawful_pair (lawful_list lawful_invitationEntry) (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_settingDef) (lawful_pair (lawful_list lawful_override) (lawful_pair (lawful_list lawful_settingRev) (lawful_pair (lawful_opt lawful_ledgerDecls) (lawful_pair lawful_ledgerState (lawful_pair (lawful_list lawful_ledgerPolicy) (lawful_pair (lawful_list lawful_opEntry) (lawful_pair (lawful_list lawful_triggerEntry) (lawful_list lawful_automationEntry))))))))))))))))))))
 
 def encTenant : Tenant → Bytes :=
-  encIso encTenantBody
-    (fun t => (t.types, t.members, t.grants, t.policies, t.nextId, t.limits, t.roles, t.teams,
+  encIso (encPair encTenantBody encTenantSeg)
+    (fun t => ((t.types, t.members, t.grants, t.policies, t.nextId, t.limits, t.roles, t.teams,
       t.invitations, t.revision, t.eventSeq, t.schemaVersion, t.settingDefs, t.overrides, t.settingRevs,
-      t.ledgerDecls, t.ledger, t.ledgerPolicies, t.operations, t.triggers, t.automations))
+      t.ledgerDecls, t.ledger, t.ledgerPolicies, t.operations, t.triggers, t.automations), (t.segments, t.memberships, t.segLog)))
 
 def decTenant : Dec Tenant :=
-  decIso decTenantBody fun p =>
-    { types := p.1, members := p.2.1, grants := p.2.2.1, policies := p.2.2.2.1, nextId := p.2.2.2.2.1,
-      limits := p.2.2.2.2.2.1, roles := p.2.2.2.2.2.2.1, teams := p.2.2.2.2.2.2.2.1,
-      invitations := p.2.2.2.2.2.2.2.2.1, revision := p.2.2.2.2.2.2.2.2.2.1,
-      eventSeq := p.2.2.2.2.2.2.2.2.2.2.1, schemaVersion := p.2.2.2.2.2.2.2.2.2.2.2.1,
-      settingDefs := p.2.2.2.2.2.2.2.2.2.2.2.2.1, overrides := p.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-      settingRevs := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-      ledgerDecls := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-      ledger := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-      ledgerPolicies := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, operations := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, triggers := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, automations := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2 }
+  decIso (decPair decTenantBody decTenantSeg) fun q =>
+    { types := q.1.1, members := q.1.2.1, grants := q.1.2.2.1, policies := q.1.2.2.2.1, nextId := q.1.2.2.2.2.1,
+      limits := q.1.2.2.2.2.2.1, roles := q.1.2.2.2.2.2.2.1, teams := q.1.2.2.2.2.2.2.2.1,
+      invitations := q.1.2.2.2.2.2.2.2.2.1, revision := q.1.2.2.2.2.2.2.2.2.2.1,
+      eventSeq := q.1.2.2.2.2.2.2.2.2.2.2.1, schemaVersion := q.1.2.2.2.2.2.2.2.2.2.2.2.1,
+      settingDefs := q.1.2.2.2.2.2.2.2.2.2.2.2.2.1, overrides := q.1.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      settingRevs := q.1.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      ledgerDecls := q.1.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      ledger := q.1.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      ledgerPolicies := q.1.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, operations := q.1.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, triggers := q.1.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, automations := q.1.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2, segments := q.2.1, memberships := q.2.2.1, segLog := q.2.2.2 }
 
 theorem lawful_tenant : Lawful encTenant decTenant :=
-  lawful_iso lawful_tenantBody (fun t => by cases t; rfl) (fun _ => rfl)
+  lawful_iso (lawful_pair lawful_tenantBody lawful_tenantSeg) (fun t => by cases t; rfl) (fun _ => rfl)
 
 /-! ## Intents, contexts and results -/
 

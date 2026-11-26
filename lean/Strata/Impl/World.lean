@@ -314,13 +314,15 @@ def ITenant.ofEmpty (t : Tenant) : ITenant :=
     eventSeq := t.eventSeq, schemaVersion := t.schemaVersion, settingDefs := t.settingDefs,
     overrides := t.overrides, settingRevs := t.settingRevs, ledgerDecls := t.ledgerDecls,
     ledger := t.ledger, ledgerPolicies := t.ledgerPolicies, operations := t.operations,
-    triggers := t.triggers, automations := t.automations }
+    triggers := t.triggers, automations := t.automations, segments := t.segments,
+    memberships := t.memberships, segLog := t.segLog }
 
 theorem ofEmpty_abs (t : Tenant) (h : ∀ e ∈ t.types, e.2.records = []) :
     (ITenant.ofEmpty t).abs = t := by
   cases t with
   | mk types members grants policies nextId limits roles revision eventSeq schemaVersion teams invitations
-      settingDefs overrides settingRevs ledgerDecls ledger ledgerPolicies operations triggers automations =>
+      settingDefs overrides settingRevs ledgerDecls ledger ledgerPolicies operations triggers automations
+      segments memberships segLog =>
     simp only [ITenant.abs, ITenant.ofEmpty, List.map_map]
     congr 1
     conv => rhs; rw [← List.map_id types]
