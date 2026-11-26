@@ -2525,3 +2525,114 @@ op 1 100 type 2 create 0=s:a 1=s*65537:x
 op 1 100 schema strict define-field 2 3 int required ; define-field 2 0 str required
 op 1 100 type 2 create 1=r:1 4=i:2 3=s:x
 op 1 100 type 2 create 0=s:a 3=i:1
+scenario h-setting-owner-writes-tenant-editor-refused
+op 1 100 setting density tenant i:5
+op 1 101 setting density tenant i:6
+op 1 101 setting density tenant v=1 i:6
+read 1 101 setting density
+end
+scenario h-setting-person-override-wins-over-tenant
+op 1 100 setting density tenant i:5
+op 1 100 setting density person i:7
+read 1 100 setting density
+read 1 101 setting density
+end
+scenario h-setting-smaller-team-id-wins-person-beats-teams
+op 1 100 team 1 s:ops
+op 1 100 team 2 s:dev
+op 1 100 team-add 1 101
+op 1 100 team-add 2 101
+op 1 100 setting label team team=2 s:second
+op 1 100 setting label team team=1 s:first
+read 1 101 setting label
+op 1 101 setting label person s:mine
+read 1 101 setting label
+end
+scenario h-setting-team-override-reaches-only-its-members
+op 1 100 team 1 s:ops
+op 1 100 team 2 s:dev
+op 1 100 team-add 2 102
+op 1 100 setting mode team team=2 s:bold
+read 1 102 setting mode
+read 1 101 setting mode
+end
+scenario h-setting-banner-is-locked-at-the-tenant
+op 1 100 setting banner tenant s:maint
+op 1 100 setting banner person s:mine
+op 1 101 setting banner person s:mine
+read 1 101 setting banner
+end
+scenario h-setting-density-range-is-inclusive
+op 1 100 setting density tenant i:9
+op 1 100 setting density tenant v=1 i:10
+op 1 100 setting density tenant v=1 i:-1
+read 1 101 setting density
+end
+scenario h-setting-mode-closed-set
+op 1 100 setting mode tenant s:bold
+op 1 100 setting mode tenant v=1 s:italic
+op 1 100 setting mode tenant v=1 i:1
+read 1 101 setting mode
+end
+scenario h-setting-member-names-closed-set
+op 1 100 setting member_names tenant s:nobody
+op 1 100 setting member_names tenant v=1 s:anyone
+op 1 100 setting member_names tenant v=1 s:everyone
+read 1 102 setting member_names
+end
+scenario h-setting-remove-then-version-conflict-then-rise
+op 1 100 setting notify tenant b:1
+op 1 100 setting notify tenant v=1 remove
+op 1 100 setting notify tenant v=1 b:0
+op 1 100 setting notify tenant v=0 b:0
+read 1 101 setting notify
+end
+scenario h-setting-removal-of-an-absent-override
+op 1 100 team 1 s:ops
+op 1 100 setting label team team=1 remove
+op 1 100 setting density person remove
+op 1 100 setting notify person v=0 remove
+op 1 100 setting density tenant remove
+read 1 100 setting density
+end
+scenario h-setting-undefined-name-is-unknown-object
+op 1 100 setting nope tenant b:1
+op 1 100 setting nope person s:x
+read 1 100 setting nope
+end
+scenario h-setting-tenant-three-has-only-member-names
+read 3 300 setting member_names
+op 3 system create-tenant 300 s:acme
+read 3 300 setting member_names
+op 3 300 setting member_names tenant s:everyone
+op 3 300 setting notify tenant b:1
+read 3 300 setting member_names
+read 3 300 setting notify
+end
+scenario h-setting-system-and-anonymous-writes-are-unauthorized
+op 1 system setting density tenant i:4
+op 1 anon setting density tenant i:4
+op 1 system setting density person i:4
+op 1 anon setting notify tenant b:1
+read 1 system setting density
+end
+scenario h-setting-null-and-wrong-type-are-invalid
+op 1 100 setting density tenant n
+op 1 100 setting density tenant s:3
+op 1 100 setting notify tenant i:1
+op 1 100 setting notify tenant v=0 b:1
+end
+scenario h-setting-team-refusals
+op 1 100 team 1 s:ops
+op 1 100 setting label team team=9 s:x
+op 1 100 setting label person team=1 s:x
+op 1 100 setting density tenant team=1 i:2
+op 1 100 setting label team s:x
+end
+scenario h-setting-editor-refused-at-team-level
+op 1 100 team 1 s:ops
+op 1 100 team-add 1 101
+op 1 101 setting label team team=1 s:x
+op 1 100 setting label team team=1 s:x
+read 1 101 setting label
+end

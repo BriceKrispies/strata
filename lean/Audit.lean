@@ -2533,3 +2533,511 @@ end Strata
 #print axioms Strata.Codec.lawful_change
 #print axioms Strata.Codec.fix_intent_changeSchema
 #print axioms Strata.Codec.fix_err_schemaConflict
+
+
+
+/-! ## Slice 12: settings (`lean/Strata/Settings.lean`, the intent `writeSetting`, `lean/Main.lean`)
+
+Resolution (`resolveWith`), the write (`writeSettingT`) with its refusals in the kernel's check order, the change an
+accepted write makes, its event, and the refused write's no-transition. -/
+
+namespace Strata
+
+/-- The definition a lookup finds has the name the lookup asked for. -/
+theorem settingDef?_name (t : Tenant) (n : String) (d : SettingDef) (h : t.settingDef? n = some d) :
+    d.name = n := by
+  unfold Tenant.settingDef? at h
+  split at h
+  · rename_i d' hf
+    cases h
+    have := List.find?_some hf
+    simpa using this
+  · rename_i hf
+    have := List.find?_some h
+    simpa using this
+
+/-- Resolution is the value of the most specific open level that holds an override, else the platform's, else the
+    default: `resolveWith` computes exactly this (the equation the other resolution theorems use). -/
+theorem resolve_value_eq (t : Tenant) (pv : PlatformValues) (p : Principal) (n : String) (d : SettingDef)
+    (hd : t.settingDef? n = some d) :
+    (resolveWith t pv p n).map (fun r => r.value) =
+      .ok (((pickOverride t pv d p).getD (.default, none, d.default)).2.2) := by
+  unfold resolveWith
+  rw [hd]
+  rfl
+
+/-- A person's own open override is what the person reads. -/
+theorem resolve_person (t : Tenant) (pv : PlatformValues) (u : PrincipalId) (n : String) (d : SettingDef)
+    (o : SettingOverride) (hd : t.settingDef? n = some d) (hopen : d.isOpen .person = true)
+    (ho : t.overrideOf? n (.person u) = some o) :
+    (resolveWith t pv (.user u) n).map (fun r => r.value) = .ok o.value := by
+  obtain rfl := settingDef?_name t n d hd
+  rw [resolve_value_eq t pv (.user u) _ d hd]
+  simp [pickOverride, hopen, ho]
+
+/-- With no open person override, the first team (in the kernel's order) that holds an open override is read. -/
+theorem resolve_team (t : Tenant) (pv : PlatformValues) (u : PrincipalId) (n : String) (d : SettingDef)
+    (tid : TeamId) (o : SettingOverride) (hd : t.settingDef? n = some d)
+    (hP : d.isOpen .person = false ∨ t.overrideOf? n (.person u) = none)
+    (hopen : d.isOpen .team = true) (ht : t.teamOverride? n u = some (tid, o)) :
+    (resolveWith t pv (.user u) n).map (fun r => r.value) = .ok o.value := by
+  obtain rfl := settingDef?_name t n d hd
+  rw [resolve_value_eq t pv (.user u) _ d hd]
+  rcases hP with hP | hP <;> simp [pickOverride, hP, hopen, ht]
+
+/-- With no open person or team override, the tenant's open override is read. -/
+theorem resolve_tenant (t : Tenant) (pv : PlatformValues) (p : Principal) (n : String) (d : SettingDef)
+    (o : SettingOverride) (hd : t.settingDef? n = some d)
+    (hP : ∀ u, p = .user u → d.isOpen .person = false ∨ t.overrideOf? n (.person u) = none)
+    (hT : ∀ u, p = .user u → d.isOpen .team = false ∨ t.teamOverride? n u = none)
+    (hopen : d.isOpen .tenant = true) (ho : t.overrideOf? n .tenant = some o) :
+    (resolveWith t pv p n).map (fun r => r.value) = .ok o.value := by
+  obtain rfl := settingDef?_name t n d hd
+  rw [resolve_value_eq t pv p _ d hd]
+  cases p with
+  | system => simp [pickOverride, hopen, ho]
+  | anonymous => simp [pickOverride, hopen, ho]
+  | user u =>
+    rcases hP u rfl with hP' | hP' <;> rcases hT u rfl with hT' | hT' <;>
+      simp [pickOverride, hP', hT', hopen, ho]
+
+/-- With no open override at the person, team or tenant level, the platform's value is read, when the definition opens
+    the platform level and the value is of its type and within its limits. -/
+theorem resolve_platform (t : Tenant) (pv : PlatformValues) (p : Principal) (n : String) (d : SettingDef)
+    (v : Val) (hd : t.settingDef? n = some d)
+    (hP : ∀ u, p = .user u → d.isOpen .person = false ∨ t.overrideOf? n (.person u) = none)
+    (hT : ∀ u, p = .user u → d.isOpen .team = false ∨ t.teamOverride? n u = none)
+    (hTn : d.isOpen .tenant = false ∨ t.overrideOf? n .tenant = none)
+    (hopen : d.isOpen .platform = true) (hpv : pv n = some v) (hty : d.ty.admits v = true)
+    (hlim : Val.overLimit t.limits v = false) :
+    (resolveWith t pv p n).map (fun r => r.value) = .ok v := by
+  obtain rfl := settingDef?_name t n d hd
+  rw [resolve_value_eq t pv p _ d hd]
+  cases p with
+  | system => rcases hTn with h | h <;> simp [pickOverride, h, hopen, hpv, hty, hlim]
+  | anonymous => rcases hTn with h | h <;> simp [pickOverride, h, hopen, hpv, hty, hlim]
+  | user u =>
+    rcases hP u rfl with hP' | hP' <;> rcases hT u rfl with hT' | hT' <;>
+      rcases hTn with hTn' | hTn' <;> simp [pickOverride, hP', hT', hTn', hopen, hpv, hty, hlim]
+
+/-- With no override and no platform value, the default is read. -/
+theorem resolve_default (t : Tenant) (pv : PlatformValues) (p : Principal) (n : String) (d : SettingDef)
+    (hd : t.settingDef? n = some d)
+    (hP : ∀ u, p = .user u → d.isOpen .person = false ∨ t.overrideOf? n (.person u) = none)
+    (hT : ∀ u, p = .user u → d.isOpen .team = false ∨ t.teamOverride? n u = none)
+    (hTn : d.isOpen .tenant = false ∨ t.overrideOf? n .tenant = none)
+    (hPl : d.isOpen .platform = false ∨ pv n = none) :
+    (resolveWith t pv p n).map (fun r => r.value) = .ok d.default := by
+  obtain rfl := settingDef?_name t n d hd
+  rw [resolve_value_eq t pv p _ d hd]
+  cases p with
+  | system => rcases hTn with h | h <;> rcases hPl with h' | h' <;> simp [pickOverride, h, h']
+  | anonymous => rcases hTn with h | h <;> rcases hPl with h' | h' <;> simp [pickOverride, h, h']
+  | user u =>
+    rcases hP u rfl with hP' | hP' <;> rcases hT u rfl with hT' | hT' <;>
+      rcases hTn with hTn' | hTn' <;> rcases hPl with hPl' | hPl' <;>
+      simp [pickOverride, hP', hT', hTn', hPl']
+
+/-- A level the definition closes is not read: a tenant override under a lock that closes the tenant level leaves the
+    default in place (the banner of the fixture, at the person level). -/
+theorem resolve_closed_level_ignored (t : Tenant) (pv : PlatformValues) (p : Principal) (n : String)
+    (d : SettingDef) (o : SettingOverride) (hd : t.settingDef? n = some d)
+    (hP : ∀ u, p = .user u → d.isOpen .person = false ∨ t.overrideOf? n (.person u) = none)
+    (hT : ∀ u, p = .user u → d.isOpen .team = false ∨ t.teamOverride? n u = none)
+    (hclosed : d.isOpen .tenant = false) (hPl : d.isOpen .platform = false ∨ pv n = none)
+    (ho : t.overrideOf? n .tenant = some o) :
+    (resolveWith t pv p n).map (fun r => r.value) = .ok d.default :=
+  resolve_default t pv p n d hd hP hT (Or.inl hclosed) hPl
+
+/-- The shape of an accepted core write: its subject is the one the write names, and the overrides are the ones before,
+    with the write's own key replaced, the new override last. -/
+theorem writeSettingCore_ok_subject {t t' : Tenant} {u : PrincipalId} {n : String} {lvl : SettingLevel}
+    {team : Option TeamId} {v : Option Val} {e : Nat}
+    (h : writeSettingCore t (.user u) n lvl team v e = .ok t') :
+    ∃ subj, subjectOf t u lvl team = .ok subj := by
+  cases hs : subjectOf t u lvl team with
+  | error err =>
+    exfalso
+    unfold writeSettingCore at h
+    simp only [hs] at h
+    repeat' split at h
+    all_goals simp_all
+  | ok subj => exact ⟨subj, rfl⟩
+
+end Strata
+
+namespace Strata
+
+/-- The decision view keeps the fields a write reads: these hold by reduction. -/
+@[simp] theorem decisionView_holdsCap (t : Tenant) (p : Principal) (c : CapabilityId) :
+    t.decisionView.holdsCap p c = t.holdsCap p c := rfl
+
+@[simp] theorem decisionView_settingDef? (t : Tenant) (n : String) :
+    t.decisionView.settingDef? n = t.settingDef? n := rfl
+
+@[simp] theorem decisionView_overrideOf? (t : Tenant) (n : String) (s : SettingSubject) :
+    t.decisionView.overrideOf? n s = t.overrideOf? n s := rfl
+
+@[simp] theorem decisionView_subjectOf (t : Tenant) (u : PrincipalId) (lvl : SettingLevel) (team : Option TeamId) :
+    subjectOf t.decisionView u lvl team = subjectOf t u lvl team := rfl
+
+@[simp] theorem decisionView_teams (t : Tenant) : t.decisionView.teams = t.teams := rfl
+
+@[simp] theorem decisionView_limits (t : Tenant) : t.decisionView.limits = t.limits := rfl
+
+@[simp] theorem decisionView_overrides (t : Tenant) : t.decisionView.overrides = t.overrides := rfl
+
+@[simp] theorem decisionView_settingRev (t : Tenant) (n : String) : t.decisionView.settingRev n = t.settingRev n := rfl
+
+end Strata
+
+namespace Strata
+
+/-- Only a signed-in person writes a setting: the system and an anonymous caller are unauthorized, first of all. -/
+theorem write_system_refused (t : Tenant) (n : String) (lvl : SettingLevel) (team : Option TeamId)
+    (v : Option Val) (e : Nat) : writeSettingT t .system n lvl team v e = .error .unauthorized := by
+  simp [writeSettingT, writeSettingCore] <;> rfl
+
+theorem write_anonymous_refused (t : Tenant) (n : String) (lvl : SettingLevel) (team : Option TeamId)
+    (v : Option Val) (e : Nat) : writeSettingT t .anonymous n lvl team v e = .error .unauthorized := by
+  simp [writeSettingT, writeSettingCore] <;> rfl
+
+/-- The platform level is the control plane's to write: a tenant's write at it is invalidIntent. -/
+theorem write_platform_refused (t : Tenant) (u : PrincipalId) (n : String) (team : Option TeamId)
+    (v : Option Val) (e : Nat) : writeSettingT t (.user u) n .platform team v e = .error .invalidIntent := by
+  simp [writeSettingT, writeSettingCore] <;> rfl
+
+/-- A tenant-level write needs the capability that writes at the tenant level. -/
+theorem write_tenant_unauthorized (t : Tenant) (u : PrincipalId) (n : String) (team : Option TeamId)
+    (v : Option Val) (e : Nat) (h : t.holdsCap (.user u) capWriteTenant = false) :
+    writeSettingT t (.user u) n .tenant team v e = .error .unauthorized := by
+  simp [writeSettingT, writeSettingCore, h] <;> rfl
+
+/-- A team-level write needs the capability that writes at the team level. -/
+theorem write_team_unauthorized (t : Tenant) (u : PrincipalId) (n : String) (team : Option TeamId)
+    (v : Option Val) (e : Nat) (h : t.holdsCap (.user u) capWriteTeam = false) :
+    writeSettingT t (.user u) n .team team v e = .error .unauthorized := by
+  simp [writeSettingT, writeSettingCore, h] <;> rfl
+
+/-- A write of a setting the tenant does not define is unknownObject, for a caller who holds the capabilities
+    its level needs. -/
+theorem write_undefined_refused (t : Tenant) (u : PrincipalId) (n : String) (lvl : SettingLevel)
+    (team : Option TeamId) (v : Option Val) (e : Nat) (hl : lvl ≠ .platform)
+    (hT : lvl = .tenant → t.holdsCap (.user u) capWriteTenant = true)
+    (hTm : lvl = .team → t.holdsCap (.user u) capWriteTeam = true) (hd : t.settingDef? n = none) :
+    writeSettingT t (.user u) n lvl team v e = .error .unknownObject := by
+  cases lvl <;> simp_all [writeSettingT, writeSettingCore] <;> rfl
+
+/-- A write at a level the definition does not open is invalidIntent: a level it does not allow, or one a lock
+    closes. -/
+theorem write_closed_level_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef)
+    (lvl : SettingLevel) (team : Option TeamId) (v : Option Val) (e : Nat) (hl : lvl ≠ .platform)
+    (hT : lvl = .tenant → t.holdsCap (.user u) capWriteTenant = true)
+    (hTm : lvl = .team → t.holdsCap (.user u) capWriteTeam = true) (hd : t.settingDef? n = some d)
+    (hc : d.isOpen lvl = false) :
+    writeSettingT t (.user u) n lvl team v e = .error .invalidIntent := by
+  cases lvl <;> simp_all [writeSettingT, writeSettingCore] <;> rfl
+
+/-- A team-level write that names no team is invalidIntent. -/
+theorem write_team_unnamed_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef)
+    (v : Option Val) (e : Nat) (hd : t.settingDef? n = some d) (hopen : d.isOpen .team = true)
+    (hcap : t.holdsCap (.user u) capWriteTeam = true) :
+    writeSettingT t (.user u) n .team none v e = .error .invalidIntent := by
+  simp [writeSettingT, writeSettingCore, hd, hopen, hcap, subjectOf] <;> rfl
+
+/-- A team-level write naming a team the tenant does not have is invalidIntent. -/
+theorem write_team_unknown_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef)
+    (tid : TeamId) (v : Option Val) (e : Nat) (hd : t.settingDef? n = some d) (hopen : d.isOpen .team = true)
+    (hcap : t.holdsCap (.user u) capWriteTeam = true) (hno : t.teams.lookup tid = none) :
+    writeSettingT t (.user u) n .team (some tid) v e = .error .invalidIntent := by
+  simp [writeSettingT, writeSettingCore, hd, hopen, hcap, subjectOf, hno] <;> rfl
+
+/-- A team named at the person level is invalidIntent, when that level is open. -/
+theorem write_team_elsewhere_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef)
+    (team : TeamId) (v : Option Val) (e : Nat) (hd : t.settingDef? n = some d) (hopen : d.isOpen .person = true) :
+    writeSettingT t (.user u) n .person (some team) v e = .error .invalidIntent := by
+  simp [writeSettingT, writeSettingCore, hd, hopen, subjectOf] <;> rfl
+
+/-- A value that is not of the setting's type, null included, is invalid (the kernel's TypeMismatch). -/
+theorem write_wrong_type_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef) (x : Val)
+    (hd : t.settingDef? n = some d) (hopen : d.isOpen .person = true) (hty : d.ty.admits x = false) :
+    writeSettingT t (.user u) n .person none (some x) 0 = .error .invalid := by
+  simp [writeSettingT, writeSettingCore, hd, hopen, hty] <;> rfl
+
+/-- A value over the value limits is limitExceeded. -/
+theorem write_over_limit_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef) (x : Val)
+    (hd : t.settingDef? n = some d) (hopen : d.isOpen .person = true) (hty : d.ty.admits x = true)
+    (hlim : Val.overLimit t.limits x = true) :
+    writeSettingT t (.user u) n .person none (some x) 0 = .error .limitExceeded := by
+  simp [writeSettingT, writeSettingCore, hd, hopen, hty, hlim] <;> rfl
+
+/-- A whole number outside a range the definition allows is limitExceeded. -/
+theorem write_out_of_range_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef) (lo hi k : Int)
+    (hd : t.settingDef? n = some d) (hopen : d.isOpen .person = true) (hr : d.allowed = some (.range lo hi))
+    (hty : d.ty.admits (.int k) = true) (hout : ¬ (lo ≤ k ∧ k ≤ hi))
+    (hnone : t.overrideOf? n (.person u) = none) :
+    writeSettingT t (.user u) n .person none (some (.int k)) 0 = .error .limitExceeded := by
+  simp [writeSettingT, writeSettingCore, allowedOk, Val.overLimit, hout, hd, hopen, hty, hnone, hr] <;> rfl
+
+/-- A value outside a closed set the definition allows is invalidIntent. -/
+theorem write_not_allowed_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef) (vs : List Val)
+    (x : Val) (hd : t.settingDef? n = some d) (hopen : d.isOpen .person = true)
+    (hc : d.allowed = some (.closed vs)) (hty : d.ty.admits x = true) (hlim : Val.overLimit t.limits x = false)
+    (hnot : x ∉ vs) :
+    writeSettingT t (.user u) n .person none (some x) 0 = .error .invalidIntent := by
+  simp_all [writeSettingT, writeSettingCore, allowedOk] <;> rfl
+
+/-- A write whose expected revision is not the override's is versionConflict; a removal shows it too. -/
+theorem write_version_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef) (e : Nat)
+    (hd : t.settingDef? n = some d) (hopen : d.isOpen .person = true)
+    (hexp : e ≠ ((t.overrideOf? n (.person u)).map (fun o => o.revision)).getD 0) :
+    writeSettingT t (.user u) n .person none none e = .error .versionConflict := by
+  simp_all [writeSettingT, writeSettingCore, subjectOf] <;> rfl
+
+/-- A removal of an override that does not exist is invalidIntent. -/
+theorem write_remove_absent_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef)
+    (hd : t.settingDef? n = some d) (hopen : d.isOpen .person = true)
+    (hnone : t.overrideOf? n (.person u) = none) :
+    writeSettingT t (.user u) n .person none none 0 = .error .invalidIntent := by
+  simp_all [writeSettingT, writeSettingCore, subjectOf] <;> rfl
+
+/-- A new override past the most the tenant holds is limitExceeded. -/
+theorem write_bound_refused (t : Tenant) (u : PrincipalId) (n : String) (d : SettingDef) (x : Val)
+    (hd : t.settingDef? n = some d) (hopen : d.isOpen .person = true) (hty : d.ty.admits x = true)
+    (hlim : Val.overLimit t.limits x = false) (hc : d.allowed = none)
+    (hnone : t.overrideOf? n (.person u) = none) (hfull : maxSettingOverrides ≤ t.overrides.length) :
+    writeSettingT t (.user u) n .person none (some x) 0 = .error .limitExceeded := by
+  simp_all [writeSettingT, writeSettingCore, subjectOf, allowedOk] <;> rfl
+
+end Strata
+
+namespace Strata
+
+/-- The revisions an accepted write leaves: the setting's entry replaced by the new revision, the others kept. -/
+theorem lookup_filter_append_self (l : List (String × Nat)) (n : String) (r : Nat) :
+    ((l.filter (fun x => x.1 != n)) ++ [(n, r)]).lookup n = some r := by
+  induction l with
+  | nil => simp [List.lookup]
+  | cons x xs ih =>
+    by_cases hx : x.1 = n
+    · simp [List.filter, hx, ih]
+    · have hne : (x.1 != n) = true := by simpa using hx
+      have h2 : (n == x.1) = false := by
+        rw [beq_eq_false_iff_ne]
+        exact fun h => hx h.symm
+      simp [List.filter, hne, List.lookup, h2, ih]
+
+theorem lookup_filter_append_other (l : List (String × Nat)) (n m : String) (r : Nat) (hm : m ≠ n) :
+    ((l.filter (fun x => x.1 != n)) ++ [(n, r)]).lookup m = l.lookup m := by
+  induction l with
+  | nil =>
+    have h2 : (m == n) = false := by
+      rw [beq_eq_false_iff_ne]
+      exact hm
+    simp [List.lookup, h2]
+  | cons x xs ih =>
+    by_cases hx : x.1 = n
+    · have hmx : (m == x.1) = false := by
+        rw [beq_eq_false_iff_ne]
+        exact fun h => hm (h.trans hx)
+      have hmn : (m == n) = false := by
+        rw [beq_eq_false_iff_ne]
+        exact hm
+      simp [List.filter, hx, List.lookup, hmx, hmn, ih]
+    · have hne : (x.1 != n) = true := by simpa using hx
+      by_cases hxm : m = x.1
+      · simp [List.filter, hne, List.lookup, hxm]
+      · have h3 : (m == x.1) = false := by
+          rw [beq_eq_false_iff_ne]
+          exact hxm
+        simp [List.filter, hne, List.lookup, h3, ih]
+
+/-- The overrides and the revisions an accepted core write leaves, for the subject the write names. -/
+theorem writeSettingCore_ok_form {t t' : Tenant} {u : PrincipalId} {n : String} {lvl : SettingLevel}
+    {team : Option TeamId} {v : Option Val} {e : Nat} {subj : SettingSubject}
+    (hs : subjectOf t u lvl team = .ok subj)
+    (h : writeSettingCore t (.user u) n lvl team v e = .ok t') :
+    t'.overrides = (t.overrides.filter (fun o => !(o.name == n && decide (o.subject = subj)))) ++
+        (match v with
+          | some x => [{ name := n, subject := subj, value := x, revision := t.settingRev n + 1 }]
+          | none => []) ∧
+      t'.settingRevs = (t.settingRevs.filter (fun x => x.1 != n)) ++ [(n, t.settingRev n + 1)] := by
+  unfold writeSettingCore at h
+  simp only [hs] at h
+  repeat' split at h
+  all_goals first
+    | (have h2 := Except.ok.inj h; subst h2; simp)
+    | simp at h
+
+/-- The overrides and the revisions an accepted write leaves (`writeSettingT`, which applies the core write to the
+    decision view and keeps the rest of the tenant). -/
+theorem writeSettingT_ok_form {t t' : Tenant} {u : PrincipalId} {n : String} {lvl : SettingLevel}
+    {team : Option TeamId} {v : Option Val} {e : Nat} {subj : SettingSubject}
+    (hs : subjectOf t u lvl team = .ok subj)
+    (h : writeSettingT t (.user u) n lvl team v e = .ok t') :
+    t'.overrides = (t.overrides.filter (fun o => !(o.name == n && decide (o.subject = subj)))) ++
+        (match v with
+          | some x => [{ name := n, subject := subj, value := x, revision := t.settingRev n + 1 }]
+          | none => []) ∧
+      t'.settingRevs = (t.settingRevs.filter (fun x => x.1 != n)) ++ [(n, t.settingRev n + 1)] := by
+  cases v with
+  | none =>
+    unfold writeSettingT at h
+    cases hc : writeSettingCore t.decisionView (.user u) n lvl team none e with
+    | error x => simp [hc, Except.map] at h
+    | ok a =>
+      simp only [hc, Except.map, Except.ok.injEq] at h
+      subst h
+      exact writeSettingCore_ok_form (t := t.decisionView) (by simpa using hs) hc
+  | some x =>
+    unfold writeSettingT at h
+    cases hc : writeSettingCore t.decisionView (.user u) n lvl team (some x) e with
+    | error y => simp [hc, Except.map] at h
+    | ok a =>
+      simp only [hc, Except.map, Except.ok.injEq] at h
+      subst h
+      exact writeSettingCore_ok_form (t := t.decisionView) (by simpa using hs) hc
+
+/-- The filter keeps an override whose key is not the write's own. -/
+theorem keep_pred {o : SettingOverride} {n : String} {subj : SettingSubject}
+    (hk : ¬ (o.name = n ∧ o.subject = subj)) : (!(o.name == n && decide (o.subject = subj))) = true := by
+  by_cases h1 : o.name = n <;> by_cases h2 : o.subject = subj
+  · exact absurd ⟨h1, h2⟩ hk
+  · simp [h1, h2]
+  · simp [h1, h2]
+  · simp [h1, h2]
+
+/-- An accepted write keeps every override whose key is not the write's own. -/
+theorem write_keeps_others {t t' : Tenant} {u : PrincipalId} {n : String} {lvl : SettingLevel}
+    {team : Option TeamId} {v : Option Val} {e : Nat} {subj : SettingSubject}
+    (hs : subjectOf t u lvl team = .ok subj)
+    (h : writeSettingT t (.user u) n lvl team v e = .ok t') (o : SettingOverride)
+    (ho : o ∈ t.overrides) (hk : ¬ (o.name = n ∧ o.subject = subj)) : o ∈ t'.overrides := by
+  obtain ⟨hov, -⟩ := writeSettingT_ok_form hs h
+  rw [hov]
+  cases v with
+  | none => exact List.mem_append_left _ (List.mem_filter.mpr ⟨ho, keep_pred hk⟩)
+  | some x => exact List.mem_append_left _ (List.mem_filter.mpr ⟨ho, keep_pred hk⟩)
+
+/-- An accepted write changes no override but the one its key names: every other override of the result was there
+    before. -/
+theorem write_only_key_changes {t t' : Tenant} {u : PrincipalId} {n : String} {lvl : SettingLevel}
+    {team : Option TeamId} {v : Option Val} {e : Nat} {subj : SettingSubject}
+    (hs : subjectOf t u lvl team = .ok subj)
+    (h : writeSettingT t (.user u) n lvl team v e = .ok t') (o : SettingOverride) (ho : o ∈ t'.overrides) :
+    (o ∈ t.overrides ∧ ¬ (o.name = n ∧ o.subject = subj)) ∨ (o.name = n ∧ o.subject = subj) := by
+  obtain ⟨hov, -⟩ := writeSettingT_ok_form hs h
+  rw [hov] at ho
+  by_cases hk : o.name = n ∧ o.subject = subj
+  · exact Or.inr hk
+  · cases v with
+    | none =>
+      rw [List.append_nil, List.mem_filter] at ho
+      exact Or.inl ⟨ho.1, hk⟩
+    | some x =>
+      rw [List.mem_append, List.mem_filter] at ho
+      rcases ho with ho | ho
+      · exact Or.inl ⟨ho.1, hk⟩
+      · exact absurd (show o.name = n ∧ o.subject = subj from by simp only [List.mem_singleton] at ho; rw [ho]; exact ⟨rfl, rfl⟩) hk
+
+/-- An accepted write raises the setting's revision by one, and leaves every other setting's revision as it was. -/
+theorem write_raises_revision {t t' : Tenant} {u : PrincipalId} {n : String} {lvl : SettingLevel}
+    {team : Option TeamId} {v : Option Val} {e : Nat} {subj : SettingSubject}
+    (hs : subjectOf t u lvl team = .ok subj)
+    (h : writeSettingT t (.user u) n lvl team v e = .ok t') :
+    t'.settingRev n = t.settingRev n + 1 ∧ ∀ m, m ≠ n → t'.settingRev m = t.settingRev m := by
+  obtain ⟨-, hrv⟩ := writeSettingT_ok_form hs h
+  constructor
+  · unfold Tenant.settingRev
+    rw [hrv, lookup_filter_append_self]
+    rfl
+  · intro m hm
+    unfold Tenant.settingRev
+    rw [hrv, lookup_filter_append_other _ n m _ hm]
+
+/-- An accepted write emits exactly one event: the setting-changed event of its key, numbered after the tenant's
+    sequence and committed at its new revision. -/
+theorem write_event {w : World} {n : String} {lvl : SettingLevel} {team : Option TeamId} {v : Option Val}
+    {e : Nat} {c : Ctx} {tr : Transition} {t : Tenant}
+    (h : transition w (.writeSetting n lvl team v e) c = .ok tr) (ht : w c.tenant = some t) :
+    ∃ t₁, writeSettingT t c.principal n lvl team v e = .ok t₁ ∧
+      tr.events.map (fun ev => ev.body) = [.settingChanged n (settingSubjectOf c.principal lvl team)] := by
+  obtain ⟨t₁, hst, -, hev⟩ := transition_existing h ht
+  refine ⟨t₁, hst, ?_⟩
+  rw [hev]
+  simp [eventBodies, numberEvents]
+
+/-- A refused write has no transition: it emits no event and makes no state, so the revision stays where it was. -/
+theorem refused_write_no_transition {w : World} {n : String} {lvl : SettingLevel} {team : Option TeamId}
+    {v : Option Val} {e : Nat} {c : Ctx} {t : Tenant} {err : Err}
+    (ht : w c.tenant = some t) (hr : reservedRefused c.principal (.writeSetting n lvl team v e) = false)
+    (hw : writeSettingT t c.principal n lvl team v e = .error err) :
+    transition w (.writeSetting n lvl team v e) c = .error err := by
+  apply transition_refused
+  simp [step, hr, ht, stepTenant, hw]
+
+end Strata
+
+namespace Strata
+
+/-- An accepted write of a value leaves the override of its key holding that value, at the setting's new revision. -/
+theorem write_sets_override {t t' : Tenant} {u : PrincipalId} {n : String} {lvl : SettingLevel}
+    {team : Option TeamId} {e : Nat} {subj : SettingSubject} {x : Val}
+    (hs : subjectOf t u lvl team = .ok subj)
+    (h : writeSettingT t (.user u) n lvl team (some x) e = .ok t') :
+    ∃ o ∈ t'.overrides, o.name = n ∧ o.subject = subj ∧ o.value = x ∧ o.revision = t.settingRev n + 1 := by
+  obtain ⟨hov, -⟩ := writeSettingT_ok_form hs h
+  refine ⟨{ name := n, subject := subj, value := x, revision := t.settingRev n + 1 }, ?_, rfl, rfl, rfl, rfl⟩
+  rw [hov]
+  exact List.mem_append_right _ (List.mem_singleton.mpr rfl)
+
+/-- An accepted removal leaves no override of its key. -/
+theorem write_removes_override {t t' : Tenant} {u : PrincipalId} {n : String} {lvl : SettingLevel}
+    {team : Option TeamId} {e : Nat} {subj : SettingSubject}
+    (hs : subjectOf t u lvl team = .ok subj)
+    (h : writeSettingT t (.user u) n lvl team none e = .ok t') :
+    ∀ o ∈ t'.overrides, ¬ (o.name = n ∧ o.subject = subj) := by
+  obtain ⟨hov, -⟩ := writeSettingT_ok_form hs h
+  intro o ho hk
+  rw [hov, List.append_nil, List.mem_filter] at ho
+  have hb := ho.2
+  simp [hk.1, hk.2] at hb
+
+end Strata
+
+/-! Axioms of the slice 12 theorems: only propext, Classical.choice and Quot.sound. -/
+#print axioms Strata.resolve_value_eq
+#print axioms Strata.resolve_person
+#print axioms Strata.resolve_team
+#print axioms Strata.resolve_tenant
+#print axioms Strata.resolve_platform
+#print axioms Strata.resolve_default
+#print axioms Strata.resolve_closed_level_ignored
+#print axioms Strata.writeSettingCore_ok_subject
+#print axioms Strata.write_system_refused
+#print axioms Strata.write_anonymous_refused
+#print axioms Strata.write_platform_refused
+#print axioms Strata.write_tenant_unauthorized
+#print axioms Strata.write_team_unauthorized
+#print axioms Strata.write_undefined_refused
+#print axioms Strata.write_closed_level_refused
+#print axioms Strata.write_team_unnamed_refused
+#print axioms Strata.write_team_unknown_refused
+#print axioms Strata.write_team_elsewhere_refused
+#print axioms Strata.write_wrong_type_refused
+#print axioms Strata.write_over_limit_refused
+#print axioms Strata.write_out_of_range_refused
+#print axioms Strata.write_not_allowed_refused
+#print axioms Strata.write_version_refused
+#print axioms Strata.write_remove_absent_refused
+#print axioms Strata.write_bound_refused
+#print axioms Strata.writeSettingCore_ok_form
+#print axioms Strata.writeSettingT_ok_form
+#print axioms Strata.keep_pred
+#print axioms Strata.write_keeps_others
+#print axioms Strata.write_only_key_changes
+#print axioms Strata.write_raises_revision
+#print axioms Strata.write_event
+#print axioms Strata.refused_write_no_transition
+#print axioms Strata.write_sets_override
+#print axioms Strata.write_removes_override
