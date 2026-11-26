@@ -2218,8 +2218,10 @@ fn ledger_owner_token(rng: &mut Lcg, home: u64) -> String {
     }
 }
 
-/// One posting's tokens (slice 13). Unit `3` (the one that expires) is posted only to the account of person `100`,
-/// so that an expiry never has two due accounts in one tenant. Amounts are within `±1000` for unit `1`, the one with
+/// One posting's tokens (slice 13). Unit `3` (the one that expires) is posted only to the unscoped account of person
+/// `100`, so that an expiry never has two due accounts in one tenant: the kernel takes the due accounts of one
+/// bucket start in the order of their account id, a SHA-256 hash of the tenant, owner, unit and scope that the model
+/// does not compute, so the generator keeps one account in that unit (owner and scope both). Amounts are within `±1000` for unit `1`, the one with
 /// a cap, and within `±100000` otherwise, so that the cap and the floor are both reached and not every posting
 /// crosses them. Keys come from a few names, so that replays, version conflicts and corrections occur.
 fn ledger_posting(rng: &mut Lcg, home: u64) -> String {
@@ -2259,7 +2261,11 @@ fn ledger_posting(rng: &mut Lcg, home: u64) -> String {
     } else {
         String::new()
     };
-    let scope = if rng.below(6) == 0 { " scope=s1" } else { "" };
+    let scope = if unit != 3 && rng.below(6) == 0 {
+        " scope=s1"
+    } else {
+        ""
+    };
     format!("{unit} {owner} {amount} {key}{reason}{corrects}{scope}")
 }
 
@@ -2360,6 +2366,32 @@ fn ledger_read_op(rng: &mut Lcg) -> Op {
     }
 }
 
+/// The posting operation that follows `op` and names the same keys: half the time with the same postings (a replay
+/// when the first was accepted, which writes nothing), half the time with each amount moved by one (a key recorded
+/// with another amount, `version_conflict`). It is made at a later time and changes no caller.
+fn ledger_repeat(rng: &mut Lcg, op: &Op, now: i64, postings: &[String]) -> Op {
+    let same = rng.below(2) == 0;
+    let postings: Vec<String> = postings
+        .iter()
+        .map(|p| {
+            if same {
+                return p.clone();
+            }
+            let mut words: Vec<String> = p.split(' ').map(str::to_string).collect();
+            if let Some(amount) = words.get(2).and_then(|w| w.parse::<i64>().ok()) {
+                words[2] = if amount == -1 { 2 } else { amount + 1 }.to_string();
+            }
+            words.join(" ")
+        })
+        .collect();
+    Op {
+        tenant: op.tenant,
+        principal: op.principal,
+        object: op.object,
+        kind: OpKind::LedgerPost(now + 3_600_000, postings),
+    }
+}
+
 /// The ledger operations placed among the operations of a scenario (slice 13): postings, expiries and balance reads,
 /// from a stream of their own, after the first third of the scenario so that the accounts they name may exist.
 fn with_ledger(seed: u64, mut ops: Scenario) -> Scenario {
@@ -2372,7 +2404,16 @@ fn with_ledger(seed: u64, mut ops: Scenario) -> Scenario {
             12..=14 => ledger_expire_op(&mut rng),
             _ => ledger_read_op(&mut rng),
         };
+        let again = match &op.kind {
+            OpKind::LedgerPost(now, postings) if rng.below(3) == 0 => {
+                Some(ledger_repeat(&mut rng, &op, *now, postings))
+            }
+            _ => None,
+        };
         ops.insert(at, op);
+        if let Some(again) = again {
+            ops.insert(at + 1, again);
+        }
     }
     ops
 }
