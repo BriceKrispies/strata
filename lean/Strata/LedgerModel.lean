@@ -229,85 +229,126 @@ def creditsIn (ps : List LedgerPeriodTotal) (p : LedgerPeriod) (t : Int) : Nat :
 
 def actorUser (p : Principal) : Option Nat := p.userId?
 
-/-- One posting on the state `L` (the kernel's `post_in`). Returns the new ledger state and the events it emits: a
-    replay changes nothing and emits none; an accepted posting emits one `LedgerEntryPosted`. -/
+/-- Whether the actor corrects its own account: an adjustment or a reversal of a person's own account, by that person
+    (the kernel's `ledger:self_action`, ADM-1629). -/
+def adjustsOwn (actor : Principal) (q : LedgerPosting) : Bool :=
+  match q.owner, actor with
+  | .person p, .user u => p == u && (q.reason == "adjust" || q.reason == "reverse")
+  | _, _ => false
+
+/-- The static checks of a posting, in the kernel's order, before the ledger is read: the first refusal, if any. The
+    unit and the owner (`notFound`), the self-action, the amount, the key, the reason and the scope. -/
+def postStaticErr (t : Tenant) (actor : Principal) (q : LedgerPosting) : Option Err :=
+  if !t.unitDeclared q.unit then some .notFound
+  else if !t.ownerOk q.owner then some .notFound
+  else if adjustsOwn actor q then some .selfAction
+  else if q.amount == 0 || decide (ledgerMaxAmount < q.amount) || decide (q.amount < -ledgerMaxAmount) then
+    some .invalidIntent
+  else if q.key.utf8ByteSize == 0 || decide (ledgerMaxKeyBytes < q.key.utf8ByteSize) then some .invalidIntent
+  else if q.key.startsWith expiryKeyPrefix then some .invalidIntent
+  else if decide (ledgerMaxReasonBytes < q.reason.utf8ByteSize) then some .invalidIntent
+  else if decide (ledgerMaxScopeBytes < q.scope.utf8ByteSize) then some .invalidIntent
+  else none
+
+/-- A correction names an entry the account holds (`ledger:bad-correction`, LDG-023). -/
+def correctionErr (last : Nat) (q : LedgerPosting) : Option Err :=
+  match q.corrects with
+  | some c => if c == 0 || decide (last < c) then some .invalidIntent else none
+  | none => none
+
+/-- The balance stays within the bound (`ledger:invalid-amount`). -/
+def boundErr (after : Int) : Option Err :=
+  if decide (ledgerMaxAmount < after) || decide (after < -ledgerMaxAmount) then some .invalidIntent else none
+
+/-- The floor: a posting may leave the balance below the floor only when it moves it up from below (LDG-013). -/
+def floorErr (applying : AppliedLimits) (before after amount : Int) : Option Err :=
+  match applying.floor with
+  | some f =>
+    if decide (after < f) && !(decide (before < f) && decide (0 < amount)) then some .constraintViolated else none
+  | none => none
+
+/-- The cap: a posting may leave the balance above the cap only when it moves it down from above (LDG-013). -/
+def capErr (applying : AppliedLimits) (before after amount : Int) : Option Err :=
+  match applying.cap with
+  | some c =>
+    if decide (c < after) && !(decide (c < before) && decide (amount < 0)) then some .constraintViolated else none
+  | none => none
+
+/-- The cap per period: the credits of the period of the entry, with the entry, may not exceed the cap; a posting
+    that does not count (a debit, or a correction under an additions-only cap) is not checked (LDG-014). -/
+def periodErr (applying : AppliedLimits) (cur : List LedgerPeriodTotal) (counts : Bool) (now : Int) (amount : Int) :
+    Option Err :=
+  match applying.periodCap with
+  | some (cap, p) =>
+    if counts && decide (cap < creditsIn cur p now + amount.toNat) then some .constraintViolated else none
+  | none => none
+
+/-- One posting on the state `L` after its static checks have passed (the kernel's `post_in`, from the replay on).
+    A replay changes nothing and emits no event; an accepted posting writes the header, appends the entry and emits
+    one `LedgerEntryPosted`. Each check is a separate function, so that a refusal is named by the first one that
+    fails. -/
+def postDynamic (t : Tenant) (actor : Principal) (now : Int) (L : LedgerState) (q : LedgerPosting) :
+    Except Err (LedgerState × List LedgerPosted) :=
+  let cur : Option LedgerAccount := L.accounts.find? (fun a => a.is q.owner q.unit q.scope)
+  let recorded : Option LedgerEntry :=
+    L.journal.find? (fun e => e.inAccount q.owner q.unit q.scope && e.key == q.key)
+  match recorded with
+  | some e =>
+    if e.amount == q.amount && e.reason == q.reason && e.corrects == q.corrects then .ok (L, [])
+    else .error .versionConflict
+  | none =>
+    let before : Int := (cur.map (fun a => a.balance)).getD 0
+    let last : Nat := (cur.map (fun a => a.lastSeq)).getD 0
+    let curPeriods : List LedgerPeriodTotal := (cur.map (fun a => a.periods)).getD []
+    let curBuckets : List LedgerBucket := (cur.map (fun a => a.buckets)).getD []
+    let after : Int := before + q.amount
+    let applying := applyingLimits t (accountLimit? L q.owner q.unit q.scope) q.unit
+    -- A reversal counts toward the cap per period only when the cap counts every addition.
+    let counts : Bool := decide (0 < q.amount) && !(applying.additionsOnly && q.corrects.isSome)
+    match correctionErr last q with
+    | some e => .error e
+    | none =>
+    match boundErr after with
+    | some e => .error e
+    | none =>
+    match floorErr applying before after q.amount with
+    | some e => .error e
+    | none =>
+    match capErr applying before after q.amount with
+    | some e => .error e
+    | none =>
+    match periodErr applying curPeriods counts now q.amount with
+    | some e => .error e
+    | none =>
+      let periods : List LedgerPeriodTotal :=
+        LedgerPeriod.all.map (fun p =>
+          { period := p, start := periodStart p now,
+            credits := creditsIn curPeriods p now + (if counts then q.amount.toNat else 0) })
+      let buckets : List LedgerBucket :=
+        match t.expiryOf q.unit with
+        | some e => applyEntry curBuckets before q.amount now e
+        | none => curBuckets
+      let acct : LedgerAccount :=
+        { owner := q.owner, unit := q.unit, scope := q.scope, balance := after,
+          lastSeq := last + 1, periods := periods, buckets := buckets }
+      let entry : LedgerEntry :=
+        { owner := q.owner, unit := q.unit, scope := q.scope, sequence := last + 1,
+          amount := q.amount, key := q.key, reason := q.reason, causedBy := actorUser actor,
+          time := now, corrects := q.corrects }
+      let ev : LedgerPosted :=
+        { owner := q.owner, unit := q.unit, scope := q.scope, amount := q.amount, balance := after,
+          balanceBefore := before, entrySequence := last + 1, reason := q.reason }
+      let accounts : List LedgerAccount :=
+        if cur.isSome then L.accounts.map (fun a => if a.is q.owner q.unit q.scope then acct else a)
+        else L.accounts ++ [acct]
+      .ok ({ L with accounts := accounts, journal := L.journal ++ [entry] }, [ev])
+
+/-- One posting on the state `L` (the kernel's `post_in`): its static checks, then `postDynamic`. -/
 def postOne (t : Tenant) (actor : Principal) (now : Int) (L : LedgerState) (q : LedgerPosting) :
     Except Err (LedgerState × List LedgerPosted) :=
-  let adjusts : Bool :=
-    match q.owner, actor with
-    | .person p, .user u => p == u && (q.reason == "adjust" || q.reason == "reverse")
-    | _, _ => false
-  if !t.unitDeclared q.unit then .error .notFound
-  else if !t.ownerOk q.owner then .error .notFound
-  else if adjusts then .error .selfAction
-  else if q.amount == 0 || decide (ledgerMaxAmount < q.amount) || decide (q.amount < -ledgerMaxAmount) then
-    .error .invalidIntent
-  else if q.key.utf8ByteSize == 0 || decide (ledgerMaxKeyBytes < q.key.utf8ByteSize) then .error .invalidIntent
-  else if q.key.startsWith expiryKeyPrefix then .error .invalidIntent
-  else if decide (ledgerMaxReasonBytes < q.reason.utf8ByteSize) then .error .invalidIntent
-  else if decide (ledgerMaxScopeBytes < q.scope.utf8ByteSize) then .error .invalidIntent
-  else
-    let cur : Option LedgerAccount := L.accounts.find? (fun a => a.is q.owner q.unit q.scope)
-    let recorded : Option LedgerEntry :=
-      L.journal.find? (fun e => e.inAccount q.owner q.unit q.scope && e.key == q.key)
-    match recorded with
-    | some e =>
-      if e.amount == q.amount && e.reason == q.reason && e.corrects == q.corrects then .ok (L, [])
-      else .error .versionConflict
-    | none =>
-      let before : Int := (cur.map (fun a => a.balance)).getD 0
-      let last : Nat := (cur.map (fun a => a.lastSeq)).getD 0
-      let curPeriods : List LedgerPeriodTotal := (cur.map (fun a => a.periods)).getD []
-      let curBuckets : List LedgerBucket := (cur.map (fun a => a.buckets)).getD []
-      let badCorrection : Bool :=
-        match q.corrects with
-        | some c => c == 0 || decide (last < c)
-        | none => false
-      if badCorrection then .error .invalidIntent
-      else
-        let after : Int := before + q.amount
-        if decide (ledgerMaxAmount < after) || decide (after < -ledgerMaxAmount) then .error .invalidIntent
-        else
-          let applying := applyingLimits t (accountLimit? L q.owner q.unit q.scope) q.unit
-          let belowFloor : Bool :=
-            match applying.floor with
-            | some f => decide (after < f) && !(decide (before < f) && decide (0 < q.amount))
-            | none => false
-          let aboveCap : Bool :=
-            match applying.cap with
-            | some c => decide (c < after) && !(decide (c < before) && decide (q.amount < 0))
-            | none => false
-          if belowFloor || aboveCap then .error .constraintViolated
-          else
-            -- A reversal counts toward the cap per period only when the cap counts every addition.
-            let counts : Bool := decide (0 < q.amount) && !(applying.additionsOnly && q.corrects.isSome)
-            let overPeriod : Bool :=
-              match applying.periodCap with
-              | some (cap, p) => counts && decide (cap < creditsIn curPeriods p now + q.amount.toNat)
-              | none => false
-            if overPeriod then .error .constraintViolated
-            else
-              let periods : List LedgerPeriodTotal :=
-                LedgerPeriod.all.map (fun p =>
-                  { period := p, start := periodStart p now,
-                    credits := creditsIn curPeriods p now + (if counts then q.amount.toNat else 0) })
-              let buckets : List LedgerBucket :=
-                match t.expiryOf q.unit with
-                | some e => applyEntry curBuckets before q.amount now e
-                | none => curBuckets
-              let acct : LedgerAccount :=
-                { owner := q.owner, unit := q.unit, scope := q.scope, balance := after,
-                  lastSeq := last + 1, periods := periods, buckets := buckets }
-              let entry : LedgerEntry :=
-                { owner := q.owner, unit := q.unit, scope := q.scope, sequence := last + 1,
-                  amount := q.amount, key := q.key, reason := q.reason, causedBy := actorUser actor,
-                  time := now, corrects := q.corrects }
-              let ev : LedgerPosted :=
-                { owner := q.owner, unit := q.unit, scope := q.scope, amount := q.amount, balance := after, balanceBefore := before, entrySequence := last + 1, reason := q.reason }
-              let accounts : List LedgerAccount :=
-                if cur.isSome then L.accounts.map (fun a => if a.is q.owner q.unit q.scope then acct else a)
-                else L.accounts ++ [acct]
-              .ok ({ L with accounts := accounts, journal := L.journal ++ [entry] }, [ev])
+  match postStaticErr t actor q with
+  | some e => .error e
+  | none => postDynamic t actor now L q
 
 /-- The intent `PostLedger` (CT-281): the caller holds `ledger-post`; one to eight postings, each on the state the
     earlier ones leave; the first refusal refuses all. Returns the ledger and the events in order. -/
@@ -336,6 +377,26 @@ def dueAccounts (accts : List LedgerAccount) (unit : Nat) (cutoff : Int) : List 
       | none => none)
   ((keyed.mergeSort (fun x y => decide (x.1 ≤ y.1))).map (fun x => x.2)).take ledgerExpiryBatch
 
+/-- The debit of one bucket of an account (the step of `expireAccount`): the bucket's remaining credit is debited, the
+    account's header is updated, and the entry and its event are appended, keyed by the bucket's start. -/
+def expireStep (e : LedgerExpiry) (t : Int) (acc : LedgerAccount × List (LedgerEntry × LedgerPosted))
+    (b : LedgerBucket) : LedgerAccount × List (LedgerEntry × LedgerPosted) :=
+  let h := acc.1
+  let amount : Int := -(b.remaining : Int)
+  let before : Int := h.balance
+  let after : Int := before + amount
+  let nextBuckets := applyEntry h.buckets before amount t e
+  let h' : LedgerAccount :=
+    { h with balance := after, lastSeq := h.lastSeq + 1, buckets := nextBuckets }
+  let entry : LedgerEntry :=
+    { owner := h.owner, unit := h.unit, scope := h.scope, sequence := h'.lastSeq, amount := amount,
+      key := expiryKeyPrefix ++ toString b.periodStart, reason := expiryReason, causedBy := none,
+      time := t, corrects := none }
+  let ev : LedgerPosted :=
+    { owner := h.owner, unit := h.unit, scope := h.scope, amount := amount, balance := after,
+      balanceBefore := before, entrySequence := h'.lastSeq, reason := expiryReason }
+  (h', acc.2 ++ [(entry, ev)])
+
 /-- The debit of every bucket of one account that started at or before `cutoff`, oldest first. Each debit takes the
     remaining credit of its bucket, and the entry is keyed by the bucket's start. Returns the account's new header
     and the entries and events it writes, in order. -/
@@ -343,22 +404,7 @@ def expireAccount (e : LedgerExpiry) (t cutoff : Int) (a : LedgerAccount) :
     LedgerAccount × List (LedgerEntry × LedgerPosted) :=
   let due : List LedgerBucket :=
     a.buckets.filter (fun b => decide (b.periodStart ≤ cutoff) && decide (0 < b.remaining))
-  due.foldl (fun (acc : LedgerAccount × List (LedgerEntry × LedgerPosted)) (b : LedgerBucket) =>
-      let h := acc.1
-      let amount : Int := -(b.remaining : Int)
-      let before : Int := h.balance
-      let after : Int := before + amount
-      let nextBuckets := applyEntry h.buckets before amount t e
-      let h' : LedgerAccount :=
-        { h with balance := after, lastSeq := h.lastSeq + 1, buckets := nextBuckets }
-      let entry : LedgerEntry :=
-        { owner := h.owner, unit := h.unit, scope := h.scope, sequence := h'.lastSeq, amount := amount,
-          key := expiryKeyPrefix ++ toString b.periodStart, reason := expiryReason, causedBy := none,
-          time := t, corrects := none }
-      let ev : LedgerPosted :=
-        { owner := h.owner, unit := h.unit, scope := h.scope, amount := amount, balance := after, balanceBefore := before, entrySequence := h'.lastSeq, reason := expiryReason }
-      (h', acc.2 ++ [(entry, ev)]))
-    (a, [])
+  due.foldl (expireStep e t) (a, [])
 
 /-- The intent `ExpireLedger` (CT-812): the system or a holder of `ledger-configure`; the unit declares an expiry;
     the cutoff is at most the latest that has ended its life at `t`; then each due account is expired. -/

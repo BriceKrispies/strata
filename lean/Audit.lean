@@ -3041,3 +3041,208 @@ end Strata
 #print axioms Strata.refused_write_no_transition
 #print axioms Strata.write_sets_override
 #print axioms Strata.write_removes_override
+
+/-! ## Slice 13: the ledger (`lean/Strata/LedgerTypes.lean`, `lean/Strata/LedgerModel.lean`, the intents
+`postLedger` and `expireLedger`, `lean/Main.lean`) -/
+
+namespace Strata
+
+/-- The sum of the amounts of every entry of the journal: the sum of all balances of the ledger. -/
+def ledgerTotal (L : LedgerState) : Int := (L.journal.map (fun e => e.amount)).sum
+
+/-- The balance of an account, zero when the account has no header. -/
+def ledgerBal (L : LedgerState) (o : LedgerOwner) (u : Nat) (s : String) : Int :=
+  ((L.accounts.find? (fun a => a.is o u s)).map (fun a => a.balance)).getD 0
+
+/-- A posting conserves the total: an accepted posting moves the total by the amount of the entry it writes (the
+    event it emits), and a replay moves it by nothing. -/
+theorem postOne_total {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {evs : List LedgerPosted} (h : postOne t actor now L q = .ok (L', evs)) :
+    ledgerTotal L' = ledgerTotal L + (evs.map (fun e => e.amount)).sum := by
+  unfold postOne postDynamic at h
+  simp only [] at h
+  repeat' split at h
+  all_goals first
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, rfl⟩ := h
+       simp [ledgerTotal, List.map_append, List.sum_append])
+    | cases h
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, rfl⟩ := h
+       simp [ledgerTotal, List.map_append, List.sum_append])
+
+/-- A refused posting refuses the whole intent: when the postings before it are accepted and the next one is refused on
+    the state they leave, the intent is refused with that same refusal, whatever postings follow (the atomicity of the
+    one to eight postings, LDG-009). -/
+theorem ledger_post_atomic {t : Tenant} {actor : Principal} {now : Int} {ps₁ ps₂ : List LedgerPosting}
+    {q : LedgerPosting} {e : Err} {L₁ : LedgerState} {evs₁ : List LedgerPosted}
+    (hcap : t.holdsCap actor ledgerCapPost = true)
+    (hlen : (ps₁ ++ q :: ps₂).length ≤ ledgerMaxPostings)
+    (h₁ : List.foldlM (fun (acc : LedgerState × List LedgerPosted) (x : LedgerPosting) =>
+        (postOne t actor now acc.1 x).map (fun r => (r.1, acc.2 ++ r.2))) (t.ledger, []) ps₁ = .ok (L₁, evs₁))
+    (hq : postOne t actor now L₁ q = .error e) :
+    postLedgerCore t actor now (ps₁ ++ q :: ps₂) = .error e := by
+  unfold postLedgerCore
+  have hl : decide (ledgerMaxPostings < (ps₁ ++ q :: ps₂).length) = false := by
+    simp only [decide_eq_false_iff_not, Nat.not_lt]
+    exact hlen
+  have hn : (ps₁ ++ q :: ps₂).isEmpty = false := by
+    cases hps : ps₁ ++ q :: ps₂ with
+    | nil => simp at hps
+    | cons x xs => rfl
+  simp only [hcap, hl, hn, Bool.not_true, Bool.false_or, Bool.or_false, Bool.false_eq_true, if_false]
+  rw [List.foldlM_append, h₁]
+  simp [List.foldlM_cons, hq, Except.map, Except.bind, bind]
+
+/-- What an accepted posting (one that writes an entry) establishes: its static checks passed, its key was new on the
+    account, and the journal it leaves is the one before with the entry of the posting appended, that entry naming the
+    account, the key, the amount, the reason and the correction of the posting. -/
+theorem postOne_accepted {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
+    {evs : List LedgerPosted} (h : postOne t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+    postStaticErr t actor q = none ∧
+    L.journal.find? (fun e => e.inAccount q.owner q.unit q.scope && e.key == q.key) = none ∧
+    ∃ entry : LedgerEntry, L'.journal = L.journal ++ [entry] ∧ entry.owner = q.owner ∧ entry.unit = q.unit ∧
+      entry.scope = q.scope ∧ entry.key = q.key ∧ entry.amount = q.amount ∧ entry.reason = q.reason ∧
+      entry.corrects = q.corrects := by
+  unfold postOne postDynamic at h
+  simp only [] at h
+  repeat' split at h
+  all_goals first
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, rfl⟩ := h
+       exact ⟨by assumption, by assumption, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩)
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, rfl⟩ := h
+       exact absurd rfl hne)
+    | cases h
+
+/-- A replay: a posting accepted on a state is replayed, with no change, on the state it leaves (the idempotency of a
+    key, LDG-006, LDG-2931): the same posting, asked again, returns the same answer and writes nothing. -/
+theorem ledger_replay_unchanged {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState}
+    {q : LedgerPosting} {evs : List LedgerPosted}
+    (h : postOne t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+    postOne t actor now L' q = .ok (L', []) := by
+  obtain ⟨hs, hf, entry, hJ, ho, hu, hsc, hk, ha, hr, hc⟩ := postOne_accepted h hne
+  unfold postOne
+  rw [hs]
+  unfold postDynamic
+  rw [hJ, List.find?_append, hf, Option.none_or]
+  simp [List.find?, LedgerEntry.inAccount, ho, hu, hsc, hk, ha, hr, hc]
+
+/-- The entries of an expiry step: each is the debit of the bucket it is keyed by, and that bucket is one the step is
+    given. -/
+theorem expireStep_new (e : LedgerExpiry) (t : Int) (acc : LedgerAccount × List (LedgerEntry × LedgerPosted))
+    (b : LedgerBucket) :
+    ∀ x ∈ (expireStep e t acc b).2, x ∈ acc.2 ∨
+      (x.1.amount = -(b.remaining : Int) ∧ x.1.key = expiryKeyPrefix ++ toString b.periodStart) := by
+  intro x hx
+  simp only [expireStep, List.mem_append, List.mem_singleton] at hx
+  rcases hx with hx | hx
+  · exact Or.inl hx
+  · subst hx
+    exact Or.inr ⟨rfl, rfl⟩
+
+/-- An expiry debits only the buckets whose life has ended: every entry an account's expiry writes is the debit of one of
+    its buckets that started at or before the cutoff, and is keyed by that bucket's start (LDG-1545 to LDG-1547). -/
+theorem expireAccount_debits_due (e : LedgerExpiry) (t cutoff : Int) (a : LedgerAccount) :
+    ∀ x ∈ (expireAccount e t cutoff a).2, ∃ b ∈ a.buckets, b.periodStart ≤ cutoff ∧
+      x.1.amount = -(b.remaining : Int) ∧ x.1.key = expiryKeyPrefix ++ toString b.periodStart := by
+  have gen : ∀ (ds : List LedgerBucket) (acc : LedgerAccount × List (LedgerEntry × LedgerPosted)),
+      (∀ x ∈ acc.2, ∃ b ∈ a.buckets, b.periodStart ≤ cutoff ∧
+        x.1.amount = -(b.remaining : Int) ∧ x.1.key = expiryKeyPrefix ++ toString b.periodStart) →
+      (∀ b ∈ ds, b ∈ a.buckets ∧ b.periodStart ≤ cutoff) →
+      ∀ x ∈ (ds.foldl (expireStep e t) acc).2, ∃ b ∈ a.buckets, b.periodStart ≤ cutoff ∧
+        x.1.amount = -(b.remaining : Int) ∧ x.1.key = expiryKeyPrefix ++ toString b.periodStart := by
+    intro ds
+    induction ds with
+    | nil =>
+      intro acc hacc _ x hx
+      exact hacc x hx
+    | cons b bs ih =>
+      intro acc hacc hds x hx
+      refine ih (expireStep e t acc b) ?_ ?_ x hx
+      · intro y hy
+        rcases expireStep_new e t acc b y hy with hy' | ⟨ha, hk⟩
+        · exact hacc y hy'
+        · exact ⟨b, (hds b (by simp)).1, (hds b (by simp)).2, ha, hk⟩
+      · intro c hc
+        exact hds c (by simp [hc])
+  intro x hx
+  unfold expireAccount at hx
+  refine gen _ (a, []) (by simp) ?_ x hx
+  intro b hb
+  have hm := List.mem_filter.mp hb
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at hm
+  exact ⟨hm.1, hm.2.1⟩
+
+/-- An expiry step writes entries whose amounts are the amounts of their events (given that the entries before it do). -/
+theorem expireStep_amount (e : LedgerExpiry) (t : Int) (acc : LedgerAccount × List (LedgerEntry × LedgerPosted))
+    (b : LedgerBucket) (hacc : ∀ y ∈ acc.2, y.1.amount = y.2.amount) :
+    ∀ x ∈ (expireStep e t acc b).2, x.1.amount = x.2.amount := by
+  intro x hx
+  simp only [expireStep, List.mem_append, List.mem_singleton] at hx
+  rcases hx with hx | hx
+  · exact hacc x hx
+  · subst hx
+    rfl
+
+/-- A read of an account is refused to a reader that may not read it at all (the kernel's `may_read`). -/
+theorem read_refused_when_unpermitted {t : Tenant} {p : Principal} {o : LedgerOwner} {u : Nat} {s : String}
+    {own : Bool} {L : LedgerState} (h : mayReadLedger t p o = .error .unauthorized) :
+    readLedgerBalance t p o u s own L = .error .unauthorized := by
+  unfold readLedgerBalance
+  simp [h]
+
+/-- The entries of one account's expiry have the amounts of their events. -/
+theorem expireAccount_amounts (e : LedgerExpiry) (t cutoff : Int) (a : LedgerAccount) :
+    ∀ x ∈ (expireAccount e t cutoff a).2, x.1.amount = x.2.amount := by
+  have gen : ∀ (ds : List LedgerBucket) (acc : LedgerAccount × List (LedgerEntry × LedgerPosted)),
+      (∀ y ∈ acc.2, y.1.amount = y.2.amount) →
+      ∀ x ∈ (ds.foldl (expireStep e t) acc).2, x.1.amount = x.2.amount := by
+    intro ds
+    induction ds with
+    | nil =>
+      intro acc hacc x hx
+      exact hacc x hx
+    | cons b bs ih =>
+      intro acc hacc x hx
+      exact ih _ (expireStep_amount e t acc b hacc) x hx
+  intro x hx
+  unfold expireAccount at hx
+  exact gen _ _ (by simp) x hx
+
+/-- Two lists of entries whose amounts agree pairwise have the same sum of amounts. -/
+theorem sum_amounts_of_pairs (xs : List (LedgerEntry × LedgerPosted))
+    (h : ∀ x ∈ xs, x.1.amount = x.2.amount) :
+    (xs.map (fun x => x.1.amount)).sum = (xs.map (fun x => x.2.amount)).sum := by
+  rw [List.map_congr_left h]
+
+/-- An accepted ExpireLedger moves the total of the journal by the amounts of the events it emits: the expiry debits
+    exactly the credit it reports, and nothing else. -/
+theorem expireCore_total {t : Tenant} {actor : Principal} {now : Int} {unit : Nat} {cutoffAt : Int}
+    {L' : LedgerState} {evs : List LedgerPosted} (h : expireCore t actor now unit cutoffAt = .ok (L', evs)) :
+    ledgerTotal L' = ledgerTotal t.ledger + (evs.map (fun e => e.amount)).sum := by
+  unfold expireCore at h
+  simp only [] at h
+  repeat' split at h
+  all_goals first
+    | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
+       obtain ⟨rfl, rfl⟩ := h
+       simp only [ledgerTotal, List.map_append, List.sum_append, List.map_map, Function.comp_def]
+       congr 1
+       apply sum_amounts_of_pairs
+       intro x hx
+       obtain ⟨r, hr, hxr⟩ := List.mem_flatMap.mp hx
+       obtain ⟨a, _, rfl⟩ := List.mem_map.mp hr
+       exact expireAccount_amounts _ _ _ a x hxr)
+    | cases h
+
+end Strata
+
+/-! Axioms of the slice 13 theorems: only propext, Classical.choice and Quot.sound. -/
+#print axioms Strata.postOne_total
+#print axioms Strata.ledger_post_atomic
+#print axioms Strata.ledger_replay_unchanged
+#print axioms Strata.expireAccount_debits_due
+#print axioms Strata.expireCore_total
+#print axioms Strata.read_refused_when_unpermitted
