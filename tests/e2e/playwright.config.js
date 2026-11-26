@@ -34,6 +34,8 @@ export default defineConfig({
   use: { baseURL: external ?? 'http://127.0.0.1:4200', trace: 'retain-on-failure', ...devices['Desktop Chrome'], viewport: { width: 1280, height: 860 } },
   projects: [
     { name: 'site', testMatch: 'site.spec.js' },
+    // Hostile values through the real page, and the CSP headers it is served with (WG-5677).
+    { name: 'xss', testMatch: 'xss-fuzz.spec.js' },
     // Keycloak as a real identity provider: only against the container stack started with
     // STRATA_IDP=1 (npm run idp:containers), which has no mock servers.
     ...(external ? [{ name: 'idp', testMatch: 'idp.spec.js', timeout: 90_000 }] : []),
