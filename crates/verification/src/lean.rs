@@ -2436,9 +2436,7 @@ fn initial_segments(world: &World) -> BTreeMap<TenantId, SegmentTables> {
         write.clear_batches.clear();
         write.batches.clear();
         let mut table = SegmentTables::default();
-        table
-            .apply(&write)
-            .expect("the fixture segment is applied");
+        table.apply(&write).expect("the fixture segment is applied");
         tables.insert(tenant_id, table);
     }
     tables
@@ -2486,10 +2484,7 @@ fn parse_segment_expr<'a, 'b>(tokens: &'b [&'a str]) -> Option<(Expr, &'b [&'a s
     };
     match *token {
         "prin" => Some((Expr::Principal, rest)),
-        "c" => Some((
-            Expr::Var(Scope::Record, "$created_by".to_string()),
-            rest,
-        )),
+        "c" => Some((Expr::Var(Scope::Record, "$created_by".to_string()), rest)),
         "not" => {
             let (a, rest) = parse_segment_expr(rest)?;
             Some((Expr::Not(Box::new(a)), rest))
@@ -2649,8 +2644,7 @@ fn segment_rebuild_pass(
     let mut seen = BTreeSet::new();
     let mut targets = Vec::new();
     for record in tenant.records_of(&held.subject) {
-        let Some(person) = strata_kernel::segments::person_of(record, &held.principal_field)
-        else {
+        let Some(person) = strata_kernel::segments::person_of(record, &held.principal_field) else {
             continue;
         };
         if seen.insert(person.clone()) {
@@ -2794,9 +2788,7 @@ fn run_segment_op(
             let segment = segment_id(&ctx.tenant, number)?;
             match strata_kernel::segments::remove(stored, &table.catalog(), segment, ctx) {
                 Err(error) => return Some(vec![format!("err {}", show_error(error.kind))]),
-                Ok(write) => table
-                    .apply(&write)
-                    .expect("an accepted removal is applied"),
+                Ok(write) => table.apply(&write).expect("an accepted removal is applied"),
             }
         }
         SegmentOp::Rebuild(number) => {
@@ -3501,9 +3493,6 @@ fn event_text(event: &DomainEvent, changes: &[SchemaChange]) -> String {
             user_number(definer),
             role_number(role)
         ),
-        // The model has no such event. The line does not start with `event `, so a kernel that emits one
-        // makes the comparison fail instead of being hidden by the filter of `outcome_lines`.
-        _ => format!("unmodelled event seq={}", event.seq),
     };
     format!(
         "event {} rev={} by={} {body}",

@@ -892,6 +892,9 @@ pub enum Intent {
 
 /// The result of a step: the refusal, or the tenant after the change (Lean's `Except Err Tenant`).
 #[derive(Clone, Debug, PartialEq, Eq)]
+// One value per kernel call, mirroring Lean's `Except Err Tenant`; boxing the tenant would only
+// add an allocation on the common path.
+#[allow(clippy::large_enum_variant)]
 pub enum StepResult {
     Refused(Refusal),
     Accepted(Tenant),
@@ -1221,6 +1224,9 @@ fn put_obj_type(out: &mut Vec<u8>, o: &ObjType) {
 }
 
 /// A string as a list element (`encList encStr`).
+// Takes `&String` because it is passed as the element writer of `put_list`/`put_opt` over
+// `Vec<String>`/`Option<String>`.
+#[allow(clippy::ptr_arg)]
 fn put_string(out: &mut Vec<u8>, s: &String) {
     put_str(out, s);
 }

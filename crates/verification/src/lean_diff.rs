@@ -3115,10 +3115,7 @@ fn segment_script(rng: &mut Lcg, tenant: u64, first: u64) -> Vec<Op> {
             let mut ops = vec![
                 op(home, None, 20, OpKind::Create(fields(a, score(rng)))),
                 op(home, None, 20, OpKind::Create(fields(b, score(rng)))),
-                segment(
-                    home,
-                    format!("define {number} {name} 20 1 - {before}"),
-                ),
+                segment(home, format!("define {number} {name} 20 1 - {before}")),
                 segment(home, format!("rebuild {number}")),
                 op(
                     home,
@@ -3266,7 +3263,8 @@ pub fn segment_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
                     word("direction=")?,
                     word("reason=")?
                 ))
-            } else if line.starts_with("effect start-automation ") && line.contains(" params=")
+            } else if line.starts_with("effect start-automation ")
+                && line.contains(" params=")
                 && line.contains("segment=s:")
             {
                 Some("segment start-automation".to_string())
@@ -3281,11 +3279,17 @@ pub fn segment_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
         .collect();
     // An entry or exit that a member change caused: the operation's group holds the `member-changed` event of the change,
     // and the kernel's plan includes the users whose roles it changed (slice 16).
-    if group.iter().any(|line| line.as_ref().contains(" member-changed ")) {
+    if group
+        .iter()
+        .any(|line| line.as_ref().contains(" member-changed "))
+    {
         for line in group {
             let line = line.as_ref();
             if line.starts_with("segment-event ") {
-                if let Some(dir) = line.split_whitespace().find_map(|w| w.strip_prefix("direction=")) {
+                if let Some(dir) = line
+                    .split_whitespace()
+                    .find_map(|w| w.strip_prefix("direction="))
+                {
                     shapes.push(format!("segment-event {dir} member-change"));
                 }
             }
