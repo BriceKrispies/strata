@@ -4670,3 +4670,472 @@ setting-revision 1 label 2
 tenant 2 next=1 required=1
 type 2 required=
 end
+scenario h-ledger-post-accepted-and-read
+ok
+ok
+balance 500
+seq 1
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=500 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=500 key=k1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-replay-changes-nothing
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=500 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=500 key=k1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-version-conflict
+ok
+err version_conflict
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=500 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=500 key=k1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-unauthorized-postings
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-unknown-unit-and-owner
+err not_found
+err not_found
+err not_found
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=pool1 unit=1 scope=- balance=5 seq=1 buckets=-
+ledger-entry 1 owner=pool1 unit=1 scope=- seq=1 amount=5 key=k4 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-invalid-amount-and-key
+err invalid_intent
+err invalid_intent
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-self-adjustment-refused
+err self_action
+err self_action
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=101 unit=1 scope=- balance=5 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=1 scope=- seq=1 amount=5 key=k3 reason=adjust by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-correction-names-an-entry
+ok
+ok
+err invalid_intent
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=300 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=500 key=k1 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=2 amount=-200 key=k2 reason=- by=100 at=1767225600000 corrects=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-multi-posting-one-refusal-refuses-all
+err invalid_intent
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=10 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=10 key=b1 reason=- by=100 at=1767225600000 corrects=-
+ledger-account 1 owner=100 unit=2 scope=- balance=5 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=5 key=b2 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-cap-and-floor
+ok
+err constraint_violated
+ok
+err constraint_violated
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=600 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=900 key=c1 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=2 amount=-300 key=c3 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-expiry-debits-due-credit
+ok
+ok
+ok
+ok
+balance 0
+seq 3
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=3 scope=- balance=0 seq=3 buckets=-
+ledger-entry 1 owner=100 unit=3 scope=- seq=1 amount=100 key=e1 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=3 scope=- seq=2 amount=50 key=e2 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=3 scope=- seq=3 amount=-150 key=expiry:1767225600000 reason=expiry by=- at=1772323200000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-expiry-refused
+ok
+err unauthorized
+err invalid_intent
+err invalid_intent
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=3 scope=- balance=100 seq=1 buckets=1767225600000:100
+ledger-entry 1 owner=100 unit=3 scope=- seq=1 amount=100 key=e1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-expiry-with-nothing-due
+ok
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=3 scope=- balance=40 seq=1 buckets=1772323200000:40
+ledger-entry 1 owner=100 unit=3 scope=- seq=1 amount=40 key=e1 reason=- by=100 at=1772323200000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-reads-by-reach
+ok
+ok
+balance 25
+seq 1
+ok
+balance 25
+seq 1
+err unauthorized
+err unauthorized
+ok
+balance 25
+seq 1
+err not_found
+ok
+balance 0
+seq 0
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=101 unit=1 scope=- balance=25 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=1 scope=- seq=1 amount=25 key=r1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-reads-without-an-account
+err not_found
+ok
+balance 0
+seq 0
+err not_found
+err not_found
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-accepted-and-read
+ok
+ok
+ok
+balance 300
+seq 2
+ok
+balance 200
+seq 1
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=300 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=500 key=p1 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-200 key=t1:0 reason=pay by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=200 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=200 key=t1:1 reason=pay by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-retry-replays-and-another-request-conflicts
+ok
+ok
+ok
+ok
+err version_conflict
+err version_conflict
+ok
+balance 70
+seq 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=950 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-50 key=t1:0 reason=pay by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=70 seq=2 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=50 key=t1:1 reason=pay by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-needs-two-legs-that-net-to-zero-in-each-unit
+ok
+ok
+err constraint_violated
+err constraint_violated
+err constraint_violated
+ok
+err constraint_violated
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=995 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-5 key=u4:0 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=23 seq=2 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=3 key=u4:1 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=102 unit=2 scope=- balance=2 seq=1 buckets=-
+ledger-entry 1 owner=102 unit=2 scope=- seq=1 amount=2 key=u4:2 reason=- by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-header-is-complete
+ok
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=995 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-5 key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:0 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=25 seq=2 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=5 key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1 reason=- by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-unauthorized
+ok
+err unauthorized
+err unauthorized
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=101 unit=2 scope=- balance=20 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-at-most-sixty-four-legs
+ok
+ok
+err constraint_violated
+ok
+ok
+balance 52
+seq 33
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=968 seq=33 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-1 key=m2:0 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=3 amount=-1 key=m2:2 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=4 amount=-1 key=m2:4 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=5 amount=-1 key=m2:6 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=6 amount=-1 key=m2:8 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=7 amount=-1 key=m2:10 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=8 amount=-1 key=m2:12 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=9 amount=-1 key=m2:14 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=10 amount=-1 key=m2:16 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=11 amount=-1 key=m2:18 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=12 amount=-1 key=m2:20 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=13 amount=-1 key=m2:22 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=14 amount=-1 key=m2:24 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=15 amount=-1 key=m2:26 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=16 amount=-1 key=m2:28 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=17 amount=-1 key=m2:30 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=18 amount=-1 key=m2:32 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=19 amount=-1 key=m2:34 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=20 amount=-1 key=m2:36 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=21 amount=-1 key=m2:38 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=22 amount=-1 key=m2:40 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=23 amount=-1 key=m2:42 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=24 amount=-1 key=m2:44 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=25 amount=-1 key=m2:46 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=26 amount=-1 key=m2:48 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=27 amount=-1 key=m2:50 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=28 amount=-1 key=m2:52 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=29 amount=-1 key=m2:54 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=30 amount=-1 key=m2:56 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=31 amount=-1 key=m2:58 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=32 amount=-1 key=m2:60 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=33 amount=-1 key=m2:62 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=52 seq=33 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=1 key=m2:1 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=3 amount=1 key=m2:3 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=4 amount=1 key=m2:5 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=5 amount=1 key=m2:7 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=6 amount=1 key=m2:9 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=7 amount=1 key=m2:11 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=8 amount=1 key=m2:13 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=9 amount=1 key=m2:15 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=10 amount=1 key=m2:17 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=11 amount=1 key=m2:19 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=12 amount=1 key=m2:21 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=13 amount=1 key=m2:23 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=14 amount=1 key=m2:25 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=15 amount=1 key=m2:27 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=16 amount=1 key=m2:29 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=17 amount=1 key=m2:31 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=18 amount=1 key=m2:33 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=19 amount=1 key=m2:35 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=20 amount=1 key=m2:37 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=21 amount=1 key=m2:39 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=22 amount=1 key=m2:41 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=23 amount=1 key=m2:43 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=24 amount=1 key=m2:45 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=25 amount=1 key=m2:47 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=26 amount=1 key=m2:49 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=27 amount=1 key=m2:51 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=28 amount=1 key=m2:53 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=29 amount=1 key=m2:55 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=30 amount=1 key=m2:57 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=31 amount=1 key=m2:59 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=32 amount=1 key=m2:61 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=33 amount=1 key=m2:63 reason=- by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-one-refused-leg-refuses-all
+ok
+ok
+err not_found
+err not_found
+err constraint_violated
+ok
+ok
+balance 995
+seq 2
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=995 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-5 key=r4:0 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=25 seq=2 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=5 key=r4:1 reason=- by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-self-adjustment-refused
+ok
+ok
+err self_action
+ok
+err self_action
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=1000 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-account 1 owner=101 unit=2 scope=- balance=15 seq=2 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=-5 key=s2:0 reason=reverse by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=102 unit=2 scope=- balance=5 seq=1 buckets=-
+ledger-entry 1 owner=102 unit=2 scope=- seq=1 amount=5 key=s2:1 reason=reverse by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-transfer-rules
+ok
+ok
+ok
+ok
+err constraint_violated
+err constraint_violated
+err constraint_violated
+err constraint_violated
+ok
+err constraint_violated
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=997 seq=4 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-5 key=x1:0 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=3 amount=-3 key=x2:1 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=100 unit=2 scope=- seq=4 amount=5 key=x7:0 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=23 seq=4 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=20 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=2 amount=5 key=x1:1 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=3 amount=3 key=x2:0 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+ledger-entry 1 owner=101 unit=2 scope=- seq=4 amount=-5 key=x7:1 reason=transfer by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-ledger-tx-and-postings-do-not-share-an-entry
+ok
+ok
+err version_conflict
+ok
+err version_conflict
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=2 scope=- balance=988 seq=3 buckets=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=1 amount=1000 key=seed reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=2 amount=-5 key=q:0 reason=- by=100 at=1767225600000 corrects=-
+ledger-entry 1 owner=100 unit=2 scope=- seq=3 amount=-7 key=v:0 reason=- by=100 at=1767225600000 corrects=- txn=1
+ledger-account 1 owner=101 unit=2 scope=- balance=7 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=7 key=v:1 reason=- by=100 at=1767225600000 corrects=- txn=1
+tenant 2 next=1 required=1
+type 2 required=
+end
