@@ -217,10 +217,10 @@ theorem fixture_stranger_refused_item :
 theorem fixture_anonymous_refused_item :
     stepTenant (initialTenant 1) .anonymous (.create 1 []) = .error .unauthorized := rfl
 
-/-- The anonymous caller may create a part: the public policy whose condition is `isNull(principal)`
+/-- The anonymous caller may create a part (with a number, as a part must have a link or a number): the public policy whose condition is `isNull(principal)`
     holds for it. -/
 theorem fixture_anonymous_creates_part :
-    ∃ t', stepTenant (initialTenant 1) .anonymous (.create 2 []) = .ok t' := ⟨_, rfl⟩
+    ∃ t', stepTenant (initialTenant 1) .anonymous (.create 2 [(4, .int 1)]) = .ok t' := ⟨_, rfl⟩
 
 /-- A stranger may not create a part: the condition of the public policy is false for a user. -/
 theorem fixture_stranger_refused_part :
@@ -228,16 +228,15 @@ theorem fixture_stranger_refused_part :
 
 /-- The editor may create an item, whatever the record. -/
 theorem fixture_editor_creates_item :
-    ∃ t', stepTenant (initialTenant 1) (.user 101) (.create 1 [(1, .str "x"), (2, .int 1)]) = .ok t' := ⟨_, rfl⟩
+    ∃ t', stepTenant (initialTenant 1) (.user 101) (.create 1 [(1, .str "x")]) = .ok t' := ⟨_, rfl⟩
 
 /-- Tenant `1` with one item created by writer `102` (record `1`) and one by writer `103` (record
-    `2`), each with field `1` named `a` and field `2` a number (the constraint of the item type needs a
-    link or a number, WG-5664). -/
+    `2`), each with field `1` named `a`. -/
 def fixtureItems : Tenant :=
   { types := [(1, { schema := itemSchema, constraints := itemConstraints,
-                    records := [(1, { owner := some 102, version := 1, fields := [(1, .str "a"), (2, .int 1)] }),
-                                (2, { owner := some 103, version := 1, fields := [(1, .str "a"), (2, .int 1)] })] }),
-              (2, { schema := partSchema })],
+                    records := [(1, { owner := some 102, version := 1, fields := [(1, .str "a")] }),
+                                (2, { owner := some 103, version := 1, fields := [(1, .str "a")] })] }),
+              (2, { schema := partSchema, constraints := partConstraints })],
     members := (initialTenant 1).members, grants := [], policies := fixturePolicies, nextId := 3,
     limits := Limits.kernel }
 

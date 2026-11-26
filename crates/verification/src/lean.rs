@@ -348,9 +348,7 @@ fn item_default(n: u64) -> Option<Expr> {
 }
 
 /// The constraints of the item type, in id order (the model's `itemConstraints`): field `2` is absent
-/// or not negative, field `1` is not the name `forbidden`, and an item has a link (field `4`, a set-null
-/// reference, which a delete clears) or a number (field `2`), so a delete that clears the link of an
-/// item with no number is refused (WG-5664).
+/// or not negative, and field `1` is not the name `forbidden`.
 fn item_constraints() -> Vec<SchemaChange> {
     let field = |n: u64| Box::new(Expr::Var(Scope::Record, format!("f{n:02}")));
     let absent_or_not_negative = Expr::Or(vec![
@@ -362,14 +360,9 @@ fn item_constraints() -> Vec<SchemaChange> {
         field(1),
         Box::new(Expr::Lit(Value::Str("forbidden".into()))),
     );
-    let link_or_number = Expr::Or(vec![
-        Expr::Not(Box::new(Expr::IsNull(field(4)))),
-        Expr::Not(Box::new(Expr::IsNull(field(2)))),
-    ]);
     [
         ("c1", absent_or_not_negative, "a value is negative"),
         ("c2", not_forbidden, "the name is forbidden"),
-        ("c3", link_or_number, "neither a link nor a number"),
     ]
     .into_iter()
     .map(|(name, expr, message)| SchemaChange::DefineConstraint {
@@ -381,6 +374,28 @@ fn item_constraints() -> Vec<SchemaChange> {
         },
     })
     .collect()
+}
+
+/// The constraint of the part type (the model's `partConstraints`, WG-5664): a part names an item
+/// (field `1`, or field `2`, a set-null reference, which a delete clears), has a number (field `4`),
+/// or was made by `p100` (field `5`, whose default is whether the caller is `p100`). A delete that
+/// clears the only reference of a part that has none of the others is refused.
+fn part_constraints() -> Vec<SchemaChange> {
+    let field = |n: u64| Box::new(Expr::Var(Scope::Record, format!("f{n:02}")));
+    let named = |n: u64| Expr::Not(Box::new(Expr::IsNull(field(n))));
+    let made_by_p100 = Expr::Cmp(
+        CmpOp::Eq,
+        field(5),
+        Box::new(Expr::Lit(Value::Bool(true))),
+    );
+    vec![SchemaChange::DefineConstraint {
+        object: part(),
+        constraint: ConstraintDef {
+            id: id("c1".to_string()),
+            expr: Expr::Or(vec![named(1), named(2), named(4), made_by_p100]),
+            message: "a part names no item, has no number and was not made by p100".to_string(),
+        },
+    }]
 }
 
 fn field_def(n: u64, required: bool) -> FieldDef {
@@ -706,8 +721,9 @@ fn initial_world() -> World {
             object: part(),
             field: part_field_def(n),
         }));
-        // The item's constraints read its fields, so they follow the fields of both types.
+        // The constraints read fields, so they follow the fields of both types.
         changes.extend(item_constraints());
+        changes.extend(part_constraints());
         changes.extend([
             policy(
                 item(),

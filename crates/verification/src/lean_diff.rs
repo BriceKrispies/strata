@@ -465,17 +465,6 @@ fn aimed_refs(
     fields.sort_by_key(|(f, _)| *f);
 }
 
-/// The item type's third constraint (WG-5664) is that a record has a link (field 4) or a number
-/// (field 2). A record the generator builds on purpose to be accepted must satisfy it, or no
-/// reference chain is ever built and the outcomes that need one (a delete refused because a record
-/// still refers to its target) never occur. Give the record a number when it names neither.
-fn link_or_number(rng: &mut Lcg, fields: &mut Vec<(u64, String)>) {
-    if !fields.iter().any(|(f, _)| *f == 2 || *f == 4) {
-        fields.push((2, format!("i:{}", rng.below(30))));
-        fields.sort_by_key(|(f, _)| *f);
-    }
-}
-
 /// How the generator built a bound-straddling field set.
 struct Straddle {
     fields: Vec<(u64, String)>,
@@ -975,10 +964,10 @@ pub fn generate(seed: u64) -> Scenario {
                 object: 1,
                 kind,
             };
-            ops.push(owner(OpKind::Create(vec![
-                (1, format!("s:{}", word(&mut rng))),
-                (2, "i:1".to_string()),
-            ])));
+            ops.push(owner(OpKind::Create(vec![(
+                1,
+                format!("s:{}", word(&mut rng)),
+            )])));
             created[t] += 1;
             versions[t].push(1);
             if rng.below(2) == 0 {
@@ -993,7 +982,6 @@ pub fn generate(seed: u64) -> Scenario {
                 referred[t].push(first);
                 ops.push(owner(OpKind::Create(vec![
                     (1, format!("s:{}", word(&mut rng))),
-                    (2, "i:1".to_string()),
                     (field, token),
                 ])));
                 created[t] += 1;
@@ -1030,7 +1018,6 @@ pub fn generate(seed: u64) -> Scenario {
                 if aimed {
                     principal = home + rng.below(2);
                     aimed_refs(&mut rng, &mut fields, created[t], &mut referred[t]);
-                    link_or_number(&mut rng, &mut fields);
                 }
                 if aimed && rng.below(8) == 0 {
                     principal = home + rng.below(2);
@@ -1052,7 +1039,6 @@ pub fn generate(seed: u64) -> Scenario {
                     principal = home + rng.below(2);
                     id = 1 + rng.below(created[t]);
                     aimed_refs(&mut rng, &mut fields, created[t], &mut referred[t]);
-                    link_or_number(&mut rng, &mut fields);
                     if rng.below(8) == 0 {
                         let s = straddle(&mut rng, created[t], &mut referred[t], true);
                         fields = s.fields;
@@ -1580,8 +1566,8 @@ mod tests {
     /// The full generator builds the chain the refused delete needs, without the lake: within 2000
     /// scenarios, one makes a record as the first thing done to its tenant, then a record that refers to
     /// it through field 5 or the list field 0, then deletes the first, all as the tenant's owner (who may
-    /// delete). The first record exists and satisfies the constraints (a name and a number), the second
-    /// names it and carries a number, so the delete is refused `still_referenced` by the model.
+    /// delete). The first record exists and has a name, the second names it, so the delete is refused
+    /// `still_referenced` by the model.
     #[test]
     fn the_generator_refuses_a_delete_of_a_record_a_restricting_field_refers_to() {
         let mut found = 0;
@@ -1618,11 +1604,9 @@ mod tests {
                     && same(second)
                     && same(delete)
                     && has(a, 1)
-                    && has(a, 2)
                     && !has(a, 4)
                     && !has(a, 0)
                     && !has(a, 5)
-                    && has(b, 2)
                     && names_first
                     && *id == 1
                 {

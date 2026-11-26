@@ -35,15 +35,21 @@ def itemSchema : Schema :=
    (11, { ty := .ref 2 .restrict, required := false }),
    (12, { ty := .ref 2 .setNull, required := false })]
 
-/-- The constraints of the item type, in id order (slice 5, WG-5664). The first, on field `2`, is violated by a
-    negative integer; the second, on field `1`, by the name `forbidden`; the third reads the set-null
-    reference `4`: an item has a link or a number, so a delete that clears the link of an item with no
-    number is refused. All are statically well typed (the kernel's schema check refuses a comparison of
-    two kinds), so none can fail to evaluate. -/
+/-- The constraints of the item type, in id order (slice 5). The first, on field `2`, is violated by a
+    negative integer; the second, on field `1`, by the name `forbidden`. Both are statically well typed
+    (the kernel's schema check refuses a comparison of two kinds), so neither can fail to evaluate. -/
 def itemConstraints : List Expr :=
   [.or (.isNull (.field .record 2)) (.cmp .ge (.field .record 2) (.lit (.int 0))),
-   .cmp .ne (.field .record 1) (.lit (.str "forbidden")),
-   .or (.not (.isNull (.field .record 4))) (.not (.isNull (.field .record 2)))]
+   .cmp .ne (.field .record 1) (.lit (.str "forbidden"))]
+
+/-- The constraint of the part type (WG-5664): a part names an item, through field `1` or through field
+    `2`, a set-null reference, or has a number (field `4`), or was made by `p100` (field `5`, whose
+    default is whether the caller is `p100`). A delete that clears the only reference of a part that
+    has none of the others is refused. -/
+def partConstraints : List Expr :=
+  [.or (.or (.or (.not (.isNull (.field .record 1))) (.not (.isNull (.field .record 2))))
+            (.not (.isNull (.field .record 4))))
+       (.cmp .eq (.field .record 5) (.lit (.bool true)))]
 
 /-- The second object type, "part" (id `2`), whose references point into items and back:
     `1` a reference to an item that restricts its delete; `2` a reference to an item cleared when
@@ -88,7 +94,7 @@ def fixturePolicies : List Policy :=
     writers. The size limits are the kernel's. -/
 def initialTenant (n : Nat) : Tenant :=
   { types := [(1, { schema := itemSchema, constraints := itemConstraints }),
-               (2, { schema := partSchema })],
+               (2, { schema := partSchema, constraints := partConstraints })],
     members := [(n * 100, [ownerRole]), (n * 100 + 1, [editorRole]),
                 (n * 100 + 2, [writerRole]), (n * 100 + 3, [writerRole])],
     grants := [],
