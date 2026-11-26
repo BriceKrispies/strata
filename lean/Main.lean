@@ -340,8 +340,13 @@ def parseInvoke : List String → Option Intent
 
 def parseOp (tokens : List String) : Option (Ctx × Intent) :=
   match tokens with
-  | "op" :: t :: p :: rest0 => do
-    let c : Ctx := { tenant := ← t.toNat?, principal := ← parsePrincipal p }
+  | "op" :: t :: p :: rest00 => do
+    -- An optional `hop=<n>` token gives the context the hop of the event that caused the intent (slice 15); without
+    -- it the hop is zero.
+    let (hop, rest0) ← match rest00 with
+      | h :: more => if h.startsWith "hop=" then (do pure ((← (h.drop 4).toNat?), more)) else pure (0, rest00)
+      | [] => pure (0, rest00)
+    let c : Ctx := { tenant := ← t.toNat?, principal := ← parsePrincipal p, hop := hop }
     let (ty, rest) ← splitType rest0
     match rest with
     | "create-tenant" :: _ => pure (c, ← parseMemberOp rest)
@@ -577,6 +582,7 @@ def showPrincipal : Principal → String
   | .user n => toString n
   | .system => "system"
   | .anonymous => "anon"
+  | .automation a => s!"automation:{a}"
 
 def showSchemaLine : SchemaLine → String
   | .field ty f => s!"field:{ty}.{f}"

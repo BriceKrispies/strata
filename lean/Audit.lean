@@ -1032,9 +1032,7 @@ import Strata.SchemaChangeProofs
 #print axioms Strata.stored_of_stepTenant_delete
 #print axioms Strata.transition_delete
 #print axioms Strata.transition_setRequired
-#print axioms Strata.Impl.absW_commitWorldI
 #print axioms Strata.Impl.transitionI_refines
-#print axioms Strata.Impl.absX_commitWorldX
 #print axioms Strata.Impl.transitionX_refines
 #print axioms Strata.Impl.commitI_abs
 
@@ -1128,6 +1126,7 @@ theorem hidden_field_absent (rs : FieldRules) (p : Principal) (ty : TypeId) (r :
   | system => exact hp rfl
   | user n => simp_all [shownField]
   | anonymous => simp_all [shownField]
+  | automation _ => simp_all [shownField]
 
 /-- The system is refused every record, so it reads none: the answer is the error or the empty list. -/
 theorem system_reads_no_record (t : Tenant) (spec : ReadSpec) (ty : TypeId)
@@ -2334,6 +2333,7 @@ theorem condHolds_redact (rs : FieldRules) (p : Principal) (ty : TypeId) (r : Re
     | system => rfl
     | user n => simp [shownField, hf f hfe]
     | anonymous => simp [shownField, hf f hfe]
+    | automation _ => simp [shownField, hf f hfe]
   simp only [condHolds, evalExpr_redact rs p ty r e hshown]
 
 theorem length_filterMap_eq_filter {α β : Type} (f : α → Option β) (g : α → Bool) :
@@ -2599,6 +2599,7 @@ theorem resolve_tenant (t : Tenant) (pv : PlatformValues) (p : Principal) (n : S
   cases p with
   | system => simp [pickOverride, hopen, ho]
   | anonymous => simp [pickOverride, hopen, ho]
+  | automation _ => simp [pickOverride, hopen, ho]
   | user u =>
     rcases hP u rfl with hP' | hP' <;> rcases hT u rfl with hT' | hT' <;>
       simp [pickOverride, hP', hT', hopen, ho]
@@ -2618,6 +2619,7 @@ theorem resolve_platform (t : Tenant) (pv : PlatformValues) (p : Principal) (n :
   cases p with
   | system => rcases hTn with h | h <;> simp [pickOverride, h, hopen, hpv, hty, hlim]
   | anonymous => rcases hTn with h | h <;> simp [pickOverride, h, hopen, hpv, hty, hlim]
+  | automation _ => rcases hTn with h | h <;> simp [pickOverride, h, hopen, hpv, hty, hlim]
   | user u =>
     rcases hP u rfl with hP' | hP' <;> rcases hT u rfl with hT' | hT' <;>
       rcases hTn with hTn' | hTn' <;> simp [pickOverride, hP', hT', hTn', hopen, hpv, hty, hlim]
@@ -2635,6 +2637,7 @@ theorem resolve_default (t : Tenant) (pv : PlatformValues) (p : Principal) (n : 
   cases p with
   | system => rcases hTn with h | h <;> rcases hPl with h' | h' <;> simp [pickOverride, h, h']
   | anonymous => rcases hTn with h | h <;> rcases hPl with h' | h' <;> simp [pickOverride, h, h']
+  | automation _ => rcases hTn with h | h <;> rcases hPl with h' | h' <;> simp [pickOverride, h, h']
   | user u =>
     rcases hP u rfl with hP' | hP' <;> rcases hT u rfl with hT' | hT' <;>
       rcases hTn with hTn' | hTn' <;> rcases hPl with hPl' | hPl' <;>
@@ -2967,6 +2970,7 @@ theorem write_event {w : World} {n : String} {lvl : SettingLevel} {team : Option
   obtain ⟨t₁, hst, -, hev⟩ := transition_existing h ht
   refine ⟨t₁, hst, ?_⟩
   rw [hev]
+  rw [suspensionsOf_of_not_changes (i := .writeSetting n lvl team v e) rfl]
   simp [eventBodies, numberEvents]
 
 /-- A refused write has no transition: it emits no event and makes no state, so the revision stays where it was. -/
@@ -4398,6 +4402,7 @@ theorem invoke_non_user_refused (t : Tenant) (p : Principal) (now : Int) (name :
   cases p with
   | user u => exact absurd rfl (hp u)
   | system => rfl
+  | automation _ => rfl
   | anonymous => rfl
 
 /-- A person none of whose roles the operation names, when the operation is not open to every signed-in person, is
@@ -4537,6 +4542,9 @@ theorem invoke_only_invokers (t t' : Tenant) (p : Principal) (now : Int) (name :
   | anonymous =>
     rw [invoke_non_user_refused t .anonymous now name op ins key (fun u h => by cases h) hop] at h
     cases h
+  | automation a =>
+    rw [invoke_non_user_refused t (.automation a) now name op ins key (fun u h => by cases h) hop] at h
+    cases h
   | user u =>
     refine ⟨u, rfl, ?_⟩
     refine Classical.byContradiction (fun hn => ?_)
@@ -4592,3 +4600,147 @@ theorem opCreate_owner_is_invoker {c : OpCtx} {st st' : OpState} {id : String} {
 #print axioms Strata.opCreate_owner_is_invoker
 
 end Strata
+
+/-! ## Slice 15: triggers and automations (`Strata/Triggers.lean`, `Strata/Events.lean`)
+
+The decisions the kernel's `after_decision` makes on an accepted transition. A trigger that does not start a run
+says why in its decline; a paused trigger, an event the automation principal may not read, and a condition that holds
+not, decide nothing. The theorems state each case for one trigger and one event. -/
+
+namespace Strata
+
+/-- A refused intent has no transition, so it adds no trigger effect: the transition is the refusal. -/
+theorem refused_no_trigger_effect {w : World} {i : Intent} {c : Ctx} {e : Err}
+    (h : step w i c = .error e) : transition w i c = .error e :=
+  transition_refused h
+
+/-- An accepted transition's effects are the `Publish` effects of its events, in order, followed by the trigger effects
+    of the transition's events (the same events the publish effects name). -/
+theorem accepted_effects_shape {w : World} {i : Intent} {c : Ctx} {tr : Transition}
+    (h : transition w i c = .ok tr) :
+    ∃ rest, tr.effects = tr.events.map (fun e => .publish e.seq) ++ rest := by
+  obtain ⟨-, -, he⟩ := transition_ok h
+  refine ⟨tr.effects.drop tr.events.length, ?_⟩
+  rw [← he]
+  exact (List.take_append_drop _ _).symm.trans (by rw [List.take_append_drop])
+
+/-- A paused trigger decides nothing for any event. -/
+theorem paused_no_effect (t : Tenant) (hop : Nat) (ev : DomainEvent) (tr : TriggerDef)
+    (hp : tr.paused = true) : decideTrigger t hop ev tr = none := by
+  simp [decideTrigger, hp]
+
+/-- A trigger whose automation is missing declines `automationRemoved` (not reachable through the kernel's intents,
+    which refuse to remove an automation a trigger names, but decided all the same). -/
+theorem missing_automation_declined (t : Tenant) (hop : Nat) (ev : DomainEvent) (tr : TriggerDef)
+    (hp : tr.paused = false) (hm : t.automationDef? tr.automation = none) :
+    decideTrigger t hop ev tr = some (.declineAutomation ⟨tr.id, tr.automation, ev.seq, hop, .automationRemoved⟩) := by
+  simp [decideTrigger, hp, hm]
+
+/-- A trigger whose automation lost its definer's authority declines `runAsSuspended`, whatever the event: a suspended
+    automation is only declined, until it is defined again (WFL-1529, D-6526). -/
+theorem suspended_declined (t : Tenant) (hop : Nat) (ev : DomainEvent) (tr : TriggerDef) (a : AutomationDef)
+    (hp : tr.paused = false) (ha : t.automationDef? tr.automation = some a) (hs : a.suspendedFor.isSome = true) :
+    decideTrigger t hop ev tr = some (.declineAutomation ⟨tr.id, tr.automation, ev.seq, hop, .runAsSuspended⟩) := by
+  simp [decideTrigger, hp, ha, hs]
+
+/-- A trigger whose automation is a draft declines `automationInactive`: an automation starts runs only once it is
+    active (WFL-2684, D-7681). -/
+theorem draft_declined (t : Tenant) (hop : Nat) (ev : DomainEvent) (tr : TriggerDef) (a : AutomationDef)
+    (hp : tr.paused = false) (ha : t.automationDef? tr.automation = some a) (hs : a.suspendedFor = none)
+    (hd : a.state = .draft) :
+    decideTrigger t hop ev tr = some (.declineAutomation ⟨tr.id, tr.automation, ev.seq, hop, .automationInactive⟩) := by
+  simp [decideTrigger, hp, ha, hs, hd]
+
+/-- Past the hop limit, a trigger whose event is readable and whose condition is absent declines `hopLimit` (D-700,
+    SCH-300). -/
+theorem hop_limit_declined (t : Tenant) (hop : Nat) (ev : DomainEvent) (tr : TriggerDef) (a : AutomationDef)
+    (sc : AutoScopes) (hp : tr.paused = false) (ha : t.automationDef? tr.automation = some a)
+    (hs : a.suspendedFor = none) (hd : a.state = .active) (hsc : scopesOf t (.automation a.id) ev.body = some sc)
+    (hc : tr.condition = none) (hh : hopLimit < hop) :
+    decideTrigger t hop ev tr = some (.declineAutomation ⟨tr.id, tr.automation, ev.seq, hop, .hopLimit⟩) := by
+  have hn : ¬ hop ≤ hopLimit := by omega
+  simp [decideTrigger, hp, ha, hs, hd, hsc, hc, hn]
+
+/-- Within the hop limit, an active automation with no run key starts a run with no key, for an event it may read and
+    a trigger with no condition; the run carries the automation principal, the definer, the schema version and the
+    parameters of the event. -/
+theorem start_without_key (t : Tenant) (hop : Nat) (ev : DomainEvent) (tr : TriggerDef) (a : AutomationDef)
+    (sc : AutoScopes) (hp : tr.paused = false) (ha : t.automationDef? tr.automation = some a)
+    (hs : a.suspendedFor = none) (hd : a.state = .active) (hsc : scopesOf t (.automation a.id) ev.body = some sc)
+    (hc : tr.condition = none) (hh : hop ≤ hopLimit) (hk : a.runKey = none) :
+    decideTrigger t hop ev tr = some (.startAutomation ⟨tr.id, tr.automation, ev.seq, hop, .automation a.id,
+      a.definedBy, t.schemaVersion, none, eventParams ev.body ev.seq hop tr.on⟩) := by
+  have hn : ¬ hopLimit < hop := by omega
+  simp [decideTrigger, hp, ha, hs, hd, hsc, hc, hk, hn]
+
+/-- The principal of an automation holds exactly the run-as roles of the automation, and only while it is defined and not
+    suspended (WFL-1527, WFL-1529). -/
+theorem automation_holds_exactly_runAs (t : Tenant) (a : Nat) (r : RoleId) :
+    r ∈ t.rolesOf (.automation a) ↔
+      ∃ d, t.automationDef? a = some d ∧ d.suspendedFor = none ∧ r ∈ d.runAs := by
+  show r ∈ (match t.automationDef? a with
+    | some d => if d.suspendedFor.isSome then [] else d.runAs
+    | none => []) ↔ _
+  cases h : t.automationDef? a with
+  | none => simp [h]
+  | some d =>
+    cases hs : d.suspendedFor with
+    | none => simp [h, hs]
+    | some x => simp [h, hs]
+
+/-- A suspension emits one `AutomationSuspended` event per automation that lost authority, in automation id order, and
+    no event when none did (the kernel's `suspend_lost`). -/
+theorem suspendLost_events (t : Tenant) :
+    (suspendLost t).2 = (lostAuthority t).map (fun l => EventBody.automationSuspended l.1.id l.2.1 l.2.2) := by
+  unfold suspendLost
+  dsimp only
+  split
+  · simp_all
+  · rfl
+
+/-- An intent that does not change authority leaves the automations alone: its events are its own. -/
+theorem no_suspension_without_authority {t : Tenant} {i : Intent} (h : i.changesAuthority = false) :
+    suspensionsOf t i = [] :=
+  suspensionsOf_of_not_changes h
+
+/-- A run key that evaluates to null declines `conditionFailed`, within the hop limit (SCH-1532, D-6534): no run key is
+    made from it. -/
+theorem null_run_key_declined (t : Tenant) (hop : Nat) (ev : DomainEvent) (tr : TriggerDef) (a : AutomationDef)
+    (k : Expr) (sc : AutoScopes) (hp : tr.paused = false) (ha : t.automationDef? tr.automation = some a)
+    (hs : a.suspendedFor = none) (hd : a.state = .active) (hsc : scopesOf t (.automation a.id) ev.body = some sc)
+    (hc : tr.condition = none) (hh : hop ≤ hopLimit) (hk : a.runKey = some k)
+    (hnull : evalExpr { record := sc.record, old := sc.old, new := sc.new, principal := none,
+                        params := eventParams ev.body ev.seq hop tr.on } k = .ok .null) :
+    decideTrigger t hop ev tr = some (.declineAutomation ⟨tr.id, tr.automation, ev.seq, hop, .conditionFailed⟩) := by
+  have hn : ¬ hopLimit < hop := by omega
+  simp [decideTrigger, hp, ha, hs, hd, hsc, hc, hk, hn, hnull]
+
+/-- A run key that evaluates to a value starts the run with the SHA-256 hex of the value's canonical JSON as its key
+    (D-6534): the same value always gives the same key. -/
+theorem run_key_is_hash_of_value (t : Tenant) (hop : Nat) (ev : DomainEvent) (tr : TriggerDef) (a : AutomationDef)
+    (k : Expr) (v : Val) (sc : AutoScopes) (hp : tr.paused = false) (ha : t.automationDef? tr.automation = some a)
+    (hs : a.suspendedFor = none) (hd : a.state = .active) (hsc : scopesOf t (.automation a.id) ev.body = some sc)
+    (hc : tr.condition = none) (hh : hop ≤ hopLimit) (hk : a.runKey = some k)
+    (hv : evalExpr { record := sc.record, old := sc.old, new := sc.new, principal := none,
+                     params := eventParams ev.body ev.seq hop tr.on } k = .ok v) (hnn : v ≠ .null) :
+    decideTrigger t hop ev tr = some (.startAutomation ⟨tr.id, tr.automation, ev.seq, hop, .automation a.id,
+      a.definedBy, t.schemaVersion, some (runKeyHash (valCanon v)), eventParams ev.body ev.seq hop tr.on⟩) := by
+  have hn : ¬ hopLimit < hop := by omega
+  simp [decideTrigger, hp, ha, hs, hd, hsc, hc, hk, hn, hv, hnn]
+
+end Strata
+
+-- Slice 15: triggers and automations.
+#print axioms Strata.refused_no_trigger_effect
+#print axioms Strata.accepted_effects_shape
+#print axioms Strata.paused_no_effect
+#print axioms Strata.missing_automation_declined
+#print axioms Strata.suspended_declined
+#print axioms Strata.draft_declined
+#print axioms Strata.hop_limit_declined
+#print axioms Strata.start_without_key
+#print axioms Strata.automation_holds_exactly_runAs
+#print axioms Strata.suspendLost_events
+#print axioms Strata.no_suspension_without_authority
+#print axioms Strata.null_run_key_declined
+#print axioms Strata.run_key_is_hash_of_value

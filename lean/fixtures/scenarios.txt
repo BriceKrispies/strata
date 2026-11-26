@@ -2850,3 +2850,38 @@ op 1 101 create 1=s:target
 op 1 101 create 1=s:holder 5=r:1
 op 1 101 invoke @5000 drop key=k1 item=r:1
 end
+scenario h-trigger-item-created
+op 1 102 create 1=s:hello
+end
+scenario h-trigger-hop-limit
+op 1 102 hop=9 create 1=s:hello
+op 1 102 hop=8 create 1=s:hello
+end
+scenario h-trigger-part-created-with-hop
+op 1 101 hop=2 type 2 create 4=i:4
+op 1 101 type 2 create 4=i:4
+end
+scenario h-trigger-item-updated
+op 1 102 create 1=s:hello
+op 1 102 update 1 1=s:bye
+end
+scenario h-trigger-item-deleted
+op 1 102 create 1=s:hello
+op 1 100 delete 1
+end
+scenario h-trigger-ledger-posted
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+end
+scenario h-trigger-draft-inactive
+op 1 101 type 4 create 3=s:n
+end
+scenario h-trigger-paused-part-updated
+op 1 101 type 2 create 4=i:4
+op 1 101 type 2 update 1 4=i:5
+end
+scenario h-trigger-suspended-after-revoking-owner
+op 1 100 assign 101 0
+op 1 100 revoke 100 0
+op 1 102 create 1=s:after
+op 1 101 type 2 create 4=i:5
+end
