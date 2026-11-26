@@ -215,33 +215,32 @@ and named.
 ## 6. Order of work, by dependency
 
 ```
-A1 kernel spec in Lean (slices of the gap analysis)        S1 FFI spike: Lean compiled into the backend
-      |                                                    S2 WebAssembly spike: a Lean program in the worker,
-A2 executable Lean kernel + refinement proof                  size and speed measured, native and Wasm agree
+WG-5373 kernel spec in Lean (slices of the gap analysis)        WG-5649 FFI spike: Lean compiled into the backend
+      |                                                    WG-5650 WebAssembly spike: a Lean program in the worker,
+WG-5652 executable Lean kernel + refinement proof                  size and speed measured, native and Wasm agree
       |   (differential testing against Rust meanwhile)          |
-A3 Lean kernel runs in the backend (needs S1); Rust kernel deleted
-      |                                                    B1 browser-kernel spec (from lean/Strata/Client)
-C1 system spec + protocol hosts + refinement                     |
-      |                                                    B2 Lean browser kernel + proof, runs in the worker (needs S2)
-C2 TLA-style liveness library in Lean (Veil has no liveness)
+WG-5658 Lean kernel runs in the backend (needs WG-5649); Rust kernel deleted
+      |                                                    WG-5654 browser-kernel spec (from lean/Strata/Client)
+WG-5655 system spec + protocol hosts + refinement                     |
+      |                                                    WG-5659 Lean browser kernel + proof, runs in the worker (needs WG-5650)
+WG-5656 TLA-style liveness library in Lean (Veil has no liveness)
       |
-C3 host step functions in Lean, trusted shells, SQLite spec
+WG-5661 host step functions in Lean, trusted shells, SQLite spec
 ```
 
-C4 (needs C1): the concurrency reduction, machine-checked: concurrent optimistic transactions of one
+WG-5660 (needs WG-5655): the concurrency reduction, machine-checked: concurrent optimistic transactions of one
    tenant, guarded by revision and retried on conflict, are equivalent to a serial order of the
    committed ones, and the receive-before-send obligation of every host step is enough for the
    distributed reduction (IronFleet's section 3.6 argument, mechanised).
 
-S1 and S2 retire the two biggest technical risks and depend on nothing, so they go first, beside
-A1.
+WG-5649 and WG-5650 retire the two biggest technical risks and depend on nothing, so they go first, beside
+WG-5373.
 
-The work is tracked in Workgraph under WG-5648: S1 WG-5649, S2 WG-5650, A0 (differential random
-testing of the Rust kernel against the model, at scale) WG-5651, A1 WG-5373, A2 WG-5652, codec
-WG-5653, A3 WG-5658, A4 (requirements point to theorems) WG-5662, B1 WG-5654, B2 WG-5659, C1
-WG-5655, C2 WG-5656, C3 WG-5661, C4 WG-5660.
+Every step above is a Workgraph task under WG-5648, named here by its key. The kernel spec
+(WG-5373) is extended in slices, each its own child task (for example WG-5668, the ledger), and
+the boundary codec is WG-5653.
 
-## 7. S1 result: compiled Lean called from Rust (WG-5649)
+## 7. WG-5649 result: compiled Lean called from Rust
 
 `crates/lean-kernel-ffi` calls compiled Lean from the Rust workspace on Windows with the MSVC
 Rust toolchain. Recipe (all of it in the crate's `build.rs`, needing only `lake` and `leanc` on
@@ -275,14 +274,14 @@ Measured (release build, this machine, 2026-11-25):
 
 The boundary costs about 70 ns a call plus two copies of the bytes. The Lean code itself was about
 2x slower than Rust on a small input and 14x on a byte loop over 1 MiB (`ByteArray.get!` and
-`push`). The speed of the executable Lean kernel is therefore the risk to watch in A2, not the
+`push`). The speed of the executable Lean kernel is therefore the risk to watch in WG-5652, not the
 boundary. Size: `strata_ffi.dll` is 66 KB for the spike; the backend gains a run-time dependency
 on `libInit_shared.dll` (28.6 MB, the Lean runtime and standard library). The backend binary itself
 does not grow, since the link is dynamic.
 
-### A0: differential random testing at scale
+### WG-5651: differential random testing at scale
 
-The fixture scenarios (87 committed, about 1,400 operations) are a floor. A0 runs the same
+The fixture scenarios (87 committed, about 1,400 operations) are a floor. WG-5651 runs the same
 comparison on many more random scenarios, in the way Cedar tests its Rust implementation against
 its Lean model: a generator writes the scenarios in batches, each batch goes to
 `lake exe strata_model` in one process and through the Rust kernel in process, and the outputs are
@@ -452,7 +451,7 @@ has `Time` and `File` values, its field ids are strings, and its `Intent` has mo
 mapping from kernel values to these boundary types is a separate piece of work (the correspondence
 in `docs/verification.md`) and is not part of this codec.
 
-## Executable kernel (A2, WG-5652)
+## Executable kernel (WG-5652)
 
 The executable Lean kernel for the slices the spec covers (slices 0 to 5) lives in
 `lean/Strata/Impl/` and `lean/Strata/Fixture.lean`. The spec (`Strata/Model.lean`) is unchanged; it
@@ -533,7 +532,7 @@ the world-level `stepX` rebuilds a closure per step and is not the performance i
 
 ## Temporal logic library
 
-Built for C2 (WG-5656) in `lean/Strata/Temporal/`, imported from `lean/Strata.lean`. It has no
+Built for WG-5656 (WG-5656) in `lean/Strata/Temporal/`, imported from `lean/Strata.lean`. It has no
 dependencies beyond Lean 4.36 core. Every theorem below is listed in `lean/Audit.lean`, and
 `lake build` plus `lake env lean Audit.lean` show that each depends only on `propext`,
 `Classical.choice` and `Quot.sound`.
@@ -568,12 +567,12 @@ The browser kernel is `update(state, message) -> { state, effects }` in `web/src
 with `view(state)` in `view.js`, run by the worker driver (`web/src/worker/main.js`). This section lists
 every message `update` handles and every effect it can emit, grouped by feature, and says for each
 whether the Lean spec covers it. It is the counterpart of the kernel gap analysis in
-`docs/verification.md`, and the list of work for Layer B (B1 WG-5654, then B2 WG-5659).
+`docs/verification.md`, and the list of work for Layer B (WG-5654 WG-5654, then WG-5659 WG-5659).
 
 The spec is in `lean/Strata/Browser/`. `Types.lean` declares the state, the messages and the effects
 of the whole kernel, abstractly (outcomes, not the JavaScript's algorithm). `Session.lean` states the
 relation `Allowed cat s m s' es` for the routing and session slice, with its theorems. The relation is
-what the B2 implementation will be proved against.
+what the WG-5659 implementation will be proved against.
 
 ### How to read the tables
 
@@ -757,7 +756,7 @@ what the B2 implementation will be proved against.
 ### 7.3 Where the JavaScript does not meet what the spec requires
 
 These are read from the code and not yet run. Each is a requirement the relation states and the
-JavaScript does not meet; B2 cannot be proved until the JavaScript changes, or the requirement is
+JavaScript does not meet; WG-5659 cannot be proved until the JavaScript changes, or the requirement is
 changed by its owner.
 
 - **F1: a held model survives a session end on an unguarded page.** `clearUserState` keeps `view`
@@ -785,11 +784,11 @@ changed by its owner.
   forwards it to the main thread through its default branch. Slice 6 declares it.
 - **F6 (minor): the sign-in form after a change of person.** The spec clears the whole sign-in form
   on a change of person (`switched`). `clearUserState` clears only the password and keeps the login
-  name. Both are safe; the spec is the stricter, and B2 must choose one.
+  name. Both are safe; the spec is the stricter, and WG-5659 must choose one.
 - **F7: a refused upgrade is counted when the session read answers.** `onHttp`'s `session` case counts
   `pending.refusal` (`wsRefusals`, and `wsStopped` at the limit) only when the session read comes back,
   so a lost session read is never counted. The spec counts the refusal when the socket closes
-  (`wsRefusedKeep`, `wsRefusedStop`) and states `refusal_counts_and_stops`. B2 must count one of them;
+  (`wsRefusedKeep`, `wsRefusedStop`) and states `refusal_counts_and_stops`. WG-5659 must count one of them;
   the spec's count is the one that cannot be lost.
 
 **Status of the findings above.** All seven are fixed in `web/src/kernel/update.js`, each with a test
@@ -912,9 +911,9 @@ The messages table has 80 rows (a row is one message, or one family of messages 
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
 
-## 8. System spec and protocol (C1, WG-5655)
+## 8. System spec and protocol (WG-5655)
 
-Layer C1 is written in `lean/Strata/System/`: `Spec.lean` (the trusted system specification) and
+WG-5655 is written in `lean/Strata/System/`: `Spec.lean` (the trusted system specification) and
 `Protocol.lean` (the host state machines, the invariant and the refinement). Both are imported from
 `lean/Strata.lean`, and every theorem in them is listed in `lean/Audit.lean`. Each theorem depends
 only on `propext` and `Quot.sound`. There is no `sorry`, no `admit`, no added axiom and no new
@@ -968,7 +967,7 @@ of packet: `req`, `fwd`, `reply`, `clientReply`, `load`, `snap`, `commit`, `done
 
 Each protocol step is one host acting on at most one packet (or none, for a client request) and
 sending its packets. There is no clock, so the time-dependent part of IronFleet's reduction
-obligation is empty. That the general obligation suffices is C4.
+obligation is empty. That the general obligation suffices is WG-5660.
 
 ### The refinement
 
@@ -1010,9 +1009,9 @@ is the spec's reply to its request, and every frame packet is a frame of the spe
 
 1. A refusal is also checked against the current revision (the store decides it only at the base
    revision). The Rust refusal path must do the same, or show that its refusal does not depend on
-   the revision. Checked in C3.
+   the revision. Checked in WG-5661.
 2. The store keeps a decision record per request id. That is the idempotency record SQLite must
-   provide, and it belongs to the trusted SQLite specification (C3).
+   provide, and it belongs to the trusted SQLite specification (WG-5661).
 3. The outbox is modelled as the store's messages to the publisher. Crash and restart, with replay of
    unpublished rows, are not modelled (IronFleet's lesson 4).
 4. Sessions and subscriptions are static configuration. Tenant creation is not modelled: every tenant
@@ -1021,23 +1020,23 @@ is the spec's reply to its request, and every frame packet is a frame of the spe
    under explicit fairness assumptions. Retries are bounded by the number of competing commits to
    the tenant (each conflict is caused by an accepted commit, and the attempt number never exceeds the
    revision).
-6. The protocol's host steps are atomic, and the refinement covers every interleaving of them. C4
+6. The protocol's host steps are atomic, and the refinement covers every interleaving of them. WG-5660
    must show that finer implementation steps, interleaved within a host, reduce to these.
 
 ### What is left
 
-- **C2** (liveness): done, see "Backend liveness" below.
-- **C3** (implementation): one step function per host in Lean, the trusted shells (sockets, HTTP,
+- **WG-5656** (liveness): done, see "Backend liveness" below.
+- **WG-5661** (implementation): one step function per host in Lean, the trusted shells (sockets, HTTP,
   SQLite calls), the SQLite specification of the decision record and the revision guard, and the
   refusal check of modelling decision 1.
-- **C4** (reduction): the implementation's fine-grained interleavings, with receive-before-send and
+- **WG-5660** (reduction): the implementation's fine-grained interleavings, with receive-before-send and
   at most one time-dependent input per step, reduce to the atomic host steps of this layer. The
   concurrency of one tenant's transactions is already a linearisation in this layer (each commit or
-  refusal is a spec step at the store's decision). C4 makes the implementation's own steps part of
+  refusal is a spec step at the store's decision). WG-5660 makes the implementation's own steps part of
   that argument.
 - Crash recovery of the outbox, and the model of tenant creation.
 
-### Backend liveness (C2, WG-5656)
+### Backend liveness (WG-5656)
 
 `lean/Strata/System/Liveness.lean` proves liveness for the protocol of `Protocol.lean` under explicit
 fairness assumptions, all of them weak fairness. Every theorem is listed in `lean/Audit.lean`, and
@@ -1130,7 +1129,7 @@ proofs of every existing theorem were re-checked. The safety theorems (`protocol
 `commit_once`, `observed_matches_spec`, `frames_readable`, `commit_is_verdict`, `rev_step`,
 `duplicate_commit_inert`, `refusal_reachable`) keep their statements.
 
-## 9. Reduction (C4, WG-5660)
+## 9. Reduction (WG-5660)
 
 IronFleet's reduction argument (section 3.6 of the paper) is machine-checked in `lean/Strata/Reduction/`:
 `Transactions.lean` (part (a), one tenant's optimistic transactions), `Distributed.lean` (part (b), the
@@ -1217,7 +1216,7 @@ Modelling decisions the instance makes:
 
 1. The backend's hosts take no time-dependent input: `RStep` has no `tick` constructor, so a fine
    execution with a time-dependent event in a step that runs has no run. The protocol has no clock; the
-   implementation must keep it so, which is C3's to show.
+   implementation must keep it so, which is WG-5661's to show.
 2. A host step that does nothing (`idle`) is a fine step of no protocol step. It changes no state, so it
    is invisible to the protocol.
 3. The fine-grained execution is required to satisfy the obligation (`FineExec.obl`), which is the
@@ -1225,10 +1224,10 @@ Modelling decisions the instance makes:
 
 ### What is left
 
-- **Liveness** (C2): the reduction says nothing about progress.
-- **The implementation** (C3): this section reduces the fine-grained interleavings of the protocol's
+- **Liveness** (WG-5656): the reduction says nothing about progress.
+- **The implementation** (WG-5661): this section reduces the fine-grained interleavings of the protocol's
   hosts to the protocol's steps. The Rust backend's own steps are not shown to satisfy the obligation or
-  the `RStep` shape; that is the C3 shell's job, and its check is the obligation on each host step.
+  the `RStep` shape; that is the WG-5661 shell's job, and its check is the obligation on each host step.
 - **Part (a) and the instance**: the instance covers the protocol with any number of tenants (its steps are
   per request). Part (a) models one tenant and is not yet a lemma about the instance's backend steps; the
   link is `step_refines_store`, which says each of its store steps is a protocol store step.
