@@ -154,6 +154,9 @@ pub enum OpKind {
     LedgerPost(i64, Vec<String>),
     /// A ledger expiry (slice 13): the time, the unit and the cutoff.
     LedgerExpire(i64, u64, i64),
+    /// A ledger transaction (slice 13): the time, the header tokens (`op=<operation> key=<key> [reason=<reason>]`)
+    /// and the legs, each as its tokens (`<unit> <owner> <amount> [scope=<s>]`).
+    LedgerTx(i64, String, Vec<String>),
     /// A balance read of a ledger account (slice 13): the unit, the owner token (a person's number or `pool<n>`),
     /// the scope (empty for none) and whether the read is one's own.
     LedgerRead(u64, String, String, bool),
@@ -303,6 +306,13 @@ impl Op {
             OpKind::LedgerExpire(now, unit, cutoff) => {
                 format!("{head} ledger expire @{now} {unit} {cutoff}")
             }
+            OpKind::LedgerTx(now, header, legs) => format!(
+                "{head} ledger tx @{now} {header}{}",
+                legs.iter()
+                    .map(|l| format!(" {l}"))
+                    .collect::<Vec<String>>()
+                    .join(" ;")
+            ),
             OpKind::LedgerRead(unit, owner, scope, own) => format!(
                 "read {} {} ledger {unit} {owner}{}{}",
                 self.tenant,
@@ -2302,6 +2312,134 @@ fn ledger_post_op(rng: &mut Lcg) -> Op {
     }
 }
 
+/// One leg's tokens (slice 13): a unit, an owner (unit `3` only the unscoped account of person `100`, as for a
+/// posting), the amount, and now and then the scope `s1`.
+fn ledger_leg(rng: &mut Lcg, home: u64, unit: u64, amount: i64) -> String {
+    let owner = if unit == 3 {
+        "100".to_string()
+    } else {
+        ledger_owner_token(rng, home)
+    };
+    let scope = if unit != 3 && rng.below(6) == 0 {
+        " scope=s1"
+    } else {
+        ""
+    };
+    format!("{unit} {owner} {amount}{scope}")
+}
+
+/// A ledger transaction operation (slice 13): usually balanced legs in one unit, now and then one leg, legs that do
+/// not net to zero, legs in two units, a transfer between two people, a header that lacks its key or its
+/// operation, and a reason that names a correction. Keys come from a few names, so that retries occur.
+fn ledger_tx_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(20) {
+        0 => 3,
+        1..=3 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0 => Caller::System,
+        1 => Caller::Anonymous,
+        2 => Caller::User(999),
+        3..=5 => Caller::User(home + 1),
+        6 => Caller::User(home + 2),
+        _ => Caller::User(home),
+    };
+    let transfer = rng.below(5) == 0;
+    let operation = if rng.below(25) == 0 {
+        "op=".to_string()
+    } else {
+        "op=pay".to_string()
+    };
+    let key = if rng.below(25) == 0 {
+        "key=".to_string()
+    } else {
+        format!("key=t{}", rng.below(6))
+    };
+    let reason = if transfer {
+        " reason=transfer"
+    } else {
+        match rng.below(10) {
+            0..=4 => "",
+            5..=6 => " reason=pay",
+            7 => " reason=adjust",
+            _ => " reason=reverse",
+        }
+    };
+    let unit = match rng.below(10) {
+        0 => 3,
+        1..=4 => 1,
+        5..=7 => 2,
+        _ => 4,
+    };
+    let legs: Vec<String> = if transfer {
+        let amount = rng.below(60) as i64 + 1;
+        let sender = ledger_leg(rng, home, unit, -amount);
+        let recipient = ledger_leg(rng, home, unit, amount);
+        if rng.below(2) == 0 {
+            vec![sender, recipient]
+        } else {
+            vec![recipient, sender]
+        }
+    } else {
+        let count = match rng.below(10) {
+            0 => 1,
+            1..=6 => 2,
+            7..=8 => 3,
+            _ => 4,
+        };
+        let mut amounts: Vec<i64> = (0..count - 1).map(|_| rng.below(120) as i64 - 60).collect();
+        let last = -amounts.iter().sum::<i64>() + if rng.below(8) == 0 { 1 } else { 0 };
+        amounts.push(last);
+        let mut legs = Vec::new();
+        for (i, amount) in amounts.into_iter().enumerate() {
+            let leg_unit = if i + 1 == count as usize && count > 1 && rng.below(10) == 0 {
+                4
+            } else {
+                unit
+            };
+            legs.push(ledger_leg(rng, home, leg_unit, amount));
+        }
+        legs
+    };
+    let month = rng.below(12);
+    let now = ledger_time(rng, month);
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::LedgerTx(now, format!("{operation} {key}{reason}"), legs),
+    }
+}
+
+/// The transaction operation that follows `op` and names the same key: half the time with the same legs (a replay
+/// when the first was accepted, which writes nothing), half the time with the amounts of the first two legs moved
+/// by one each way (the same key recorded with another request, `version_conflict`).
+fn ledger_tx_repeat(rng: &mut Lcg, op: &Op, now: i64, header: &str, legs: &[String]) -> Op {
+    let same = rng.below(2) == 0;
+    let legs: Vec<String> = legs
+        .iter()
+        .enumerate()
+        .map(|(i, leg)| {
+            if same || i > 1 {
+                return leg.clone();
+            }
+            let mut words: Vec<String> = leg.split(' ').map(str::to_string).collect();
+            if let Some(amount) = words.get(2).and_then(|w| w.parse::<i64>().ok()) {
+                words[2] = (if i == 0 { amount + 1 } else { amount - 1 }).to_string();
+            }
+            words.join(" ")
+        })
+        .collect();
+    Op {
+        tenant: op.tenant,
+        principal: op.principal,
+        object: op.object,
+        kind: OpKind::LedgerTx(now + 3_600_000, header.to_string(), legs),
+    }
+}
+
 /// A ledger expiry operation (slice 13): by the system, the owner or another caller; of unit `3` most often, so that
 /// buckets of the expiring unit fall due, and of a unit without an expiry or that no tenant declares now and then.
 fn ledger_expire_op(rng: &mut Lcg) -> Op {
@@ -2400,13 +2538,17 @@ fn with_ledger(seed: u64, mut ops: Scenario) -> Scenario {
         let from = ops.len() / 3;
         let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
         let op = match rng.below(20) {
-            0..=11 => ledger_post_op(&mut rng),
+            0..=8 => ledger_post_op(&mut rng),
+            9..=11 => ledger_tx_op(&mut rng),
             12..=14 => ledger_expire_op(&mut rng),
             _ => ledger_read_op(&mut rng),
         };
         let again = match &op.kind {
             OpKind::LedgerPost(now, postings) if rng.below(3) == 0 => {
                 Some(ledger_repeat(&mut rng, &op, *now, postings))
+            }
+            OpKind::LedgerTx(now, header, legs) if rng.below(3) == 0 => {
+                Some(ledger_tx_repeat(&mut rng, &op, *now, header, legs))
             }
             _ => None,
         };
@@ -2433,6 +2575,13 @@ pub fn ledger_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String> 
         .filter(|line| line.as_ref().starts_with("event "))
         .count();
     match words.as_slice() {
+        ["op", _, _, "ledger", "tx", ..] => {
+            if events == 0 {
+                vec!["ledger-tx ok replay".to_string()]
+            } else {
+                Vec::new()
+            }
+        }
         ["op", _, _, "ledger", "post", ..] => {
             let mut shapes = Vec::new();
             if events == 0 {
@@ -2483,6 +2632,12 @@ pub const LEDGER_KINDS: &[&str] = &[
     "ledger-post err self_action",
     "ledger-post err version_conflict",
     "ledger-post err constraint_violated",
+    "ledger-tx ok",
+    "ledger-tx ok replay",
+    "ledger-tx err unauthorized",
+    "ledger-tx err invalid_intent",
+    "ledger-tx err constraint_violated",
+    "ledger-tx err version_conflict",
     "ledger-expire ok entries>0",
     "ledger-expire err unauthorized",
     "ledger-expire err invalid_intent",
@@ -2629,6 +2784,7 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::SettingRead(_) => "read-setting",
         OpKind::LedgerPost(..) => "ledger-post",
         OpKind::LedgerExpire(..) => "ledger-expire",
+        OpKind::LedgerTx(..) => "ledger-tx",
         OpKind::LedgerRead(..) => "read-ledger",
     }
 }
@@ -2743,6 +2899,7 @@ fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
         | OpKind::SettingRead(_)
         | OpKind::LedgerPost(..)
         | OpKind::LedgerExpire(..)
+        | OpKind::LedgerTx(..)
         | OpKind::LedgerRead(..) => None,
     }
 }

@@ -6,10 +6,10 @@ use strata_lean_kernel_ffi::codec::{
     decode_record, decode_refusal, decode_step_result, decode_tenant, decode_ty, decode_val,
     encode_ctx, encode_field_def, encode_intent, encode_member_intent, encode_policy,
     encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
-    Action, Change, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, InvitationDef, LedgerOwner,
-    LedgerPosting, LedgerState, Limits, MemberIntent, ObjType, OnDelete, Policy, Principal, Record,
-    Refusal, Resource, Scope, StepResult, TeamDef, Tenant, Ty, Val, WfTransition, Workflow,
-    MAX_EXPR_DEPTH, MAX_TY_DEPTH,
+    Action, Change, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, InvitationDef, LedgerLeg,
+    LedgerOwner, LedgerPosting, LedgerState, LedgerTx, Limits, MemberIntent, ObjType, OnDelete,
+    Policy, Principal, Record, Refusal, Resource, Scope, StepResult, TeamDef, Tenant, Ty, Val,
+    WfTransition, Workflow, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
 };
 use strata_lean_kernel_ffi::{step, step_reference};
 
@@ -321,6 +321,38 @@ fn codec_fixtures_match_the_lean_encoder() {
     };
     assert_eq!(encode_intent(&expire), vec![11, 0, 232, 7, 3, 1, 0]);
     assert_eq!(decode_intent(&encode_intent(&expire)), Some(expire));
+    // Tag 12: the time, then the transaction: its operation, key, reason and its legs, each a leg's owner, unit,
+    // amount and scope (the bytes `encIntent` gives in `lean/Strata/Codec/Boundary.lean`).
+    let transaction = Intent::PostLedgerTx {
+        now: 1000,
+        tx: LedgerTx {
+            operation: "o".into(),
+            key: "k".into(),
+            reason: String::new(),
+            legs: vec![
+                LedgerLeg {
+                    owner: LedgerOwner::Person(7),
+                    unit: 1,
+                    amount: -5,
+                    scope: String::new(),
+                },
+                LedgerLeg {
+                    owner: LedgerOwner::Pool(2),
+                    unit: 1,
+                    amount: 5,
+                    scope: "s".into(),
+                },
+            ],
+        },
+    };
+    assert_eq!(
+        encode_intent(&transaction),
+        vec![12, 0, 232, 7, 1, 111, 1, 107, 0, 2, 0, 7, 1, 1, 4, 0, 1, 2, 1, 0, 5, 1, 115]
+    );
+    assert_eq!(
+        decode_intent(&encode_intent(&transaction)),
+        Some(transaction)
+    );
     assert_eq!(encode_refusal(&Refusal::InvalidIntent), vec![14]);
     assert_eq!(encode_refusal(&Refusal::UnknownRole), vec![15]);
     assert_eq!(encode_refusal(&Refusal::LastOwner), vec![16]);

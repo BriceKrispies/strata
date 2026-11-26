@@ -2721,3 +2721,84 @@ read 1 102 ledger 2 102 own
 read 1 100 ledger 2 102
 read 1 102 ledger 1 102 scope=s1
 end
+scenario h-ledger-tx-accepted-and-read
+op 1 100 ledger post @1767225600000 2 100 500 key=p1
+op 1 100 ledger tx @1767225600000 op=pay key=t1 reason=pay 2 100 -200 ; 2 101 200
+read 1 100 ledger 2 100
+read 1 100 ledger 2 101
+end
+scenario h-ledger-tx-retry-replays-and-another-request-conflicts
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=t1 reason=pay 2 100 -50 ; 2 101 50
+op 1 100 ledger tx @1767225600000 op=pay key=t1 reason=pay 2 100 -50 ; 2 101 50
+op 1 100 ledger tx @1767225600000 op=pay key=t1 reason=pay 2 100 -60 ; 2 101 60
+op 1 100 ledger tx @1767225600000 op=pay key=t1 reason=refund 2 100 -50 ; 2 101 50
+read 1 100 ledger 2 101
+end
+scenario h-ledger-tx-needs-two-legs-that-net-to-zero-in-each-unit
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=u1 2 100 5
+op 1 100 ledger tx @1767225600000 op=pay key=u2 2 100 -5 ; 2 101 6
+op 1 100 ledger tx @1767225600000 op=pay key=u3 2 100 -5 ; 1 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=u4 2 100 -5 ; 2 101 3 ; 2 102 2
+op 1 100 ledger tx @1767225600000 op=pay key=u5 2 100 -5 ; 2 101 3 ; 2 102 3
+end
+scenario h-ledger-tx-header-is-complete
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op= key=h1 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key= 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2 100 -5 ; 2 101 5
+end
+scenario h-ledger-tx-unauthorized
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 101 ledger tx @1767225600000 op=pay key=a1 2 101 -5 ; 2 102 5
+op 1 system ledger tx @1767225600000 op=pay key=a2 2 100 -5 ; 2 101 5
+op 1 anon ledger tx @1767225600000 op=pay key=a3 2 100 -5 ; 2 101 5
+op 1 999 ledger tx @1767225600000 op=pay key=a4 2 100 -5 ; 2 101 5
+end
+scenario h-ledger-tx-at-most-sixty-four-legs
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=m1 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1
+op 1 100 ledger tx @1767225600000 op=pay key=m2 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1 ; 2 100 -1 ; 2 101 1
+read 1 100 ledger 2 101
+end
+scenario h-ledger-tx-one-refused-leg-refuses-all
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=r1 2 100 -5 ; 2 999 5
+op 1 100 ledger tx @1767225600000 op=pay key=r2 2 100 -5 ; 9 101 5 ; 9 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=r3 1 100 1500 ; 1 101 -1500
+op 1 100 ledger tx @1767225600000 op=pay key=r4 2 100 -5 ; 2 101 5
+read 1 100 ledger 2 100
+end
+scenario h-ledger-tx-self-adjustment-refused
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=s1 reason=adjust 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=s2 reason=reverse 2 101 -5 ; 2 102 5
+op 1 100 ledger tx @1767225600000 op=pay key=s3 reason=reverse 2 101 -5 ; 2 100 5
+end
+scenario h-ledger-tx-transfer-rules
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 101 20 key=seed
+op 1 100 ledger tx @1767225600000 op=pay key=x1 reason=transfer 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=x2 reason=transfer 2 101 3 ; 2 100 -3
+op 1 100 ledger tx @1767225600000 op=pay key=x3 reason=transfer 2 100 -5 ; 2 100 5
+op 1 100 ledger tx @1767225600000 op=pay key=x4 reason=transfer 2 100 -5 ; 2 pool1 5
+op 1 100 ledger tx @1767225600000 op=pay key=x5 reason=transfer 2 100 -5 ; 2 101 2 ; 2 102 3
+op 1 100 ledger tx @1767225600000 op=pay key=x6 reason=transfer 2 100 -5 ; 2 999 5
+op 1 100 ledger tx @1767225600000 op=pay key=x7 reason=transfer 2 100 5 ; 2 101 -5
+op 1 100 ledger tx @1767225600000 op=pay key=x8 reason=transfer 2 100 -5 scope=s1 ; 2 100 5
+end
+scenario h-ledger-tx-and-postings-do-not-share-an-entry
+op 1 100 ledger post @1767225600000 2 100 1000 key=seed
+op 1 100 ledger post @1767225600000 2 100 -5 key=q:0
+op 1 100 ledger tx @1767225600000 op=pay key=q 2 100 -5 ; 2 101 5
+op 1 100 ledger tx @1767225600000 op=pay key=v 2 100 -7 ; 2 101 7
+op 1 100 ledger post @1767225600000 2 100 -7 key=v:0
+end

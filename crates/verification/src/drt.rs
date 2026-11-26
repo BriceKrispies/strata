@@ -227,7 +227,7 @@ fn minimise_disagreement(
 /// The accepted outcome kinds, one per intent kind of the scenario format: the intent's name
 /// followed by `ok`. `require` and `unique` are split by their mode, as the model's strict and lax
 /// schema outcomes differ.
-pub const ACCEPTED_KINDS: [&str; 28] = [
+pub const ACCEPTED_KINDS: [&str; 29] = [
     "create ok",
     "update ok",
     "patch ok",
@@ -254,6 +254,7 @@ pub const ACCEPTED_KINDS: [&str; 28] = [
     "setting ok",
     "setting-remove ok",
     "ledger-post ok",
+    "ledger-tx ok",
     "ledger-expire ok",
     "read-ledger ok",
 ];
@@ -399,8 +400,9 @@ fn intent_of(op: &str) -> &'static str {
         // A removal has no value token, so its last token is `remove` (slice 12).
         Some("setting") if tokens.last().copied() == Some("remove") => "setting-remove",
         Some("setting") => "setting",
-        // A ledger posting names `post` after `ledger`; an expiry names `expire` (slice 13).
+        // A ledger posting names `post` after `ledger`, a transaction `tx`; an expiry `expire` (slice 13).
         Some("ledger") if tokens.get(4).copied() == Some("post") => "ledger-post",
+        Some("ledger") if tokens.get(4).copied() == Some("tx") => "ledger-tx",
         Some("ledger") => "ledger-expire",
         _ => "unknown",
     }

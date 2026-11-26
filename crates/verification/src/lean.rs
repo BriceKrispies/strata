@@ -56,6 +56,7 @@
 //! | `read <t> <p> setting <name>` (slice 12) | `settings::resolve` for the principal; `err <kind>`, or the source, the team's number, the value and the tenant's revision |
 //! | `ledger post @<now> <unit> <owner> <amount> key=<k> [reason=<r>] [corrects=<n>] [scope=<s>] [; ..]` (slice 13) | `Intent::PostLedger` in a context whose `now` is `<now>`; a unit `n` is the kernel's `u<n>` and a pool `n` is `pool<n>` (a kernel name starts with a letter); a person's owner is `p<n>` |
 //! | `ledger expire @<now> <unit> <cutoff>` (slice 13) | `Intent::ExpireLedger` in a context whose `now` is `<now>` |
+//! | `ledger tx @<now> op=<operation> key=<k> [reason=<r>] <unit> <owner> <amount> [scope=<s>] [; ..]` (slice 13) | `Intent::PostLedgerTransaction` in a context whose `now` is `<now>`; each `;`-separated group is one leg, written as a posting without a key, a reason or a correction |
 //! | `read <t> <p> ledger <unit> <owner> [scope=<s>] [own]` (slice 13) | `ledger::read_balance`; `err <kind>`, or `ok`, the balance and the sequence number |
 //! | the fixture ledger (slice 13) | `fixture_ledger_decls` on tenants `t1` and `t2`, set on the schema after the fixture batch (no event) |
 //!
@@ -1452,10 +1453,58 @@ fn parse_ledger_now(token: &str) -> Option<i64> {
     token.strip_prefix('@')?.parse().ok()
 }
 
-/// A ledger intent and its time: `ledger post @<now> <posting> [; <posting>]*` or `ledger expire @<now> <unit>
-/// <cutoff>` (slice 13; the model's `parseLedgerOp`). The time becomes the context's `now`.
+/// One leg of a `tx` line: `<unit> <owner> <amount> [scope=<s>]` (slice 13; the model's `parseLeg`).
+fn parse_leg(tokens: &[&str]) -> Option<LedgerLeg> {
+    let [unit, owner, amount, options @ ..] = tokens else {
+        return None;
+    };
+    let unit: u64 = unit.parse().ok()?;
+    let owner = parse_ledger_owner(owner)?;
+    let amount: i64 = amount.parse().ok()?;
+    let mut scope = String::new();
+    for option in options.iter() {
+        scope = option.strip_prefix("scope=")?.to_string();
+    }
+    Some(LedgerLeg {
+        owner,
+        unit: ledger_unit(unit),
+        amount: LedgerAmount(amount),
+        scope: ledger_scope(&scope),
+    })
+}
+
+/// A ledger intent and its time: `ledger post @<now> <posting> [; <posting>]*`, `ledger expire @<now> <unit>
+/// <cutoff>` or `ledger tx @<now> op=<operation> key=<key> [reason=<reason>] <leg> [; <leg>]*` (slice 13; the
+/// model's `parseLedgerOp`). The time becomes the context's `now`.
 fn parse_ledger_op(tokens: &[&str]) -> Option<(i64, Intent)> {
     match tokens {
+        ["ledger", "tx", now, operation, key, rest @ ..] => {
+            let now = parse_ledger_now(now)?;
+            let operation = operation.strip_prefix("op=")?.to_string();
+            let key = key.strip_prefix("key=")?.to_string();
+            let (reason, legs) = match rest {
+                [first, more @ ..] if first.starts_with("reason=") => {
+                    (first["reason=".len()..].to_string(), more)
+                }
+                _ => (String::new(), rest),
+            };
+            let legs: Vec<LedgerLeg> = legs
+                .split(|token| *token == ";")
+                .map(parse_leg)
+                .collect::<Option<Vec<LedgerLeg>>>()?;
+            Some((
+                now,
+                Intent::PostLedgerTransaction {
+                    transaction: LedgerTransaction {
+                        operation,
+                        idempotency_key: key,
+                        reason,
+                        on_behalf_of: None,
+                        legs,
+                    },
+                },
+            ))
+        }
         ["ledger", "post", now, postings @ ..] => {
             let now = parse_ledger_now(now)?;
             let postings = parse_postings(postings)?;
@@ -2278,12 +2327,17 @@ fn ledger_lines(n: u64, tenant: &TenantState) -> Vec<String> {
                 .corrects
                 .map_or_else(|| "-".to_string(), |c| c.to_string());
             out.push(format!(
-                "ledger-entry {n} owner={owner} unit={unit} scope={scope} seq={} amount={} key={} reason={} by={by} at={} corrects={corrects}",
+                "ledger-entry {n} owner={owner} unit={unit} scope={scope} seq={} amount={} key={} reason={} by={by} at={} corrects={corrects}{}",
                 entry.sequence,
                 entry.amount.0,
                 entry.idempotency_key,
                 ledger_text(&entry.reason),
-                entry.at.0
+                entry.at.0,
+                if entry.transaction.is_some() {
+                    " txn=1"
+                } else {
+                    ""
+                }
             ));
         }
     }

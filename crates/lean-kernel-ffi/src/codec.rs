@@ -436,6 +436,8 @@ pub struct LedgerEntry {
     pub caused_by: Option<u64>,
     pub time: i64,
     pub corrects: Option<u64>,
+    /// The transaction the entry is a leg of, as the text that names it (the Lean `LedgerEntry.txn`).
+    pub transaction: Option<String>,
 }
 
 /// The ledger state of a tenant (slice 13; the Lean `LedgerState`): its accounts, its journal (oldest first)
@@ -475,6 +477,24 @@ pub struct LedgerPosting {
     pub reason: String,
     pub corrects: Option<u64>,
     pub scope: String,
+}
+
+/// One leg of a transaction (slice 13; the Lean `LedgerLeg`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerLeg {
+    pub owner: LedgerOwner,
+    pub unit: u64,
+    pub amount: i64,
+    pub scope: String,
+}
+
+/// A transaction of a `PostLedgerTransaction` intent (slice 13; the Lean `LedgerTx`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerTx {
+    pub operation: String,
+    pub key: String,
+    pub reason: String,
+    pub legs: Vec<LedgerLeg>,
 }
 
 /// Everything one tenant owns, as the boundary carries it: its object types by id, its members
@@ -663,6 +683,11 @@ pub enum Intent {
         now: i64,
         unit: u64,
         cutoff: i64,
+    },
+    /// A `PostLedgerTransaction` intent (slice 13; tag `12`): the time, then the transaction.
+    PostLedgerTx {
+        now: i64,
+        tx: LedgerTx,
     },
 }
 
@@ -1384,6 +1409,7 @@ fn put_ledger_entry(out: &mut Vec<u8>, e: &LedgerEntry) {
     put_opt_nat(out, e.caused_by);
     put_int(out, e.time);
     put_opt_nat(out, e.corrects);
+    put_opt(out, &e.transaction, put_string);
 }
 
 /// The ledger state: its accounts, its journal and its limits (`encLedgerState`).
@@ -1426,6 +1452,22 @@ fn put_ledger_posting(out: &mut Vec<u8>, q: &LedgerPosting) {
     put_str(out, &q.reason);
     put_opt_nat(out, q.corrects);
     put_str(out, &q.scope);
+}
+
+/// A leg of a transaction: owner, unit, amount and scope (`encLedgerLeg`).
+fn put_ledger_leg(out: &mut Vec<u8>, l: &LedgerLeg) {
+    put_ledger_owner(out, &l.owner);
+    put_nat(out, l.unit);
+    put_int(out, l.amount);
+    put_str(out, &l.scope);
+}
+
+/// A transaction: operation, key, reason and legs (`encLedgerTx`).
+fn put_ledger_tx(out: &mut Vec<u8>, t: &LedgerTx) {
+    put_str(out, &t.operation);
+    put_str(out, &t.key);
+    put_str(out, &t.reason);
+    put_list(out, t.legs.as_slice(), put_ledger_leg);
 }
 
 fn put_ctx(out: &mut Vec<u8>, c: &Ctx) {
@@ -1518,6 +1560,11 @@ fn put_intent(out: &mut Vec<u8>, i: &Intent) {
             put_int(out, *now);
             put_nat(out, *unit);
             put_int(out, *cutoff);
+        }
+        Intent::PostLedgerTx { now, tx } => {
+            out.push(12);
+            put_int(out, *now);
+            put_ledger_tx(out, tx);
         }
     }
 }
@@ -2437,6 +2484,7 @@ fn get_ledger_entry(r: &mut Reader<'_>) -> Option<LedgerEntry> {
     let caused_by = get_opt_nat(r)?;
     let time = get_int(r)?;
     let corrects = get_opt_nat(r)?;
+    let transaction = get_opt(r, get_str)?;
     Some(LedgerEntry {
         owner,
         unit,
@@ -2448,6 +2496,7 @@ fn get_ledger_entry(r: &mut Reader<'_>) -> Option<LedgerEntry> {
         caused_by,
         time,
         corrects,
+        transaction,
     })
 }
 
@@ -2494,6 +2543,32 @@ fn get_ledger_posting(r: &mut Reader<'_>) -> Option<LedgerPosting> {
         reason,
         corrects,
         scope,
+    })
+}
+
+fn get_ledger_leg(r: &mut Reader<'_>) -> Option<LedgerLeg> {
+    let owner = get_ledger_owner(r)?;
+    let unit = get_nat(r)?;
+    let amount = get_int(r)?;
+    let scope = get_str(r)?;
+    Some(LedgerLeg {
+        owner,
+        unit,
+        amount,
+        scope,
+    })
+}
+
+fn get_ledger_tx(r: &mut Reader<'_>) -> Option<LedgerTx> {
+    let operation = get_str(r)?;
+    let key = get_str(r)?;
+    let reason = get_str(r)?;
+    let legs = get_list(r, get_ledger_leg)?;
+    Some(LedgerTx {
+        operation,
+        key,
+        reason,
+        legs,
     })
 }
 
@@ -2585,6 +2660,11 @@ fn get_intent(r: &mut Reader<'_>) -> Option<Intent> {
             let unit = get_nat(r)?;
             let cutoff = get_int(r)?;
             Some(Intent::ExpireLedger { now, unit, cutoff })
+        }
+        12 => {
+            let now = get_int(r)?;
+            let tx = get_ledger_tx(r)?;
+            Some(Intent::PostLedgerTx { now, tx })
         }
         _ => None,
     }
