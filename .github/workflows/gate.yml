@@ -40,11 +40,14 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          # Exegra's Lean core is wasm64 (memory64), which Node runs from version 24.
+          node-version: 24
           cache: npm
 
       - name: Rust toolchain from rust-toolchain.toml
         run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Tools the gate runs
         run: |
@@ -58,5 +61,40 @@ jobs:
           npm ci --prefix exegra
           npx playwright install --with-deps chromium
 
+      # Exegra's engine and its Lean core (src/engine/lean/exegra-lean.wasm) are build products the
+      # Exegra repository does not commit. The wasm build downloads emsdk and the Lean runtime sources
+      # into ~/.cache/exegra/formal-wasm; both that cache and formal/.lake are kept between runs.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/exegra/formal-wasm
+            exegra/formal/.lake
+          key: exegra-formal-wasm-${{ runner.os }}-${{ hashFiles('exegra/formal/lean-toolchain', 'exegra/formal/lake-manifest.json', 'exegra/tools/build-formal-wasm.js', 'exegra/formal/wasm/**') }}
+          restore-keys: exegra-formal-wasm-${{ runner.os }}-
+
+      - name: Build Exegra's engine and Lean core
+        run: |
+          npm run build:engine --prefix exegra
+          npm run build:formal-wasm --prefix exegra
+
+      # The correspondence tests in crates/verification run `lake exe strata_model` while cargo test
+      # runs; on a fresh runner that first call would also install the toolchain and build the model.
+      - name: Build the Lean model
+        working-directory: lean
+        run: |
+          lake build
+          lake build strata_model
+
       - name: Gate
         run: node scripts/spec-gate.mjs --browser --require-all
+
+      - name: Keep the gate's run records and browser reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-runs
+          path: |
+            var/runs
+            test-results
+            playwright-report
+          if-no-files-found: ignore
