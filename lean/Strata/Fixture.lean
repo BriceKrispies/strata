@@ -147,6 +147,42 @@ def fixtureLedgerDecls : LedgerDecls :=
     pools := [1],
     limits := [{ unit := 1, cap := some 1000 }, { unit := 2, floor := some 0 }] }
 
+/-- The operations every scenario's tenants define (slice 14). Each is installed in the fixture batch, so it adds no
+    event and no revision beyond those the batch already accounts for. Their names are the operation ids:
+    `note` creates an item from its text; `note_count` also needs a count that is not negative (the count `null` is
+    unevaluable-free: its condition is `null`, which refuses); `retag` (the editor's) updates the subject item's text;
+    `drop` (the editor's) deletes the subject item; `grant` posts `amt` to the invoker's own account of unit `1`;
+    `note_grant` creates an item and posts `amt`, so a refused posting refuses the item too. -/
+def opNote : OpDef :=
+  { id := "note", inputs := [⟨"text", .str, true⟩], signedIn := true, roles := [],
+    steps := [.create "n" 1 [(1, .param "text")]] }
+
+def opNoteCount : OpDef :=
+  { id := "note_count", inputs := [⟨"text", .str, true⟩, ⟨"count", .int, false⟩], signedIn := true,
+    roles := [], conditions := [⟨"count_ok", .cmp .ge (.param "count") (.lit (.int 0))⟩],
+    steps := [.create "n" 1 [(1, .param "text"), (2, .param "count")]] }
+
+def opRetag : OpDef :=
+  { id := "retag", inputs := [⟨"item", .ref 1 .restrict, true⟩, ⟨"text", .str, true⟩], signedIn := false,
+    roles := [editorRole], subject := some (1, "item"),
+    steps := [.update "u" 1 (.param "item") [(1, .param "text")]] }
+
+def opDrop : OpDef :=
+  { id := "drop", inputs := [⟨"item", .ref 1 .restrict, true⟩], signedIn := false, roles := [editorRole],
+    subject := some (1, "item"), steps := [.delete "d" 1 (.param "item")] }
+
+def opGrant : OpDef :=
+  { id := "grant", inputs := [⟨"amt", .int, true⟩], signedIn := true, roles := [],
+    steps := [.post "p" .invoker 1 (.param "amt") "grant"] }
+
+def opNoteGrant : OpDef :=
+  { id := "note_grant", inputs := [⟨"text", .str, true⟩, ⟨"amt", .int, true⟩], signedIn := true, roles := [],
+    steps := [.create "n" 1 [(1, .param "text")], .post "p" .invoker 1 (.param "amt") "grant"] }
+
+def fixtureOperations : List (String × OpDef) :=
+  [("note", opNote), ("note_count", opNoteCount), ("retag", opRetag), ("drop", opDrop),
+   ("grant", opGrant), ("note_grant", opNoteGrant)]
+
 /-- The object types every scenario starts from, each tenant with an owner, an editor and two writers.
     Type `4` (the tickets, with the workflow) is part of the fixture too. The size limits are the kernel's. -/
 def initialTenant (n : Nat) : Tenant :=
@@ -165,7 +201,8 @@ def initialTenant (n : Nat) : Tenant :=
     -- schema change also defines the five settings, whose definitions emit one setting event each and set each
     -- setting's revision to one (the kernel's schema_change_effects), so the event sequence is 6 + 5 = 11.
     revision := 6, eventSeq := 11, schemaVersion := 3, settingDefs := fixtureSettings,
-    settingRevs := fixtureSettings.map (fun d => (d.name, 1)), ledgerDecls := some fixtureLedgerDecls }
+    settingRevs := fixtureSettings.map (fun d => (d.name, 1)), ledgerDecls := some fixtureLedgerDecls,
+    operations := fixtureOperations }
 
 /-- The fields an `update` line names for each object type: the item's fields, or the part's.
     A line that does not name one of them gives it `null`, so it replaces the record (`patch`

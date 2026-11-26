@@ -2802,3 +2802,51 @@ op 1 100 ledger tx @1767225600000 op=pay key=q 2 100 -5 ; 2 101 5
 op 1 100 ledger tx @1767225600000 op=pay key=v 2 100 -7 ; 2 101 7
 op 1 100 ledger post @1767225600000 2 100 -7 key=v:0
 end
+scenario h-invoke-accepted-create
+op 1 101 invoke @5000 note key=k1 text=s:hello
+end
+scenario h-invoke-not-signed-in-refused
+op 1 anon invoke @5000 note key=k1 text=s:hello
+op 1 system invoke @5001 note key=k2 text=s:hello
+end
+scenario h-invoke-roles-refused
+op 1 100 invoke @5000 retag key=k1 item=r:1 text=s:new
+op 1 100 invoke @5001 drop key=k2 item=r:1
+end
+scenario h-invoke-unknown-operation-refused
+op 1 101 invoke @5000 nope key=k1
+end
+scenario h-invoke-key-refused
+op 1 101 invoke @5000 note text=s:hello
+op 1 101 invoke @5001 note key=bad text=s:hello
+end
+scenario h-invoke-inputs-refused
+op 1 101 invoke @5000 note key=k1 text=s:hello extra=i:1
+op 1 101 invoke @5001 note key=k2
+op 1 101 invoke @5002 note key=k3 text=i:4
+op 1 101 invoke @5003 note key=k4 text=s*65537:x
+end
+scenario h-invoke-subject-refused
+op 1 101 invoke @5000 retag key=k1 item=r:99 text=s:new
+op 1 101 invoke @5001 drop key=k2 item=s:1
+end
+scenario h-invoke-condition-refused
+op 1 101 invoke @5000 note_count key=k1 text=s:a count=i:-1
+op 1 101 invoke @5001 note_count key=k2 text=s:a
+op 1 101 invoke @5002 note_count key=k3 text=s:a count=i:0
+end
+scenario h-invoke-posting-atomic
+op 1 100 invoke @5000 note_grant key=k1 text=s:y amt=i:5000
+op 1 100 invoke @5001 note_grant key=k2 text=s:y amt=i:5
+op 1 100 invoke @5002 grant key=k3 amt=i:50
+end
+scenario h-invoke-posting-replay
+op 1 101 invoke @5000 grant key=k1 amt=i:50
+op 1 101 invoke @5001 grant key=k1 amt=i:50
+op 1 101 invoke @5002 grant key=k1 amt=i:7
+end
+scenario h-invoke-delete-still-referenced
+op 1 101 create 1=s:target
+op 1 101 create 1=s:holder 5=r:1
+op 1 101 invoke @5000 drop key=k1 item=r:1
+end

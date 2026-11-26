@@ -247,6 +247,43 @@ theorem changeSchema_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     rw [← hmap]
     exact hkeys
 
+/-- An operation invocation: the indexed kernel takes stage 1's tenant and builds the indexes again. -/
+theorem invokeOperation_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
+    (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
+    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (now : Int) (op : String)
+    (ins : List (String × Val)) (key : String) :
+    Good ⟨core, ux, cx, rx⟩ (stepParts core ux cx rx p (.invokeOperation now op ins key))
+      (stepTenantI core p (.invokeOperation now op ins key)) := by
+  simp only [stepParts]
+  cases h : stepTenantI core p (.invokeOperation now op ins key) with
+  | error e => exact good_error _ _
+  | ok core' =>
+    refine ⟨rfl, fun e x' h' => (by cases h'), ?_⟩
+    intro y hy
+    simp only [Except.ok.injEq] at hy
+    subst hy
+    have hinv' : core'.Inv := stepTenantI_inv core p _ core' hok.1 h
+    simp only [stepTenantI] at h
+    cases hs : invokeOperationT core.abs p now op ins key with
+    | error e => simp [hs, Except.map] at h
+    | ok s =>
+      simp only [hs, Except.map, Except.ok.injEq] at h
+      subst h
+      obtain ⟨-, -, hk, -⟩ := invoke_facts (core.abs_idsBelow hok.1) core.abs_desc hs
+      have hk0 : (core.abs.types.map Prod.fst).Nodup := by
+        have : core.abs.types.map Prod.fst = core.types.map Prod.fst := by
+          unfold ITenant.abs
+          rw [List.map_map]
+          rfl
+        rw [this]; exact hok.2.1
+      apply XTenant.rebuild_ok _ hinv'
+      have hmap : (rebuildI core s).types.map Prod.fst = s.types.map Prod.fst := by
+        unfold rebuildI
+        rw [List.map_map]
+        rfl
+      rw [hmap, hk]
+      exact hk0
+
 /-- The indexed outcome of one intent against one tenant agrees with stage 1's, and keeps the
     indexes consistent. -/
 theorem stepTenantXL_good (x : XTenant) (hok : x.Ok) (p : Principal) (i : Intent) :
@@ -266,6 +303,7 @@ theorem stepTenantXL_good (x : XTenant) (hok : x.Ok) (p : Principal) (i : Intent
   | expireLedger now u c => exact expireLedger_good core ux cx rx hok p now u c
   | postLedgerTx now tx => exact postLedgerTx_good core ux cx rx hok p now tx
   | changeSchema ev strict cs => exact changeSchema_good core ux cx rx hok p ev strict cs
+  | invokeOperation now op ins key => exact invokeOperation_good core ux cx rx hok p now op ins key
 
 /-- The indexed outcome (refusals without the tenant handed back) agrees with stage 1's, and an
     accepted indexed tenant is consistent. -/

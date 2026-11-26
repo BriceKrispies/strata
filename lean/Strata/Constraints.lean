@@ -302,6 +302,188 @@ theorem clearBreaks_constraints (t : Tenant) (ty : TypeId) (id : RecordId) (hs :
     rw [hcl]
     exact hs T o ho q hq
 
+/-- Deleting a record whose rewrites keep their constraints (`clearBreaks` false) keeps every stored record satisfying
+    the constraints (a direct delete's argument, WG-5664). -/
+theorem afterDelete_satisfied (t : Tenant) (ty id : TypeId) (hs : t.Satisfied)
+    (hc : t.clearBreaks ty id = false) : (t.afterDelete ty id).Satisfied := by
+  intro T o' hT' q hq
+  rw [typ?_afterDelete] at hT'
+  cases ho : t.typ? T with
+  | none => rw [ho] at hT'; cases hT'
+  | some o =>
+    rw [ho] at hT'
+    simp only [Option.map_some, Option.some.injEq] at hT'
+    subst hT'
+    obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp (by unfold delObj at hq; exact hq)
+    subst hmap
+    have hq₀' : q₀ ∈ o.records := by
+      by_cases hTy : (T == ty) = true
+      · rw [if_pos hTy] at hq₀
+        exact (List.mem_filter.mp hq₀).1
+      · rw [if_neg hTy] at hq₀
+        exact hq₀
+    have hne : ¬ (T == ty && q₀.1 == id) = true := by
+      intro hb
+      by_cases hTy : (T == ty) = true
+      · rw [if_pos hTy] at hq₀
+        have h1 := (List.mem_filter.mp hq₀).2
+        have h2 : (q₀.1 == id) = true := ((Bool.and_eq_true _ _).mp hb).2
+        simp [bne, h2] at h1
+      · have h3 : (T == ty) = true := ((Bool.and_eq_true _ _).mp hb).1
+        exact hTy h3
+    exact clearBreaks_constraints t ty id hs hc T o ho q₀ hq₀' hne
+
+/-- An operation's steps keep the constraints of every type: they change records, the counter and the ledger. -/
+theorem opStep_stateConstraints (c : OpCtx) (st st' : OpState) (s : OpStep) (hst : st.tenant.StateConstraints)
+    (h : opStep c st s = .ok st') : st'.tenant.StateConstraints := by
+  cases s with
+  | create id ty fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opCreate, hty] at h
+    | some o =>
+      obtain ⟨vals, r, hN, hP, hC, ht⟩ := opCreate_ok_parts hty h
+      rw [ht]
+      intro T o' hT' c' hc'
+      change (st.tenant.putType ty { o with records := (st.tenant.nextId, r) :: o.records }).typ? T = some o' at hT'
+      by_cases hTy : T = ty
+      · subst hTy
+        rw [typ?_putType_self st.tenant T o _ hty] at hT'
+        cases hT'
+        exact hst T o hty c' hc'
+      · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+        exact hst T o' hT' c' hc'
+  | update id ty rec fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opUpdate, hty] at h
+    | some o =>
+      cases hid : opTarget c st.params rec with
+      | error e => simp [opStep, opUpdate, hty, hid] at h
+      | ok id' =>
+        cases hL : o.records.lookup id' with
+        | none => simp [opStep, opUpdate, hty, hid, hL] at h
+        | some old =>
+          obtain ⟨vals, r, -, -, hP, -, -, ht⟩ := opUpdate_ok_parts_gen hty hid hL h
+          rw [ht]
+          intro T o' hT' c' hc'
+          change (st.tenant.putType ty { o with records := o.records.map (fun q =>
+            if q.1 == id' then (q.1, r) else q) }).typ? T = some o' at hT'
+          by_cases hTy : T = ty
+          · subst hTy
+            rw [typ?_putType_self st.tenant T o _ hty] at hT'
+            cases hT'
+            exact hst T o hty c' hc'
+          · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+            exact hst T o' hT' c' hc'
+  | delete id ty rec =>
+    simp only [opStep, opDelete] at h
+    repeat' split at h
+    all_goals (try (simp at h; done))
+    all_goals (simp only [Except.ok.injEq] at h; rw [← h])
+    all_goals (intro T o' hT' c' hc')
+    all_goals (rw [typ?_afterDelete] at hT')
+    all_goals (cases ho : st.tenant.typ? T with
+      | none => rw [ho] at hT'; cases hT'
+      | some o =>
+        rw [ho] at hT'
+        simp only [Option.map_some, Option.some.injEq] at hT'
+        subst hT'
+        exact hst T o ho c' hc')
+  | post id owner unit amt reason =>
+    simp only [opStep, opPost] at h
+    repeat' split at h
+    all_goals (try (simp at h; done))
+    all_goals (simp only [Except.ok.injEq] at h; rw [← h]; exact hst)
+
+/-- The parts of an accepted operation delete: the record it names has no clearing that breaks a constraint, and the
+    tenant is the one that deletes it. -/
+theorem opDelete_ok_parts {c : OpCtx} {st st' : OpState} {ty : TypeId} {rec : Expr}
+    (h : opDelete c st ty rec = .ok st') :
+    ∃ id, st.tenant.clearBreaks ty id = false ∧ st'.tenant = st.tenant.afterDelete ty id := by
+  simp only [opDelete] at h
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  rename_i id _
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  rename_i hcb
+  simp only [Except.ok.injEq] at h
+  exact ⟨id, by simpa using hcb, by rw [← h]⟩
+
+/-- An operation's steps keep every stored record satisfying the constraints of its type, given that the constraints are
+    state-only. -/
+theorem opStep_satisfied (c : OpCtx) (st st' : OpState) (s : OpStep) (hs : st.tenant.Satisfied)
+    (hst : st.tenant.StateConstraints) (h : opStep c st s = .ok st') : st'.tenant.Satisfied := by
+  cases s with
+  | create id ty fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opCreate, hty] at h
+    | some o =>
+      obtain ⟨vals, r, hN, hP, hC, ht⟩ := opCreate_ok_parts hty h
+      rw [ht]
+      intro T o' hT' q hq
+      change (st.tenant.putType ty { o with records := (st.tenant.nextId, r) :: o.records }).typ? T = some o' at hT'
+      by_cases hTy : T = ty
+      · subst hTy
+        rw [typ?_putType_self st.tenant T o _ hty] at hT'
+        cases hT'
+        rcases List.mem_cons.mp hq with rfl | hq'
+        · have hcongr := constraintProblem_congr (writeEnv c.principal r none) (storedEnv r) rfl rfl
+            o.constraints (fun c' hc => hst T o hty c' hc)
+          show constraintProblem (storedEnv r) o.constraints = none
+          rw [← hcongr]
+          exact hC
+        · exact hs T o hty q hq'
+      · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+        exact hs T o' hT' q hq
+  | update id ty rec fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opUpdate, hty] at h
+    | some o =>
+      cases hid : opTarget c st.params rec with
+      | error e => simp [opStep, opUpdate, hty, hid] at h
+      | ok id' =>
+        cases hL : o.records.lookup id' with
+        | none => simp [opStep, opUpdate, hty, hid, hL] at h
+        | some old =>
+          obtain ⟨vals, r, -, -, -, -, hC, ht⟩ := opUpdate_ok_parts_gen hty hid hL h
+          rw [ht]
+          intro T o' hT' q hq
+          change (st.tenant.putType ty { o with records := o.records.map (fun q =>
+            if q.1 == id' then (q.1, r) else q) }).typ? T = some o' at hT'
+          by_cases hTy : T = ty
+          · subst hTy
+            rw [typ?_putType_self st.tenant T o _ hty] at hT'
+            cases hT'
+            obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+            by_cases hk : (q₀.1 == id') = true
+            · simp only [hk, if_true] at hmap
+              rw [← hmap]
+              show constraintProblem (storedEnv r) o.constraints = none
+              have hcongr := constraintProblem_congr (writeEnv c.principal r (some old)) (storedEnv r) rfl rfl
+                o.constraints (fun c' hc => hst T o hty c' hc)
+              rw [← hcongr]
+              exact hC
+            · simp only [hk, if_false] at hmap
+              rw [← hmap]
+              exact hs T o hty q₀ hq₀
+          · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+            exact hs T o' hT' q hq
+  | delete id ty rec =>
+    obtain ⟨id', hcb, ht⟩ := opDelete_ok_parts h
+    rw [ht]
+    exact afterDelete_satisfied st.tenant ty id' hs hcb
+  | post id owner unit amt reason =>
+    simp only [opStep, opPost] at h
+    repeat' split at h
+    all_goals (try (simp at h; done))
+    all_goals (simp only [Except.ok.injEq] at h; rw [← h]; exact hs)
+
 /-- An accepted step keeps every stored record satisfying the constraints of its type, given that
     the constraints are the state-only kind. A delete is accepted only when the records it rewrites
     keep theirs (`Tenant.clearBreaks`, WG-5664). -/
@@ -316,6 +498,10 @@ theorem stepTenant_preserves_satisfied (t t' : Tenant) (p : Principal) (i : Inte
   | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact hs
   | postLedgerTx now tx => obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape h; exact hs
   | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact hs
+  | invokeOperation now op ins key =>
+    exact (invokeOperationT_pres (fun x => x.Satisfied ∧ x.StateConstraints)
+      (fun c s st st' hs' hp => ⟨opStep_satisfied c st st' s hp.1 hp.2 hs', opStep_stateConstraints c st st' s hp.2 hs'⟩)
+      ⟨hs, hst⟩ h).1
   | create ty fs =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h

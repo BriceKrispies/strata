@@ -104,6 +104,9 @@ structure Header where
   ledgerDecls : Option LedgerDecls := none
   ledger : LedgerState := {}
   ledgerPolicies : List LedgerPolicy := []
+  /-- The operations of the schema (slice 14): an invocation decides from the header, the operation's
+      definition and the tenant's object types, counter and ledger. -/
+  operations : List (String × OpDef) := []
 
 def TypeHead.ofObj (o : ObjType) : TypeHead :=
   { schema := o.schema, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows }
@@ -118,7 +121,8 @@ def _root_.Strata.Tenant.header (t : Tenant) : Header :=
     grants := t.grants, policies := t.policies, limits := t.limits, roles := t.roles,
     teams := t.teams, invitations := t.invitations, schemaVersion := t.schemaVersion,
     settingDefs := t.settingDefs, overrides := t.overrides, settingRevs := t.settingRevs,
-    ledgerDecls := t.ledgerDecls, ledger := t.ledger, ledgerPolicies := t.ledgerPolicies }
+    ledgerDecls := t.ledgerDecls, ledger := t.ledger, ledgerPolicies := t.ledgerPolicies,
+    operations := t.operations }
 
 /-- A header as a tenant with no records, so the model's permission functions apply to it. They
     read neither records nor the counter. -/
@@ -128,7 +132,7 @@ def Header.asTenant (h : Header) : Tenant :=
     limits := h.limits, roles := h.roles, teams := h.teams, invitations := h.invitations,
     schemaVersion := h.schemaVersion, settingDefs := h.settingDefs, overrides := h.overrides,
     settingRevs := h.settingRevs, ledgerDecls := h.ledgerDecls, ledger := h.ledger,
-    ledgerPolicies := h.ledgerPolicies }
+    ledgerPolicies := h.ledgerPolicies, operations := h.operations }
 
 /-- The records of each object type of a tenant, in the tenant's type order. -/
 def _root_.Strata.Tenant.tables (t : Tenant) : List (TypeId × Records) :=
@@ -244,6 +248,9 @@ inductive Delta where
   /-- Replace the ledger of the tenant: its accounts, journal and account limits (slice 13). The header
       carries the ledger, and no record, counter or table is touched. -/
   | ledger (L : LedgerState)
+  /-- Invoke an operation (slice 14): it changes the object types, the counter and the ledger, and writes
+      the records of its steps into the types. -/
+  | invoke (types : List (TypeId × ObjType)) (nextId : Nat) (L : LedgerState)
   /-- Make the tenant that a system `CreateTenant` creates, the genesis tenant of this owner, when it
       does not exist (slice 7). Against a tenant that exists it changes nothing. -/
   | genesis (owner : PrincipalId)
@@ -282,6 +289,7 @@ def Delta.apply (t : Tenant) : Delta → Tenant
   | .members m => t.withM m
   | .settings ov rv => { t with overrides := ov, settingRevs := rv }
   | .ledger L => { t with ledger := L }
+  | .invoke ts n L => { t with types := ts, nextId := n, ledger := L }
   | .genesis _ => t
 
 /-! ### Validity read through single records
@@ -370,6 +378,7 @@ def applyWorld (w : World) (x : TenantId) (d : Delta) : World :=
   | .members m => upd w x ((w x).map (fun t => (Delta.members m).apply t))
   | .settings ov rv => upd w x ((w x).map (fun t => (Delta.settings ov rv).apply t))
   | .ledger L => upd w x ((w x).map (fun t => (Delta.ledger L).apply t))
+  | .invoke ts n L => upd w x ((w x).map (fun t => (Delta.invoke ts n L).apply t))
 
 def Store.applyDelta (s : Store) (x : TenantId) (d : Delta) : Store :=
   { world := applyWorld s.world x d, gen := upd s.gen x (s.gen x + 1) }
@@ -511,6 +520,10 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
     match postTxCore h.asTenant p now tx with
     | .error e => .error e
     | .ok r => .ok (.ledger r.1)
+  | .invokeOperation now op ins key =>
+    match invokeOpCore { h.asTenant with types := assembleTypes h all, nextId := n } p now op ins key with
+    | .error e => .error e
+    | .ok r => .ok (.invoke r.1.types r.1.nextId r.1.ledger)
 
 /-- A decision made through any source of key values. It reads keys of tenant `x` only. -/
 def decideOn (get : Key → Payload) (x : TenantId) (p : Principal) (i : Intent) :
@@ -690,6 +703,237 @@ theorem postTxCore_header (t : Tenant) (p : Principal) (now : Int) (tx : LedgerT
 theorem expireCore_header (t : Tenant) (p : Principal) (now : Int) (u : Nat) (c : Int) :
     expireCore t.header.asTenant p now u c = expireCore t p now u c := rfl
 
+/-! ### Invocations: the header tenant and the tenant run alike
+
+An invocation reads nothing of a tenant's revision or event sequence. Setting those two fields on the tenant it runs
+on sets them on the result and changes nothing else. So the invocation on the header tenant (whose revision and
+sequence are zero) decides the same types, counter and ledger as the invocation on the tenant itself. The proof is
+naturality: each step commutes with setting the two fields of its state's tenant. -/
+
+/-- A state whose tenant has its revision and event sequence set. -/
+def _root_.Strata.OpState.setRev (st : OpState) (a e : Nat) : OpState :=
+  { st with tenant := { st.tenant with revision := a, eventSeq := e } }
+
+theorem typ_setRev (t : Tenant) (a e : Nat) (ty : TypeId) :
+    ({ t with revision := a, eventSeq := e } : Tenant).typ? ty = t.typ? ty := rfl
+
+theorem env_setRev (t : Tenant) (a e : Nat) :
+    ({ t with revision := a, eventSeq := e } : Tenant).env = t.env := rfl
+
+theorem recordAt_setRev (t : Tenant) (a e : Nat) (ty : TypeId) (id : RecordId) :
+    ({ t with revision := a, eventSeq := e } : Tenant).recordAt ty id = t.recordAt ty id := rfl
+
+theorem blockedDelete_setRev (t : Tenant) (a e : Nat) (ty : TypeId) (id : RecordId) :
+    ({ t with revision := a, eventSeq := e } : Tenant).blockedDelete ty id = t.blockedDelete ty id := rfl
+
+theorem clearBreaks_setRev (t : Tenant) (a e : Nat) (ty : TypeId) (id : RecordId) :
+    ({ t with revision := a, eventSeq := e } : Tenant).clearBreaks ty id = t.clearBreaks ty id := rfl
+
+theorem afterDelete_setRev (t : Tenant) (a e : Nat) (ty : TypeId) (id : RecordId) :
+    ({ t with revision := a, eventSeq := e } : Tenant).afterDelete ty id
+      = { t.afterDelete ty id with revision := a, eventSeq := e } := rfl
+
+theorem putType_setRev (t : Tenant) (a e : Nat) (ty : TypeId) (o : ObjType) :
+    ({ t with revision := a, eventSeq := e } : Tenant).putType ty o
+      = { t.putType ty o with revision := a, eventSeq := e } := rfl
+
+theorem referrerLogs_setRev (t : Tenant) (a e : Nat) (ty : TypeId) (id : RecordId) :
+    opReferrerLogs { t with revision := a, eventSeq := e } ty id = opReferrerLogs t ty id := rfl
+
+theorem postOne_setRev (t : Tenant) (a e : Nat) (actor : Principal) (now : Int) (L : LedgerState)
+    (q : LedgerPosting) :
+    postOne { t with revision := a, eventSeq := e } actor now L q = postOne t actor now L q := rfl
+
+theorem bindInputs_setRev (t : Tenant) (a e : Nat) (ins : List (String × Val)) (l : List OpInput) :
+    bindInputs { t with revision := a, eventSeq := e } ins l = bindInputs t ins l := by
+  induction l with
+  | nil => rfl
+  | cons i is ih =>
+    have hb : bindInput { t with revision := a, eventSeq := e } ins i = bindInput t ins i := rfl
+    simp only [bindInputs, hb, ih]
+
+theorem opSubject_setRev (t : Tenant) (a e : Nat) (p : Principal) (op : OpDef) (ps : List (String × Val)) :
+    opSubject { t with revision := a, eventSeq := e } p op ps = opSubject t p op ps := rfl
+
+theorem rolesOf_setRev (t : Tenant) (a e : Nat) (p : Principal) :
+    ({ t with revision := a, eventSeq := e } : Tenant).rolesOf p = t.rolesOf p := rfl
+
+theorem opCreate_setRev (c : OpCtx) (st : OpState) (a e : Nat) (id : String) (ty : TypeId)
+    (fs : List (FieldId × Expr)) :
+    opCreate c (st.setRev a e) id ty fs = (opCreate c st id ty fs).map (fun s => s.setRev a e) := by
+  unfold opCreate OpState.setRev
+  simp only [typ_setRev, env_setRev]
+  repeat' (first | rfl | split)
+  all_goals (try simp_all [Except.map, OpState.setRev])
+  all_goals (repeat' (first | rfl | split))
+  all_goals (try simp_all [Except.map, OpState.setRev])
+
+theorem opUpdate_setRev (c : OpCtx) (st : OpState) (a e : Nat) (ty : TypeId) (record : Expr)
+    (fields : List (FieldId × Expr)) :
+    opUpdate c (st.setRev a e) ty record fields = (opUpdate c st ty record fields).map (fun s => s.setRev a e) := by
+  unfold opUpdate OpState.setRev
+  simp only [typ_setRev, env_setRev]
+  repeat' (first | rfl | split)
+  all_goals (try simp_all [Except.map, OpState.setRev])
+  all_goals (repeat' (first | rfl | split))
+  all_goals (try simp_all [Except.map, OpState.setRev])
+
+theorem opDelete_setRev (c : OpCtx) (st : OpState) (a e : Nat) (ty : TypeId) (record : Expr) :
+    opDelete c (st.setRev a e) ty record = (opDelete c st ty record).map (fun s => s.setRev a e) := by
+  unfold opDelete OpState.setRev
+  simp only [typ_setRev, recordAt_setRev, blockedDelete_setRev, clearBreaks_setRev, afterDelete_setRev,
+    referrerLogs_setRev]
+  repeat' (first | rfl | split)
+  all_goals (try simp_all [Except.map, OpState.setRev])
+  all_goals (repeat' (first | rfl | split))
+  all_goals (try simp_all [Except.map, OpState.setRev])
+
+theorem opPost_setRev (c : OpCtx) (st : OpState) (a e : Nat) (id : String) (owner : OpOwner) (unit : Nat)
+    (amount : Expr) (reason : String) :
+    opPost c (st.setRev a e) id owner unit amount reason
+      = (opPost c st id owner unit amount reason).map (fun s => s.setRev a e) := by
+  unfold opPost OpState.setRev
+  simp only [postOne_setRev]
+  repeat' (first | rfl | split)
+  all_goals (try simp_all [Except.map, OpState.setRev])
+  all_goals (repeat' (first | rfl | split))
+  all_goals (try simp_all [Except.map, OpState.setRev])
+
+theorem opStep_setRev (c : OpCtx) (st : OpState) (a e : Nat) (s : OpStep) :
+    opStep c (st.setRev a e) s = (opStep c st s).map (fun s' => s'.setRev a e) := by
+  cases s with
+  | create id ty fs => exact opCreate_setRev c st a e id ty fs
+  | update _ ty rec fs => exact opUpdate_setRev c st a e ty rec fs
+  | delete _ ty rec => exact opDelete_setRev c st a e ty rec
+  | post id owner unit amt reason => exact opPost_setRev c st a e id owner unit amt reason
+
+theorem runSteps_setRev (c : OpCtx) (ss : List OpStep) (st : OpState) (a e : Nat) :
+    runSteps c ss (st.setRev a e) = (runSteps c ss st).map (fun s => s.setRev a e) := by
+  induction ss generalizing st with
+  | nil => rfl
+  | cons s ss ih =>
+    simp only [runSteps, opStep_setRev]
+    cases hs : opStep c st s with
+    | error err => rfl
+    | ok st' => simp only [Except.map]; exact ih st'
+
+theorem runSteps_setRev_mk (c : OpCtx) (ss : List OpStep) (t : Tenant) (ps : List (String × Val))
+    (a e : Nat) :
+    runSteps c ss { tenant := { t with revision := a, eventSeq := e }, params := ps, logs := [] }
+      = (runSteps c ss { tenant := t, params := ps, logs := [] }).map (fun s => s.setRev a e) :=
+  runSteps_setRev c ss { tenant := t, params := ps, logs := [] } a e
+
+theorem invokeOpCore_setRev (t : Tenant) (a e : Nat) (p : Principal) (now : Int) (name : String)
+    (ins : List (String × Val)) (key : String) :
+    invokeOpCore { t with revision := a, eventSeq := e } p now name ins key
+      = (invokeOpCore t p now name ins key).map (fun r => ({ r.1 with revision := a, eventSeq := e }, r.2)) := by
+  unfold invokeOpCore
+  simp only [bindInputs_setRev, opSubject_setRev, rolesOf_setRev, runSteps_setRev_mk]
+  repeat' (first | rfl | split)
+  all_goals (try simp_all [Except.map, OpState.setRev])
+  all_goals (repeat' (first | rfl | split))
+  all_goals (try simp_all [Except.map, OpState.setRev])
+  all_goals (try (subst_vars; exact ⟨rfl, rfl⟩))
+
+/-- An accepted step changes the tenant only in its types, counter and ledger. -/
+theorem opStep_fields (c : OpCtx) (st st' : OpState) (s : OpStep) (h : opStep c st s = .ok st') :
+    ∃ A B C, st'.tenant = { st.tenant with types := A, nextId := B, ledger := C } := by
+  cases s with
+  | create id ty fs =>
+    simp only [opStep] at h
+    unfold opCreate at h
+    try dsimp only at h
+    repeat' split at h
+    all_goals (cases h <;> exact ⟨_, _, _, rfl⟩)
+  | update _ ty rec fs =>
+    simp only [opStep] at h
+    unfold opUpdate at h
+    try dsimp only at h
+    repeat' split at h
+    all_goals (cases h <;> exact ⟨_, _, _, rfl⟩)
+  | delete _ ty rec =>
+    simp only [opStep] at h
+    unfold opDelete at h
+    try dsimp only at h
+    repeat' split at h
+    all_goals (cases h <;> exact ⟨_, _, _, rfl⟩)
+  | post id owner unit amt reason =>
+    simp only [opStep] at h
+    unfold opPost at h
+    try dsimp only at h
+    repeat' split at h
+    all_goals (cases h <;> exact ⟨_, _, _, rfl⟩)
+
+
+theorem runSteps_fields (c : OpCtx) (ss : List OpStep) :
+    ∀ (st st' : OpState), runSteps c ss st = .ok st' →
+      ∃ A B C, st'.tenant = { st.tenant with types := A, nextId := B, ledger := C } := by
+  induction ss with
+  | nil =>
+    intro st st' h
+    simp only [runSteps, Except.ok.injEq] at h
+    subst h
+    exact ⟨st.tenant.types, st.tenant.nextId, st.tenant.ledger, rfl⟩
+  | cons s ss ih =>
+    intro st st' h
+    simp only [runSteps] at h
+    cases hs : opStep c st s with
+    | error err => simp [hs] at h
+    | ok st1 =>
+      simp only [hs] at h
+      obtain ⟨A, B, C, h1⟩ := ih st1 st' h
+      obtain ⟨A', B', C', h2⟩ := opStep_fields c st st1 s hs
+      exact ⟨A, B, C, by rw [h1, h2]⟩
+
+/-- The tenant an accepted invocation leaves is the tenant it ran on, with its types, counter and ledger changed. -/
+theorem invokeOpCore_shape {t : Tenant} {p : Principal} {now : Int} {name : String}
+    {ins : List (String × Val)} {key : String} {r : Tenant × List OpLog}
+    (h : invokeOpCore t p now name ins key = .ok r) :
+    r.1 = { t with types := r.1.types, nextId := r.1.nextId, ledger := r.1.ledger } := by
+  obtain ⟨op, ps, c, st, -, hr, ht⟩ := invokeOpCore_ok (t' := r.1) (logs := r.2) h
+  obtain ⟨A, B, C, h1⟩ := runSteps_fields c op.steps { tenant := t, params := ps, logs := [] } st hr
+  have h1' : st.tenant = { t with types := A, nextId := B, ledger := C } := h1
+  rw [ht, h1']
+
+theorem invokeOpCore_header_congr (t : Tenant) (p : Principal) (now : Int) (name : String)
+    (ins : List (String × Val)) (key : String) :
+    (invokeOpCore { t.header.asTenant with types := assembleTypes t.header t.tables, nextId := t.nextId }
+        p now name ins key).map (fun r => (r.1.types, r.1.nextId, r.1.ledger))
+      = (invokeOpCore t p now name ins key).map (fun r => (r.1.types, r.1.nextId, r.1.ledger)) := by
+  have e0 : ({ t.header.asTenant with types := assembleTypes t.header t.tables, nextId := t.nextId } : Tenant)
+      = { t with revision := 0, eventSeq := 0 } := by
+    rw [assemble_header]
+    rfl
+  rw [e0, invokeOpCore_setRev]
+  cases invokeOpCore t p now name ins key <;> rfl
+
+/-- The invoke decision, applied as a delta, is the tenant the invocation leaves, given the two agree on the types,
+    counter and ledger of the invocation's results. -/
+theorem invoke_case_eq (t : Tenant) (x y : Except Err (Tenant × List OpLog))
+    (h : x.map (fun r => (r.1.types, r.1.nextId, r.1.ledger))
+      = y.map (fun r => (r.1.types, r.1.nextId, r.1.ledger)))
+    (hy : ∀ r', y = .ok r' → r'.1 = { t with types := r'.1.types, nextId := r'.1.nextId, ledger := r'.1.ledger }) :
+    (match x with
+      | .error e => Except.error e
+      | .ok r => Except.ok (Delta.invoke r.1.types r.1.nextId r.1.ledger)).map (Delta.apply t)
+      = y.map (fun r => r.1) := by
+  cases x with
+  | error e =>
+    cases y with
+    | error e' =>
+      simp only [Except.map, Except.error.injEq] at h ⊢
+      exact h
+    | ok r' => simp only [Except.map] at h; cases h
+  | ok r =>
+    cases y with
+    | error e' => simp only [Except.map] at h; cases h
+    | ok r' =>
+      have hs := hy r' rfl
+      simp only [Except.map, Except.ok.injEq, Prod.mk.injEq] at h ⊢
+      obtain ⟨h1, h2, h3⟩ := h
+      simp only [Delta.apply, h1, h2, h3]
+      exact hs.symm
+
 /-- A decision from the header, the counter, the tenant's own lookup and record tables, applied as
     a delta, is the kernel's step. -/
 theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
@@ -761,6 +1005,10 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
     cases hW : postTxCore t p now tx with
     | error e => simp [hW, Except.map]
     | ok r => simp [hW, Except.map, Delta.apply]
+  | invokeOperation now op ins key =>
+    have hA := invokeOpCore_header_congr t p now op ins key
+    simp only [decideTenant, stepTenant, invokeOperationT]
+    exact invoke_case_eq t _ _ hA (fun r' hr' => invokeOpCore_shape hr')
   | create ty fs =>
     simp only [TypeHead.ofObj, decideTenant, stepTenant, header_types_lookup, tables_lookup, unknownType_header,
       canCreate_header, canAttemptCreate_header, hhas, problem_eq_via]
@@ -974,6 +1222,7 @@ theorem fetch_applyWorld_other (w : World) (x : TenantId) (d : Delta) (k : Key)
     answer and the list; a schema change changes the header only. Answers are invalidated by any record change of their tenant, the granularity
     of the per-object-type change counters (D-5064). -/
 def touchedIn : Delta → Key → Bool
+  | .invoke _ _ _, _ => true
   | .types _, _ => true
   | .schema _ _, .header _ => true
   | .members _, .header _ => true
@@ -1520,17 +1769,21 @@ theorem touchedIn_sound : InvSound touchedIn := by
   · obtain ⟨o, rfl⟩ := hng; exact sound_genesis w x o k hx hin
   by_cases hnt : ∃ ts, d = .types ts
   · obtain ⟨ts, rfl⟩ := hnt; simp [touchedIn] at hin
+  by_cases hni : ∃ ts n L, d = .invoke ts n L
+  · obtain ⟨ts, n, L, rfl⟩ := hni; simp [touchedIn] at hin
   have hnm' : ∀ m, d ≠ .members m := fun m h => hnm ⟨m, h⟩
   have hns' : ∀ ov rv, d ≠ .settings ov rv := fun ov rv h => hns ⟨ov, rv, h⟩
   have hnl' : ∀ L, d ≠ .ledger L := fun L h => hnl ⟨L, h⟩
   have hng': ∀ o, d ≠ .genesis o := fun o h => hng ⟨o, h⟩
   have hnt' : ∀ ts, d ≠ .types ts := fun ts h => hnt ⟨ts, h⟩
+  have hni' : ∀ ts n L, d ≠ .invoke ts n L := fun ts n L h => hni ⟨ts, n, L, h⟩
   cases k with
   | header t =>
     simp only [Key.tenant] at hx; subst hx
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | invoke ts n L => exact absurd rfl (hni' ts n L)
     | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
@@ -1555,6 +1808,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | invoke ts n L => exact absurd rfl (hni' ts n L)
     | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
@@ -1581,6 +1835,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | invoke ts n L => exact absurd rfl (hni' ts n L)
     | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
@@ -1625,6 +1880,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | invoke ts n L => exact absurd rfl (hni' ts n L)
     | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
@@ -1644,6 +1900,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | invoke ts n L => exact absurd rfl (hni' ts n L)
     | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
@@ -1663,6 +1920,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | settings ov rv => exact absurd rfl (hns' ov rv)
+    | invoke ts n L => exact absurd rfl (hni' ts n L)
     | ledger L => exact absurd rfl (hnl' L)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)

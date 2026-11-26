@@ -1013,6 +1013,7 @@ theorem stepTenant_data_mt (t t' : Tenant) (p : Principal) (i : Intent)
   | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; rfl
   | postLedgerTx now tx => obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape h; rfl
   | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; rfl
+  | invokeOperation now op ins key => exact invokeOperationT_mt h
   | changeSchema ev strict cs =>
     obtain ⟨types1, -, -, ht', -, -⟩ := stepTenant_changeSchema_parts h
     subst ht'; rfl

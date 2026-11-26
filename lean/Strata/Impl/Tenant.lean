@@ -46,6 +46,8 @@ structure ITenant where
   ledgerDecls : Option LedgerDecls := none
   ledger : LedgerState := {}
   ledgerPolicies : List LedgerPolicy := []
+  /-- The operations the schema defines (slice 14), held as the spec holds them. -/
+  operations : List (String × OpDef) := []
   /-- The revision, the event sequence and the schema version, as the spec holds them (slice 9). -/
   revision : Nat := 0
   eventSeq : Nat := 0
@@ -75,7 +77,7 @@ def ITenant.abs (t : ITenant) : Tenant :=
     invitations := t.invitations, revision := t.revision, eventSeq := t.eventSeq,
     schemaVersion := t.schemaVersion, settingDefs := t.settingDefs, overrides := t.overrides,
     settingRevs := t.settingRevs, ledgerDecls := t.ledgerDecls, ledger := t.ledger,
-    ledgerPolicies := t.ledgerPolicies }
+    ledgerPolicies := t.ledgerPolicies, operations := t.operations }
 
 /-- The part of an implementation tenant the membership intents see. -/
 def ITenant.mt (t : ITenant) : MTenant :=

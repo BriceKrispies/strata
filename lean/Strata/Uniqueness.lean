@@ -703,6 +703,7 @@ theorem schema_step_putType (t t' : Tenant) (p : Principal) (i : Intent)
     ∃ ty o', t' = t.putType ty o' ∧ ty ∈ i.touched t := by
   cases i with
   | createTenant owner name => simp [Intent.isSchema] at hi
+  | invokeOperation _ _ _ _ => simp [Intent.isSchema] at hi
   | member j => simp [Intent.isSchema] at hi
   | writeSetting _ _ _ _ _ => simp [Intent.isSchema] at hi
   | postLedger _ _ => simp [Intent.isSchema] at hi
@@ -735,6 +736,7 @@ theorem schemaViolated_of_strict (t t' : Tenant) (p : Principal) (i : Intent)
     schemaViolated t.limits (scopedTypes t'.types (i.touched t)) = false := by
   cases i with
   | createTenant owner name => simp [Intent.isSchema] at hi
+  | invokeOperation _ _ _ _ => simp [Intent.isSchema] at hi
   | member j => simp [Intent.isSchema] at hi
   | writeSetting _ _ _ _ _ => simp [Intent.isSchema] at hi
   | postLedger _ _ => simp [Intent.isSchema] at hi
@@ -866,6 +868,165 @@ theorem strict_schema_change_unique (t t' : Tenant) (p : Principal) (i : Intent)
 
 /-! ## The invariant through accepted steps -/
 
+/-! ## Operations (slice 14): the steps of an invocation, for the names -/
+
+/-- A workflow of an operation's update keeps the field names distinct (as `fireOne_nodup`, without a guard). -/
+theorem opFireOne_nodup {p : Principal} {old cand : Record} {w : Workflow} {r : Record}
+    (hc : (cand.fields.map Prod.fst).Nodup) (h : opFireOne p old cand w = .ok r) :
+    (r.fields.map Prod.fst).Nodup := by
+  unfold opFireOne at h
+  dsimp only at h
+  split at h
+  · cases h; exact hc
+  · split at h
+    · cases h
+    · split at h
+      · cases h
+      · have h2 := Except.ok.inj h
+        rw [← h2]
+        exact applySets_nodup _ _ hc
+
+/-- The workflows of an operation's update keep the field names distinct. -/
+theorem opFireAll_nodup {p : Principal} {old : Record} {ws : List Workflow} {cand r : Record}
+    (hc : (cand.fields.map Prod.fst).Nodup) (h : opFireAll p old cand ws = .ok r) :
+    (r.fields.map Prod.fst).Nodup := by
+  induction ws generalizing cand with
+  | nil =>
+    simp only [opFireAll, Except.ok.injEq] at h
+    rw [← h]
+    exact hc
+  | cons w ws ih =>
+    unfold opFireAll at h
+    split at h
+    · cases h
+    · rename_i c hc'
+      exact ih (opFireOne_nodup hc hc') h
+
+/-- The parts of an operation's update: the record it writes is the stored one patched and taken through the workflows,
+    with the structural checks and the constraints passing on it, and the tenant has it in place of the stored one. -/
+theorem opUpdate_ok_parts_gen {c : OpCtx} {st st' : OpState} {ty : TypeId} {rec : Expr}
+    {fs : List (FieldId × Expr)} {o : ObjType} {id : RecordId} {old : Record}
+    (ho : st.tenant.typ? ty = some o) (hid : opTarget c st.params rec = .ok id)
+    (hl : o.records.lookup id = some old) (h : opUpdate c st ty rec fs = .ok st') :
+    ∃ vals r, fs.mapM (fun q => (fun v => (q.1, v)) <$> opEval c st.params q.2) = .ok vals ∧
+      opFireAll c.principal old (Record.mk old.owner (old.version + 1) (Fields.patch old.fields vals)) o.workflows = .ok r ∧
+      problem st.tenant.limits o.schema o.uniques true st.tenant.env o.records id r = none ∧
+      statesOk o.workflows r = true ∧
+      constraintProblem (writeEnv c.principal r (some old)) o.constraints = none ∧
+      st'.tenant = st.tenant.putType ty { o with records := o.records.map (fun q =>
+        if q.1 == id then (q.1, r) else q) } := by
+  unfold opUpdate at h
+  simp only [ho, hid, hl] at h
+  split at h
+  · simp at h
+  rename_i vals hv
+  split at h
+  · simp at h
+  rename_i r hF
+  split at h
+  · simp at h
+  rename_i hS
+  split at h
+  · simp at h
+  rename_i hP
+  split at h
+  · simp at h
+  rename_i hC
+  simp only [Except.ok.injEq] at h
+  exact ⟨vals, r, hv, hF, hP, of_decide_eq_true (by simpa using hS), hC, by rw [← h]⟩
+
+/-- Deleting a record keeps the field names of the tenant distinct, as a direct delete does. -/
+theorem afterDelete_distinct (t : Tenant) (ty id : TypeId) (hd : t.Distinct) :
+    (t.afterDelete ty id).Distinct := by
+  obtain ⟨hkeys, hD⟩ := hd
+  refine ⟨by rw [types_keys_afterDelete]; exact hkeys, fun T o' hT' => ?_⟩
+  rw [typ?_afterDelete] at hT'
+  cases ho : t.typ? T with
+  | none => rw [ho] at hT'; cases hT'
+  | some o =>
+    rw [ho] at hT'
+    simp only [Option.map_some, Option.some.injEq] at hT'
+    subst hT'
+    obtain ⟨hs, hr⟩ := hD T o ho
+    refine ⟨hs, fun q hq => ?_⟩
+    obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+    subst hmap
+    have hq₀' : q₀ ∈ o.records := by
+      by_cases hTy : (T == ty) = true
+      · rw [if_pos hTy] at hq₀
+        exact (List.mem_filter.mp hq₀).1
+      · rw [if_neg hTy] at hq₀
+        exact hq₀
+    exact clearRef_nodup o.schema ty id q₀.2 (hr q₀ hq₀')
+
+/-- A step of an operation keeps the field names of the tenant distinct (`Tenant.Distinct`). -/
+theorem opStep_distinct (c : OpCtx) (st st' : OpState) (s : OpStep) (hd : st.tenant.Distinct)
+    (h : opStep c st s = .ok st') : st'.tenant.Distinct := by
+  obtain ⟨hkeys, hD⟩ := hd
+  cases s with
+  | create id ty fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opCreate, hty] at h
+    | some o =>
+      obtain ⟨vals, r, hN, hP, -, ht⟩ := opCreate_ok_parts hty h
+      rw [ht]
+      refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
+      change (st.tenant.putType ty { o with records := (st.tenant.nextId, r) :: o.records }).typ? T = some o' at hT'
+      by_cases hTy : T = ty
+      · subst hTy
+        rw [typ?_putType_self st.tenant T o _ hty] at hT'
+        cases hT'
+        obtain ⟨hs, hr⟩ := hD T o hty
+        refine ⟨hs, fun q hq => ?_⟩
+        rcases List.mem_cons.mp hq with rfl | hq'
+        · exact newRecord_nodup o.schema c.principal vals r hN hs
+        · exact hr q hq'
+      · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+        exact hD T o' hT'
+  | update id ty rec fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opUpdate, hty] at h
+    | some o =>
+      cases hid : opTarget c st.params rec with
+      | error e => simp [opStep, opUpdate, hty, hid] at h
+      | ok id =>
+        cases hL : o.records.lookup id with
+        | none => simp [opStep, opUpdate, hty, hid, hL] at h
+        | some old =>
+          obtain ⟨vals, r, -, hF, -, -, -, ht⟩ := opUpdate_ok_parts_gen hty hid hL h
+          rw [ht]
+          refine ⟨by rw [types_keys_putType]; exact hkeys, fun T o' hT' => ?_⟩
+          by_cases hTy : T = ty
+          · subst hTy
+            rw [typ?_putType_self st.tenant T o _ hty] at hT'
+            cases hT'
+            obtain ⟨hs, hr⟩ := hD T o hty
+            refine ⟨hs, fun q hq => ?_⟩
+            obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+            by_cases hid' : (q₀.1 == id) = true
+            · simp only [hid', if_true] at hmap
+              rw [← hmap]
+              have hold : (old.fields.map Prod.fst).Nodup := by
+                have hm : (id, old) ∈ o.records := lookup_mem hL
+                exact hr (id, old) hm
+              exact opFireAll_nodup (patch_nodup vals old.fields hold) hF
+            · simp only [hid', if_false] at hmap
+              rw [← hmap]
+              exact hr q₀ hq₀
+          · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+            exact hD T o' hT'
+  | delete id ty rec =>
+    simp only [opStep, opDelete] at h
+    repeat' split at h
+    all_goals (try (simp at h; done))
+    all_goals (simp only [Except.ok.injEq] at h; subst h)
+    all_goals exact afterDelete_distinct _ _ _ ⟨hkeys, hD⟩
+  | post id owner unit amt reason =>
+    simp only [opStep, opPost] at h
+    repeat' split at h
+    all_goals (try (simp at h; done))
+    all_goals (simp only [Except.ok.injEq] at h; subst h; exact ⟨hkeys, hD⟩)
+
 /-- The names an accepted step leaves distinct: the object types, each schema, and each record's
     fields. -/
 theorem stepTenant_preserves_distinct (t t' : Tenant) (p : Principal) (i : Intent)
@@ -878,6 +1039,8 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : Principal) (i : Inten
   | writeSetting n lvl team v ev => obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h; exact ⟨hkeys, hD⟩
   | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact ⟨hkeys, hD⟩
   | postLedgerTx now tx => obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape h; exact ⟨hkeys, hD⟩
+  | invokeOperation now op ins key =>
+    exact invokeOperationT_pres Tenant.Distinct (fun c s st st' hs hp => opStep_distinct c st st' s hp hs) ⟨hkeys, hD⟩ h
   | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact ⟨hkeys, hD⟩
   | create ty fs =>
     cases hty : t.typ? ty with
@@ -1082,6 +1245,132 @@ theorem uniqOn_delClear (schema : Schema) (us : List (List FieldId)) (ty : TypeI
       rw [hB u hu] at this
       cases this
 
+/-- Deleting a record of a tenant keeps its record ids below the counter and its records unique (a direct delete's
+    argument, given the names are distinct). -/
+theorem afterDelete_unique (t : Tenant) (ty id : TypeId) (hids : t.IdsBelow) (hd : t.Distinct)
+    (hu : t.UniqueRecords) : (t.afterDelete ty id).IdsBelow ∧ (t.afterDelete ty id).UniqueRecords := by
+  constructor
+  · intro T o' hT' q hq
+    rw [typ?_afterDelete] at hT'
+    cases ho : t.typ? T with
+    | none => rw [ho] at hT'; cases hT'
+    | some o =>
+      rw [ho] at hT'
+      simp only [Option.map_some, Option.some.injEq] at hT'
+      subst hT'
+      obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+      subst hmap
+      have hq₀' : q₀ ∈ o.records := by
+        by_cases hTy : (T == ty) = true
+        · rw [if_pos hTy] at hq₀
+          exact (List.mem_filter.mp hq₀).1
+        · rw [if_neg hTy] at hq₀
+          exact hq₀
+      exact hids T o ho q₀ hq₀'
+  · intro T o' hT' q₁ hq₁ q₂ hq₂ hne
+    rw [typ?_afterDelete] at hT'
+    cases ho : t.typ? T with
+    | none => rw [ho] at hT'; cases hT'
+    | some o =>
+      rw [ho] at hT'
+      simp only [Option.map_some, Option.some.injEq] at hT'
+      subst hT'
+      have hsub : ∀ q ∈ (if (T == ty) = true then o.records.filter (fun q => q.1 != id)
+          else o.records), q ∈ o.records := by
+        intro q hq
+        by_cases hTy : (T == ty) = true
+        · rw [if_pos hTy] at hq; exact (List.mem_filter.mp hq).1
+        · rw [if_neg hTy] at hq; exact hq
+      exact uniqOn_delClear o.schema o.uniques ty id (hu T o ho) hsub
+        (fun q hq => (hd.2 T o ho).2 q hq) q₁ hq₁ q₂ hq₂ hne
+
+/-- A step of an operation keeps every record id below the counter and the records unique, given both before it. -/
+theorem opStep_unique (c : OpCtx) (st st' : OpState) (s : OpStep) (hids : st.tenant.IdsBelow)
+    (hd : st.tenant.Distinct) (hu : st.tenant.UniqueRecords) (h : opStep c st s = .ok st') :
+    st'.tenant.IdsBelow ∧ st'.tenant.UniqueRecords := by
+  cases s with
+  | create id ty fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opCreate, hty] at h
+    | some o =>
+      obtain ⟨vals, r, hN, hP, -, ht⟩ := opCreate_ok_parts hty h
+      rw [ht]
+      constructor
+      · intro T o' hT' q hq
+        change (st.tenant.putType ty { o with records := (st.tenant.nextId, r) :: o.records }).typ? T = some o' at hT'
+        by_cases hTy : T = ty
+        · subst hTy
+          rw [typ?_putType_self st.tenant T o _ hty] at hT'
+          cases hT'
+          rcases List.mem_cons.mp hq with rfl | hq'
+          · exact Nat.lt_succ_self _
+          · exact Nat.lt_succ_of_lt (hids T o hty q hq')
+        · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+          exact Nat.lt_succ_of_lt (hids T o' hT' q hq)
+      · intro T o' hT' q₁ hq₁ q₂ hq₂ hne
+        change (st.tenant.putType ty { o with records := (st.tenant.nextId, r) :: o.records }).typ? T = some o' at hT'
+        by_cases hTy : T = ty
+        · subst hTy
+          rw [typ?_putType_self st.tenant T o _ hty] at hT'
+          cases hT'
+          exact (uniqOn_cons_fresh (L := st.tenant.limits) (env := st.tenant.env) (hu T o hty) hP
+            (fun q hq => Nat.ne_of_lt (hids T o hty q hq))) q₁ hq₁ q₂ hq₂ hne
+        · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+          exact hu T o' hT' q₁ hq₁ q₂ hq₂ hne
+  | update id ty rec fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opUpdate, hty] at h
+    | some o =>
+      cases hid : opTarget c st.params rec with
+      | error e => simp [opStep, opUpdate, hty, hid] at h
+      | ok id' =>
+        cases hL : o.records.lookup id' with
+        | none => simp [opStep, opUpdate, hty, hid, hL] at h
+        | some old =>
+          obtain ⟨vals, r, -, -, hP, -, -, ht⟩ := opUpdate_ok_parts_gen hty hid hL h
+          rw [ht]
+          constructor
+          · intro T o' hT' q hq
+            change (st.tenant.putType ty { o with records := o.records.map (fun q =>
+              if q.1 == id' then (q.1, r) else q) }).typ? T = some o' at hT'
+            by_cases hTy : T = ty
+            · subst hTy
+              rw [typ?_putType_self st.tenant T o _ hty] at hT'
+              cases hT'
+              obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+              have hid0 := hids T o hty q₀ hq₀
+              by_cases hk : (q₀.1 == id') = true
+              · simp only [hk, if_true] at hmap
+                rw [← hmap]
+                exact hid0
+              · simp only [hk, if_false] at hmap
+                rw [← hmap]
+                exact hid0
+            · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+              exact hids T o' hT' q hq
+          · intro T o' hT' q₁ hq₁ q₂ hq₂ hne
+            change (st.tenant.putType ty { o with records := o.records.map (fun q =>
+              if q.1 == id' then (q.1, r) else q) }).typ? T = some o' at hT'
+            by_cases hTy : T = ty
+            · subst hTy
+              rw [typ?_putType_self st.tenant T o _ hty] at hT'
+              cases hT'
+              exact (uniqOn_replace (L := st.tenant.limits) (env := st.tenant.env) (hu T o hty) hP)
+                q₁ hq₁ q₂ hq₂ hne
+            · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+              exact hu T o' hT' q₁ hq₁ q₂ hq₂ hne
+  | delete id ty rec =>
+    simp only [opStep, opDelete] at h
+    repeat' split at h
+    all_goals (try (simp at h; done))
+    all_goals (simp only [Except.ok.injEq] at h; rw [← h])
+    all_goals exact afterDelete_unique _ _ _ hids hd hu
+  | post id owner unit amt reason =>
+    simp only [opStep, opPost] at h
+    repeat' split at h
+    all_goals (try (simp at h; done))
+    all_goals (simp only [Except.ok.injEq] at h; rw [← h]; exact ⟨hids, hu⟩)
+
 /-! ## The uniqueness invariant through accepted steps -/
 
 /-- An accepted strict step keeps every object type's records unique under its constraints. -/
@@ -1107,6 +1396,11 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : Principal) (i : Intent)
   | writeSetting n lvl team v ev => obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h; exact hu
   | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact hu
   | postLedgerTx now tx => obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape h; exact hu
+  | invokeOperation now op ins key =>
+    exact (invokeOperationT_pres (fun x => x.IdsBelow ∧ x.Distinct ∧ x.UniqueRecords)
+      (fun c s st st' hs hp => ⟨(opStep_unique c st st' s hp.1 hp.2.1 hp.2.2 hs).1,
+        opStep_distinct c st st' s hp.2.1 hs, (opStep_unique c st st' s hp.1 hp.2.1 hp.2.2 hs).2⟩)
+      ⟨hids, hd, hu⟩ h).2.2
   | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact hu
   | create ty fs =>
     cases hty : t.typ? ty with

@@ -1909,50 +1909,6 @@ theorem lawful_ledgerTx : Lawful encLedgerTx decLedgerTx :=
       (lawful_list lawful_ledgerLeg))))
     (fun x => by cases x; rfl) (fun _ => rfl)
 
-/-- The tenant's fields as one nested product: its object types, members, grants, policies, next id,
-    limits, the roles its schema defines (slice 7), its teams and its invitations, then (slice 9) its
-    revision, its event sequence and its schema version. -/
-def encTenantBody : List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
-    List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
-    List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat ×
-    List SettingDef × List SettingOverride × List (String × Nat) ×
-    Option LedgerDecls × LedgerState × List LedgerPolicy → Bytes :=
-  encPair (encList encTypeEntry) (encPair (encList encMember) (encPair (encList encGrantEntry) (encPair (encList encPolicy) (encPair encNat (encPair encLimits (encPair (encList encNat) (encPair (encList encTeamEntry) (encPair (encList encInvitationEntry) (encPair encNat (encPair encNat (encPair encNat (encPair (encList encSettingDef) (encPair (encList encOverride) (encPair (encList encSettingRev) (encPair (encOpt encLedgerDecls) (encPair encLedgerState ((encList encLedgerPolicy))))))))))))))))))
-
-def decTenantBody :
-    Dec (List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
-      List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
-      List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat ×
-      List SettingDef × List SettingOverride × List (String × Nat) ×
-      Option LedgerDecls × LedgerState × List LedgerPolicy) :=
-  decPair (decList decTypeEntry) (decPair (decList decMember) (decPair (decList decGrantEntry) (decPair (decList decPolicy) (decPair decNat (decPair decLimits (decPair (decList decNat) (decPair (decList decTeamEntry) (decPair (decList decInvitationEntry) (decPair decNat (decPair decNat (decPair decNat (decPair (decList decSettingDef) (decPair (decList decOverride) (decPair (decList decSettingRev) (decPair (decOpt decLedgerDecls) (decPair decLedgerState ((decList decLedgerPolicy))))))))))))))))))
-
-theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
-  lawful_pair (lawful_list lawful_typeEntry) (lawful_pair (lawful_list lawful_member) (lawful_pair (lawful_list lawful_grantEntry) (lawful_pair (lawful_list lawful_policy) (lawful_pair lawful_nat (lawful_pair lawful_limits (lawful_pair (lawful_list lawful_nat) (lawful_pair (lawful_list lawful_teamEntry) (lawful_pair (lawful_list lawful_invitationEntry) (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_settingDef) (lawful_pair (lawful_list lawful_override) (lawful_pair (lawful_list lawful_settingRev) (lawful_pair (lawful_opt lawful_ledgerDecls) (lawful_pair lawful_ledgerState ((lawful_list lawful_ledgerPolicy))))))))))))))))))
-
-def encTenant : Tenant → Bytes :=
-  encIso encTenantBody
-    (fun t => (t.types, t.members, t.grants, t.policies, t.nextId, t.limits, t.roles, t.teams,
-      t.invitations, t.revision, t.eventSeq, t.schemaVersion, t.settingDefs, t.overrides, t.settingRevs,
-      t.ledgerDecls, t.ledger, t.ledgerPolicies))
-
-def decTenant : Dec Tenant :=
-  decIso decTenantBody fun p =>
-    { types := p.1, members := p.2.1, grants := p.2.2.1, policies := p.2.2.2.1, nextId := p.2.2.2.2.1,
-      limits := p.2.2.2.2.2.1, roles := p.2.2.2.2.2.2.1, teams := p.2.2.2.2.2.2.2.1,
-      invitations := p.2.2.2.2.2.2.2.2.1, revision := p.2.2.2.2.2.2.2.2.2.1,
-      eventSeq := p.2.2.2.2.2.2.2.2.2.2.1, schemaVersion := p.2.2.2.2.2.2.2.2.2.2.2.1,
-      settingDefs := p.2.2.2.2.2.2.2.2.2.2.2.2.1, overrides := p.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-      settingRevs := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-      ledgerDecls := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-      ledger := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-      ledgerPolicies := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2 }
-
-theorem lawful_tenant : Lawful encTenant decTenant :=
-  lawful_iso lawful_tenantBody (fun t => by cases t; rfl) (fun _ => rfl)
-
-/-! ## Intents, contexts and results -/
-
 /-- The payload of a constructor is decoded and mapped into the sum. -/
 theorem dec_ctor_enc {α β : Type} {e : β → Bytes} {d : Dec β} (h : Lawful e d) (f : β → α)
     (x : β) (rest : Bytes) : decIso d f (e x ++ rest) = some (f x, rest) := by
@@ -1971,6 +1927,191 @@ theorem dec_ctor_inv {α β : Type} {e : β → Bytes} {d : Dec β} (h : Lawful 
     simp only [hx, Option.some.injEq, Prod.mk.injEq] at hd
     obtain ⟨rfl, rfl⟩ := hd
     exact ⟨x, rfl, (h.2 bs x r hx).symm⟩
+
+/-! ## Operations (slice 14)
+
+An operation of the schema is encoded as its inputs, invokers, subject, conditions and steps: each structure as the
+nested product of its fields, through `encIso`, and each sum by a tag byte. `OpOwner`: `0` the invoker, `1` a pool (its
+natural). `OpStep`: `0` create, `1` update, `2` delete, `3` post. -/
+
+def encOpInput : OpInput → Bytes :=
+  encIso (encPair encStr (encPair encTy encBool)) (fun i => (i.name, i.ty, i.required))
+
+def decOpInput : Dec OpInput :=
+  decIso (decPair decStr (decPair decTy decBool)) (fun p => { name := p.1, ty := p.2.1, required := p.2.2 })
+
+theorem lawful_opInput : Lawful encOpInput decOpInput :=
+  lawful_iso (lawful_pair lawful_str (lawful_pair lawful_ty lawful_bool)) (fun i => by cases i; rfl) (fun _ => rfl)
+
+def encOpOwner : OpOwner → Bytes
+  | .invoker => [tag 0]
+  | .pool n => tag 1 :: encNat n
+
+def decOpOwner : Dec OpOwner := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.invoker, r)
+    | 1 => decIso decNat (fun n => OpOwner.pool n) r
+    | _ => none
+
+theorem lawful_opOwner : Lawful encOpOwner decOpOwner := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | invoker => simp [encOpOwner, decOpOwner, tag]
+    | pool n => simp [encOpOwner, decOpOwner, decIso, tag, lawful_nat.1 n rest]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decOpOwner] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ 2 ≤ b.toNat by omega) with hk | hk | hk
+      · simp only [decOpOwner, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encOpOwner, byte_eq_tag b 0 hk]
+      · simp only [decOpOwner, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv lawful_nat _ r x rest h
+        simp [encOpOwner, byte_eq_tag b 1 hk, ← hy]
+      · simp only [decOpOwner] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+def encOpStep : OpStep → Bytes
+  | .create id ty fs => tag 0 :: encPair encStr (encPair encNat (encList (encPair encNat encExpr))) (id, ty, fs)
+  | .update id ty rec fs =>
+    tag 1 :: encPair encStr (encPair encNat (encPair encExpr (encList (encPair encNat encExpr)))) (id, ty, rec, fs)
+  | .delete id ty rec => tag 2 :: encPair encStr (encPair encNat encExpr) (id, ty, rec)
+  | .post id owner unit amt reason =>
+    tag 3 :: encPair encStr (encPair encOpOwner (encPair encNat (encPair encExpr encStr)))
+      (id, owner, unit, amt, reason)
+
+def decOpStep : Dec OpStep := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => decIso (decPair decStr (decPair decNat (decList (decPair decNat decExpr))))
+        (fun x => OpStep.create x.1 x.2.1 x.2.2) r
+    | 1 => decIso (decPair decStr (decPair decNat (decPair decExpr (decList (decPair decNat decExpr)))))
+        (fun x => OpStep.update x.1 x.2.1 x.2.2.1 x.2.2.2) r
+    | 2 => decIso (decPair decStr (decPair decNat decExpr)) (fun x => OpStep.delete x.1 x.2.1 x.2.2) r
+    | 3 => decIso (decPair decStr (decPair decOpOwner (decPair decNat (decPair decExpr decStr))))
+        (fun x => OpStep.post x.1 x.2.1 x.2.2.1 x.2.2.2.1 x.2.2.2.2) r
+    | _ => none
+
+theorem lawful_opStep : Lawful encOpStep decOpStep := by
+  have hc := lawful_pair lawful_str (lawful_pair lawful_nat (lawful_list (lawful_pair lawful_nat lawful_expr)))
+  have hu := lawful_pair lawful_str (lawful_pair lawful_nat (lawful_pair lawful_expr
+    (lawful_list (lawful_pair lawful_nat lawful_expr))))
+  have hd := lawful_pair lawful_str (lawful_pair lawful_nat lawful_expr)
+  have hp := lawful_pair lawful_str (lawful_pair lawful_opOwner (lawful_pair lawful_nat
+    (lawful_pair lawful_expr lawful_str)))
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | create id ty fs => simp [encOpStep, decOpStep, tag, dec_ctor_enc hc, List.append_assoc]
+    | update id ty rec fs => simp [encOpStep, decOpStep, tag, dec_ctor_enc hu, List.append_assoc]
+    | delete id ty rec => simp [encOpStep, decOpStep, tag, dec_ctor_enc hd, List.append_assoc]
+    | post id owner unit amt reason => simp [encOpStep, decOpStep, tag, dec_ctor_enc hp, List.append_assoc]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decOpStep] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ 4 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk
+      · simp only [decOpStep, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hc _ r x rest h
+        simp [encOpStep, byte_eq_tag b 0 hk, ← hy]
+      · simp only [decOpStep, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hu _ r x rest h
+        simp [encOpStep, byte_eq_tag b 1 hk, ← hy]
+      · simp only [decOpStep, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hd _ r x rest h
+        simp [encOpStep, byte_eq_tag b 2 hk, ← hy]
+      · simp only [decOpStep, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hp _ r x rest h
+        simp [encOpStep, byte_eq_tag b 3 hk, ← hy]
+      · simp only [decOpStep] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+def encOpCond : OpCond → Bytes :=
+  encIso (encPair encStr encExpr) (fun c => (c.id, c.expr))
+
+def decOpCond : Dec OpCond :=
+  decIso (decPair decStr decExpr) (fun p => { id := p.1, expr := p.2 })
+
+theorem lawful_opCond : Lawful encOpCond decOpCond :=
+  lawful_iso (lawful_pair lawful_str lawful_expr) (fun c => by cases c; rfl) (fun _ => rfl)
+
+def encOpDef : OpDef → Bytes :=
+  encIso (encPair encStr (encPair (encList encOpInput) (encPair encBool (encPair (encList encNat)
+    (encPair (encOpt (encPair encNat encStr)) (encPair (encList encOpCond) (encList encOpStep)))))))
+    (fun d => (d.id, d.inputs, d.signedIn, d.roles, d.subject, d.conditions, d.steps))
+
+def decOpDef : Dec OpDef :=
+  decIso (decPair decStr (decPair (decList decOpInput) (decPair decBool (decPair (decList decNat)
+    (decPair (decOpt (decPair decNat decStr)) (decPair (decList decOpCond) (decList decOpStep)))))))
+    (fun p => { id := p.1, inputs := p.2.1, signedIn := p.2.2.1, roles := p.2.2.2.1,
+                subject := p.2.2.2.2.1, conditions := p.2.2.2.2.2.1, steps := p.2.2.2.2.2.2 })
+
+theorem lawful_opDef : Lawful encOpDef decOpDef :=
+  lawful_iso (lawful_pair lawful_str (lawful_pair (lawful_list lawful_opInput) (lawful_pair lawful_bool
+    (lawful_pair (lawful_list lawful_nat) (lawful_pair (lawful_opt (lawful_pair lawful_nat lawful_str))
+      (lawful_pair (lawful_list lawful_opCond) (lawful_list lawful_opStep)))))))
+    (fun d => by cases d; rfl) (fun _ => rfl)
+
+/-- An operation with its name, as the tenant holds it. -/
+def encOpEntry : String × OpDef → Bytes := encPair encStr encOpDef
+
+def decOpEntry : Dec (String × OpDef) := decPair decStr decOpDef
+
+theorem lawful_opEntry : Lawful encOpEntry decOpEntry := lawful_pair lawful_str lawful_opDef
+
+/-- The tenant's fields as one nested product: its object types, members, grants, policies, next id,
+    limits, the roles its schema defines (slice 7), its teams and its invitations, then (slice 9) its
+    revision, its event sequence and its schema version. -/
+def encTenantBody : List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
+    List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
+    List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat ×
+    List SettingDef × List SettingOverride × List (String × Nat) ×
+    Option LedgerDecls × LedgerState × List LedgerPolicy × List (String × OpDef) → Bytes :=
+  encPair (encList encTypeEntry) (encPair (encList encMember) (encPair (encList encGrantEntry) (encPair (encList encPolicy) (encPair encNat (encPair encLimits (encPair (encList encNat) (encPair (encList encTeamEntry) (encPair (encList encInvitationEntry) (encPair encNat (encPair encNat (encPair encNat (encPair (encList encSettingDef) (encPair (encList encOverride) (encPair (encList encSettingRev) (encPair (encOpt encLedgerDecls) (encPair encLedgerState (encPair (encList encLedgerPolicy) (encList encOpEntry))))))))))))))))))
+
+def decTenantBody :
+    Dec (List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
+      List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
+      List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat ×
+      List SettingDef × List SettingOverride × List (String × Nat) ×
+      Option LedgerDecls × LedgerState × List LedgerPolicy × List (String × OpDef)) :=
+  decPair (decList decTypeEntry) (decPair (decList decMember) (decPair (decList decGrantEntry) (decPair (decList decPolicy) (decPair decNat (decPair decLimits (decPair (decList decNat) (decPair (decList decTeamEntry) (decPair (decList decInvitationEntry) (decPair decNat (decPair decNat (decPair decNat (decPair (decList decSettingDef) (decPair (decList decOverride) (decPair (decList decSettingRev) (decPair (decOpt decLedgerDecls) (decPair decLedgerState (decPair (decList decLedgerPolicy) (decList decOpEntry))))))))))))))))))
+
+theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
+  lawful_pair (lawful_list lawful_typeEntry) (lawful_pair (lawful_list lawful_member) (lawful_pair (lawful_list lawful_grantEntry) (lawful_pair (lawful_list lawful_policy) (lawful_pair lawful_nat (lawful_pair lawful_limits (lawful_pair (lawful_list lawful_nat) (lawful_pair (lawful_list lawful_teamEntry) (lawful_pair (lawful_list lawful_invitationEntry) (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_settingDef) (lawful_pair (lawful_list lawful_override) (lawful_pair (lawful_list lawful_settingRev) (lawful_pair (lawful_opt lawful_ledgerDecls) (lawful_pair lawful_ledgerState (lawful_pair (lawful_list lawful_ledgerPolicy) (lawful_list lawful_opEntry))))))))))))))))))
+
+def encTenant : Tenant → Bytes :=
+  encIso encTenantBody
+    (fun t => (t.types, t.members, t.grants, t.policies, t.nextId, t.limits, t.roles, t.teams,
+      t.invitations, t.revision, t.eventSeq, t.schemaVersion, t.settingDefs, t.overrides, t.settingRevs,
+      t.ledgerDecls, t.ledger, t.ledgerPolicies, t.operations))
+
+def decTenant : Dec Tenant :=
+  decIso decTenantBody fun p =>
+    { types := p.1, members := p.2.1, grants := p.2.2.1, policies := p.2.2.2.1, nextId := p.2.2.2.2.1,
+      limits := p.2.2.2.2.2.1, roles := p.2.2.2.2.2.2.1, teams := p.2.2.2.2.2.2.2.1,
+      invitations := p.2.2.2.2.2.2.2.2.1, revision := p.2.2.2.2.2.2.2.2.2.1,
+      eventSeq := p.2.2.2.2.2.2.2.2.2.2.1, schemaVersion := p.2.2.2.2.2.2.2.2.2.2.2.1,
+      settingDefs := p.2.2.2.2.2.2.2.2.2.2.2.2.1, overrides := p.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      settingRevs := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      ledgerDecls := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      ledger := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      ledgerPolicies := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, operations := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2 }
+
+theorem lawful_tenant : Lawful encTenant decTenant :=
+  lawful_iso lawful_tenantBody (fun t => by cases t; rfl) (fun _ => rfl)
+
+/-! ## Intents, contexts and results -/
 
 /-- A membership intent (slice 7): tags `0` assign a role, `1` revoke a role, `2` define a team, `3`
     give a team a role, `4` take a team's role away, `5` add a team member, `6` remove one, `7` create an
@@ -2147,6 +2288,8 @@ def encIntent : Intent → Bytes
   | .postLedger now ps => tag 10 :: (encInt now ++ encList encLedgerPosting ps)
   | .expireLedger now u c => tag 11 :: (encInt now ++ encNat u ++ encInt c)
   | .postLedgerTx now tx => tag 12 :: (encInt now ++ encLedgerTx tx)
+  | .invokeOperation now op inputs key =>
+    tag 13 :: (encInt now ++ encStr op ++ encList (encPair encStr encVal) inputs ++ encStr key)
 
 def decIntent : Dec Intent := fun bs =>
   match bs with
@@ -2236,6 +2379,15 @@ def decIntent : Dec Intent := fun bs =>
         | some (tx, r2) => some (.postLedgerTx now tx, r2)
         | none => none
       | none => none
+    | 13 => match decInt r with
+      | some (now, r1) => match decStr r1 with
+        | some (op, r2) => match decList (decPair decStr decVal) r2 with
+          | some (inputs, r3) => match decStr r3 with
+            | some (key, r4) => some (.invokeOperation now op inputs key, r4)
+            | none => none
+          | none => none
+        | none => none
+      | none => none
     | _ => none
 
 theorem lawful_intent : Lawful encIntent decIntent := by
@@ -2271,14 +2423,17 @@ theorem lawful_intent : Lawful encIntent decIntent := by
       simp [encIntent, decIntent, tag, lawful_int.1, lawful_nat.1, List.append_assoc]
     | postLedgerTx now tx =>
       simp [encIntent, decIntent, tag, lawful_int.1, lawful_ledgerTx.1, List.append_assoc]
+    | invokeOperation now op inputs key =>
+      simp [encIntent, decIntent, tag, lawful_int.1, lawful_str.1, (lawful_list (lawful_pair lawful_str lawful_val)).1,
+        List.append_assoc]
   · intro bs x rest h
     cases bs with
     | nil => simp [decIntent] at h
     | cons b r =>
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
           b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨ b.toNat = 10 ∨
-          b.toNat = 11 ∨ b.toNat = 12 ∨ 13 ≤ b.toNat by omega)
-        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
+          b.toNat = 11 ∨ b.toNat = 12 ∨ b.toNat = 13 ∨ 14 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
       · simp only [decIntent, hk] at h
         cases hd1 : decNat r with
         | none => simp [hd1] at h
@@ -2506,6 +2661,30 @@ theorem lawful_intent : Lawful encIntent decIntent := by
             have e1 := lawful_int.2 r now r1 hd1
             have e2 := lawful_ledgerTx.2 r1 tx r2 hd2
             simp [encIntent, byte_eq_tag b 12 hk, e1, e2, List.append_assoc]
+      · simp only [decIntent, hk] at h
+        cases hd1 : decInt r with
+        | none => simp [hd1] at h
+        | some p1 =>
+          obtain ⟨now, r1⟩ := p1
+          cases hd2 : decStr r1 with
+          | none => simp [hd1, hd2] at h
+          | some p2 =>
+            obtain ⟨op, r2⟩ := p2
+            cases hd3 : decList (decPair decStr decVal) r2 with
+            | none => simp [hd1, hd2, hd3] at h
+            | some p3 =>
+              obtain ⟨ins, r3⟩ := p3
+              cases hd4 : decStr r3 with
+              | none => simp [hd1, hd2, hd3, hd4] at h
+              | some p4 =>
+                obtain ⟨key, r4⟩ := p4
+                simp only [hd1, hd2, hd3, hd4, Option.some.injEq, Prod.mk.injEq] at h
+                obtain ⟨rfl, rfl⟩ := h
+                have e1 := lawful_int.2 r now r1 hd1
+                have e2 := lawful_str.2 r1 op r2 hd2
+                have e3 := (lawful_list (lawful_pair lawful_str lawful_val)).2 r2 ins r3 hd3
+                have e4 := lawful_str.2 r3 key r4 hd4
+                simp [encIntent, byte_eq_tag b 13 hk, e1, e2, e3, e4, List.append_assoc]
       · simp only [decIntent] at h
         exfalso
         repeat' split at h

@@ -247,6 +247,11 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     match stepTenantI core p (.expireLedger now u c) with
     | .error e => .error (e, ⟨core, ux, cx, rx⟩)
     | .ok core' => .ok ⟨core', ux, cx, rx⟩
+  | .invokeOperation now op ins key =>
+    -- An invocation rewrites records of several types, so the indexes are rebuilt.
+    match stepTenantI core p (.invokeOperation now op ins key) with
+    | .error e => .error (e, ⟨core, ux, cx, rx⟩)
+    | .ok core' => .ok (XTenant.rebuild core')
 
 /-- One intent against one indexed tenant; a refusal hands the tenant back. -/
 def stepTenantXL (x : XTenant) (p : Principal) (i : Intent) : Except (Err × XTenant) XTenant :=

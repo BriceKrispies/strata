@@ -948,6 +948,58 @@ def MTenant.rolesOf (m : MTenant) : Principal → List RoleId
   | .anonymous => [publicRole]
   | .user p => publicRole :: (m.directOf p ++ m.teamRoles p)
 
+/-! ## Operations (slice 14)
+
+An operation is declared data of the schema (the kernel's `TenantOperationDef`, without its agent policy): inputs,
+the invokers, an optional subject (a record named by one input), conditions and steps. The steps are the kernel's
+record steps (create, update, delete) and its ledger posting (`post`), each with the operation's own powers. -/
+
+/-- One input of an operation: its name, its type, and whether it must be given (the kernel's `TenantOperationInput`). -/
+structure OpInput where
+  name : String
+  ty : Ty
+  required : Bool
+  deriving DecidableEq, Repr
+
+/-- Whose account a posting step posts to: the invoker's own, or a pool's (the kernel's `TenantOperationPostingOwner`
+    without a principal expression, which the model leaves out). -/
+inductive OpOwner where
+  | invoker
+  | pool (n : Nat)
+  deriving DecidableEq, Repr
+
+/-- One step of an operation. Each id names the step: a later step reads the record an earlier create made as the
+    parameter of its id. A posting's amount is an expression that must evaluate to an integer. -/
+inductive OpStep where
+  /-- Create a record of object type `ty`, its fields given by expressions; the invoker is its creator. -/
+  | create (id : String) (ty : TypeId) (fields : List (FieldId × Expr))
+  /-- Patch the record of type `ty` that `record` names: each named field takes its value, `null` removes it. -/
+  | update (id : String) (ty : TypeId) (record : Expr) (fields : List (FieldId × Expr))
+  /-- Delete the record of type `ty` that `record` names, clearing or refusing the references to it. -/
+  | delete (id : String) (ty : TypeId) (record : Expr)
+  /-- Post to a ledger unit, for the owner, with the amount and the reason. -/
+  | post (id : String) (owner : OpOwner) (unit : Nat) (amount : Expr) (reason : String)
+  deriving DecidableEq, Repr
+
+/-- A condition of an operation, checked on the state before any step; `false` or `null` refuses the invocation. -/
+structure OpCond where
+  id : String
+  expr : Expr
+  deriving DecidableEq, Repr
+
+/-- An operation of a schema (the kernel's `TenantOperationDef`). `subject` names an object type and the input whose
+    value is the record the invocation is about. `signedIn` lets every signed-in person invoke it; `roles` lets the
+    holders of those roles invoke it. -/
+structure OpDef where
+  id : String
+  inputs : List OpInput
+  signedIn : Bool
+  roles : List RoleId
+  subject : Option (TypeId × String) := none
+  conditions : List OpCond := []
+  steps : List OpStep
+  deriving DecidableEq, Repr
+
 /-- Everything one tenant owns. -/
 structure Tenant where
   /-- The object types, by id. Each id occurs once. -/
@@ -989,6 +1041,8 @@ structure Tenant where
   ledger : LedgerState := {}
   /-- The policies that bound reads of the ledger (slice 13). -/
   ledgerPolicies : List LedgerPolicy := []
+  /-- The operations the schema defines, by id (slice 14): their inputs, invokers, subject, conditions and steps. -/
+  operations : List (String × OpDef) := []
   deriving Repr
 
 /-- The part of a tenant the membership intents see. -/

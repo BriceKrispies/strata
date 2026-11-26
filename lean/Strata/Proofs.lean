@@ -85,6 +85,20 @@ theorem member_authorized (t t' : Tenant) (p : Principal) (j : MemberIntent)
     | redeemInvitation inv now verified => exact absurd rfl (hj inv now verified)
     | _ => simpa [authorized, MemberIntent.ctxOf] using this
 
+/-- Invoking an operation's accepted steps: a caller who is not a person is refused, so an accepted invocation is by a
+    user (the authorization of `Tenant`'s intents). -/
+theorem invokeOperationT_user {t t' : Tenant} {p : Principal} {now : Int} {name : String}
+    {ins : List (String × Val)} {key : String} (h : invokeOperationT t p now name ins key = .ok t') :
+    p.userId?.isSome = true := by
+  cases p with
+  | system =>
+    unfold invokeOperationT invokeOpCore at h
+    rcases hl : t.operations.lookup name with _ | op <;> simp [hl, Except.map] at h
+  | anonymous =>
+    unfold invokeOperationT invokeOpCore at h
+    rcases hl : t.operations.lookup name with _ | op <;> simp [hl, Except.map] at h
+  | user u => rfl
+
 /-- A step that a tenant accepts was made by a principal authorized to make it. -/
 theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
     (ht : w c.tenant = some t) (h : step w i c = .ok w') :
@@ -98,6 +112,7 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
     | postLedger now ps => simpa [authorized] using postLedgerT_ok_auth hs
     | postLedgerTx now tx => simpa [authorized] using postLedgerTxT_ok_auth hs
     | expireLedger now u c => simpa [authorized] using expireLedgerT_ok_auth hs
+    | invokeOperation now op ins key => simpa [authorized] using invokeOperationT_user hs
     | member j =>
       cases j with
       | redeemInvitation inv now verified =>
@@ -302,6 +317,166 @@ theorem idsBelow_of_putType_schema {t : Tenant} {ty : TypeId} {o o' : ObjType}
   · rw [typ?_putType_other t ty T o' hTy] at hT
     exact hids T o'' hT q hq
 
+/-- Deleting a record that nothing refuses to lose keeps the tenant conforming and its ids below the counter. -/
+theorem afterDelete_conform_ids (t : Tenant) (ty id : TypeId) (hconf : t.Conform) (hids : t.IdsBelow)
+    (hnb : t.blockedDelete ty id = false) : (t.afterDelete ty id).Conform ∧ (t.afterDelete ty id).IdsBelow := by
+  constructor
+  · intro T o' hT' q hq
+    rw [typ?_afterDelete] at hT'
+    cases ho : t.typ? T with
+    | none => rw [ho] at hT'; cases hT'
+    | some o =>
+      rw [ho] at hT'
+      simp only [Option.map_some, Option.some.injEq] at hT'
+      subst hT'
+      obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp (by unfold delObj at hq; exact hq)
+      subst hmap
+      have hq₀' : q₀ ∈ o.records := by
+        by_cases hTy : (T == ty) = true
+        · rw [if_pos hTy] at hq₀
+          exact (List.mem_filter.mp hq₀).1
+        · rw [if_neg hTy] at hq₀
+          exact hq₀
+      have hne : ¬ (T == ty && q₀.1 == id) = true := by
+        intro hb
+        by_cases hTy : (T == ty) = true
+        · rw [if_pos hTy] at hq₀
+          have h1 := (List.mem_filter.mp hq₀).2
+          have h2 : (q₀.1 == id) = true := ((Bool.and_eq_true _ _).mp hb).2
+          simp [bne, h2] at h1
+        · have h3 : (T == ty) = true := ((Bool.and_eq_true _ _).mp hb).1
+          exact hTy h3
+      exact conforms_afterDelete t ty id T o q₀ ho hq₀' hne hnb (hconf T o ho q₀ hq₀')
+  · intro T o' hT' q hq
+    rw [typ?_afterDelete] at hT'
+    cases ho : t.typ? T with
+    | none => rw [ho] at hT'; cases hT'
+    | some o =>
+      rw [ho] at hT'
+      simp only [Option.map_some, Option.some.injEq] at hT'
+      subst hT'
+      obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp (by unfold delObj at hq; exact hq)
+      subst hmap
+      have hq₀' : q₀ ∈ o.records := by
+        by_cases hTy : (T == ty) = true
+        · rw [if_pos hTy] at hq₀
+          exact (List.mem_filter.mp hq₀).1
+        · rw [if_neg hTy] at hq₀
+          exact hq₀
+      exact hids T o ho q₀ hq₀'
+
+/-- The parts of an accepted operation delete: the record it names is not referred to through a restricting field, and
+    it has no clearing that breaks a constraint, and the tenant is the one that deletes it. -/
+theorem opDelete_parts {c : OpCtx} {st st' : OpState} {ty : TypeId} {rec : Expr}
+    (h : opDelete c st ty rec = .ok st') :
+    ∃ id, st.tenant.blockedDelete ty id = false ∧ st'.tenant = st.tenant.afterDelete ty id := by
+  simp only [opDelete] at h
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  rename_i id _
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  rename_i hbd
+  split at h
+  · simp at h
+  simp only [Except.ok.injEq] at h
+  exact ⟨id, by simpa using hbd, by rw [← h]⟩
+
+/-- An operation's steps keep the records conforming to their schema and their ids below the counter. -/
+theorem opStep_conform_ids (c : OpCtx) (st st' : OpState) (s : OpStep) (hconf : st.tenant.Conform)
+    (hids : st.tenant.IdsBelow) (h : opStep c st s = .ok st') : st'.tenant.Conform ∧ st'.tenant.IdsBelow := by
+  cases s with
+  | create id ty fs =>
+    cases hT : st.tenant.typ? ty with
+    | none => simp [opStep, opCreate, hT] at h
+    | some o =>
+      obtain ⟨vals, r, -, hP, -, ht⟩ := opCreate_ok_parts hT h
+      rw [ht]
+      constructor
+      · intro T o' hT' q hq
+        change (st.tenant.putType ty { o with records := (st.tenant.nextId, r) :: o.records }).typ? T = some o' at hT'
+        by_cases hTy : T = ty
+        · subst hTy
+          rw [typ?_putType_self st.tenant T o _ hT] at hT'
+          cases hT'
+          rcases List.mem_cons.mp hq with rfl | hq'
+          · exact (problem_none hP).1
+          · exact hconf T o hT q hq'
+        · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+          exact hconf T o' hT' q hq
+      · intro T o' hT' q hq
+        change (st.tenant.putType ty { o with records := (st.tenant.nextId, r) :: o.records }).typ? T = some o' at hT'
+        show q.1 < st.tenant.nextId + 1
+        by_cases hTy : T = ty
+        · subst hTy
+          rw [typ?_putType_self st.tenant T o _ hT] at hT'
+          cases hT'
+          rcases List.mem_cons.mp hq with rfl | hq'
+          · exact Nat.lt_succ_self _
+          · exact Nat.lt_succ_of_lt (hids T o hT q hq')
+        · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+          exact Nat.lt_succ_of_lt (hids T o' hT' q hq)
+  | update id ty rec fs =>
+    cases hT : st.tenant.typ? ty with
+    | none => simp [opStep, opUpdate, hT] at h
+    | some o =>
+      cases hid : opTarget c st.params rec with
+      | error e => simp [opStep, opUpdate, hT, hid] at h
+      | ok id' =>
+        cases hL : o.records.lookup id' with
+        | none => simp [opStep, opUpdate, hT, hid, hL] at h
+        | some old =>
+          obtain ⟨vals, r, -, -, hP, -, -, ht⟩ := opUpdate_ok_parts_gen hT hid hL h
+          rw [ht]
+          constructor
+          · intro T o' hT' q hq
+            change (st.tenant.putType ty { o with records := o.records.map (fun q =>
+              if q.1 == id' then (q.1, r) else q) }).typ? T = some o' at hT'
+            by_cases hTy : T = ty
+            · subst hTy
+              rw [typ?_putType_self st.tenant T o _ hT] at hT'
+              cases hT'
+              obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+              by_cases hid2 : (q₀.1 == id') = true
+              · simp only [hid2, if_true] at hmap
+                rw [← hmap]
+                exact (problem_none hP).1
+              · simp only [hid2, if_false] at hmap
+                rw [← hmap]
+                exact hconf T o hT q₀ hq₀
+            · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+              exact hconf T o' hT' q hq
+          · intro T o' hT' q hq
+            change (st.tenant.putType ty { o with records := o.records.map (fun q =>
+              if q.1 == id' then (q.1, r) else q) }).typ? T = some o' at hT'
+            by_cases hTy : T = ty
+            · subst hTy
+              rw [typ?_putType_self st.tenant T o _ hT] at hT'
+              cases hT'
+              obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+              by_cases hid2 : (q₀.1 == id') = true
+              · simp only [hid2, if_true] at hmap
+                rw [← hmap]
+                exact hids T o hT q₀ hq₀
+              · simp only [hid2, if_false] at hmap
+                rw [← hmap]
+                exact hids T o hT q₀ hq₀
+            · rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+              exact hids T o' hT' q hq
+  | delete id ty rec =>
+    obtain ⟨id', hbd, ht⟩ := opDelete_parts h
+    rw [ht]
+    exact afterDelete_conform_ids st.tenant ty id' hconf hids hbd
+  | post id owner unit amt reason =>
+    simp only [opStep, opPost] at h
+    repeat' split at h
+    all_goals (try (simp at h; done))
+    all_goals (simp only [Except.ok.injEq] at h; rw [← h]; exact ⟨hconf, hids⟩)
+
 /-- A strict, accepted step on one well-formed tenant keeps every record conforming, and every
     record id below the counter. -/
 theorem stepTenant_conform_ids (t t' : Tenant) (p : Principal) (i : Intent)
@@ -326,6 +501,9 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : Principal) (i : Intent)
   | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact ⟨hconf, hids⟩
   | postLedgerTx now tx => obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape h; exact ⟨hconf, hids⟩
   | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact ⟨hconf, hids⟩
+  | invokeOperation now op ins key =>
+    exact invokeOperationT_pres (fun x => x.Conform ∧ x.IdsBelow)
+      (fun c s st st' hs hp => opStep_conform_ids c st st' s hp.1 hp.2 hs) ⟨hconf, hids⟩ h
   | create ty fs =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h

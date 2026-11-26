@@ -317,6 +317,27 @@ def parseLedgerRead : List String → Option (TenantId × Principal × Nat × Le
     pure (← t.toNat?, ← parsePrincipal p, ← unitTok.toNat?, ← parseOwner ownerTok, scope, own)
   | _ => none
 
+/-- The arguments of an invocation after the operation name: `key=<k>` gives the idempotency key, every other
+    `<input>=<value>` an input, in the order written (slice 14). -/
+def parseInvokeArgs : List String → Option (String × List (String × Val))
+  | [] => some ("", [])
+  | tok :: rest => do
+    let (k, ins) ← parseInvokeArgs rest
+    if tok.startsWith "key=" then pure (dropChars tok 4, ins)
+    else match tok.splitOn "=" with
+      | [n, v] => do
+        let val ← parseVal v
+        pure (k, (n, val) :: ins)
+      | _ => none
+
+/-- An invocation: `invoke @<now> <operation> [key=<k>] [<input>=<value> ..]` (slice 14). -/
+def parseInvoke : List String → Option Intent
+  | "invoke" :: nowTok :: opTok :: more => do
+    let now ← parseNowInt nowTok
+    let (k, ins) ← parseInvokeArgs more
+    pure (.invokeOperation now opTok ins k)
+  | _ => none
+
 def parseOp (tokens : List String) : Option (Ctx × Intent) :=
   match tokens with
   | "op" :: t :: p :: rest0 => do
@@ -337,6 +358,7 @@ def parseOp (tokens : List String) : Option (Ctx × Intent) :=
     | "schema" :: more => pure (c, ← parseSchemaOp more)
     | "setting" :: _ => pure (c, ← parseSettingOp rest)
     | "ledger" :: _ => pure (c, ← parseLedgerOp rest)
+    | "invoke" :: _ => pure (c, ← parseInvoke rest)
     | "create" :: fields => pure (c, .create ty (← parseFields fields))
     | "update" :: id :: rest => do
       let (ev, fields) ← parseExpected rest

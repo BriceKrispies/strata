@@ -16,6 +16,7 @@ step keeps the slot invariant (`ITenant.Inv`).
 
 import Strata.Impl.Problem
 import Strata.Impl.SchemaI
+import Strata.Impl.OpI
 
 namespace Strata
 namespace Impl
@@ -182,6 +183,8 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
   | .postLedger now ps => (postLedgerT t.abs p now ps).map (fun s => { t with ledger := s.ledger })
   | .postLedgerTx now tx => (postLedgerTxT t.abs p now tx).map (fun s => { t with ledger := s.ledger })
   | .expireLedger now u c => (expireLedgerT t.abs p now u c).map (fun s => { t with ledger := s.ledger })
+  | .invokeOperation now op ins key =>
+    (invokeOperationT t.abs p now op ins key).map (fun t' => rebuildI t t')
 
 /-- The tenant a `CreateTenant` makes, as the implementation holds it: no object types, the genesis
     membership, a counter that starts at 1, and the revision and event sequence of its one event (slice 9). -/
@@ -341,6 +344,13 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
     | ok s =>
       obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h
       rfl
+  | invokeOperation now op ins key =>
+    simp only [stepTenantI, stepTenant]
+    cases h : invokeOperationT t.abs p now op ins key with
+    | error e => rfl
+    | ok s =>
+      simp only [Except.map]
+      rw [rebuildI_abs t s p now op ins key hinv h]
   | create ty fs =>
     cases hty : t.typ? ty with
     | none =>

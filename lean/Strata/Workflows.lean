@@ -630,6 +630,333 @@ theorem putType_statesOk {t : Tenant} {ty : TypeId} {o o' : ObjType} (hT : t.typ
     rw [typ?_putType_other t ty T _ hTy] at hT''
     exact hs T o'' hT'' q hq
 
+/-! ## Operations: the workflow states of an invocation's steps -/
+
+/-- One workflow of an operation's update, the guard not asked: a field that changes is taken along a declared
+    transition, and the field then holds a state (the target, or the literal state the transition assigns). -/
+theorem opFireOne_present {p : Principal} {old cand : Record} {w : Workflow} {r : Record}
+    (hW : ∀ tr ∈ w.transitions, (tr.set.map Prod.fst).Nodup ∧
+      ∀ fe ∈ tr.set, fe.1 = w.field → ∃ s, fe.2 = .lit (.str s))
+    (hold : ∃ s, old.fields.get w.field = .str s)
+    (h : opFireOne p old cand w = .ok r) : ∃ s, r.fields.get w.field = .str s := by
+  unfold opFireOne at h
+  dsimp only at h
+  by_cases heq : old.fields.get w.field = cand.fields.get w.field
+  · have hbe : (old.fields.get w.field == cand.fields.get w.field) = true := beq_iff_eq.mpr heq
+    rw [if_pos hbe] at h
+    have hr : cand = r := Except.ok.inj h
+    subst hr
+    obtain ⟨s, hs⟩ := hold
+    exact ⟨s, by rw [← heq, hs]⟩
+  · have hbe : ¬ (old.fields.get w.field == cand.fields.get w.field) = true :=
+      fun hb => heq (beq_iff_eq.mp hb)
+    rw [if_neg hbe] at h
+    split at h
+    · cases h
+    · rename_i tr hT
+      have hp := List.find?_some hT
+      have hmem := List.mem_of_find?_eq_some hT
+      simp only [Bool.and_eq_true, beq_iff_eq] at hp
+      obtain ⟨-, ht⟩ := hp
+      split at h
+      · cases h
+      · rename_i as has
+        have hr : r = applySets cand as := (Except.ok.inj h).symm
+        subst hr
+        have hk := evalSets_keys _ tr.set as has
+        have hknd : (as.map Prod.fst).Nodup := by
+          rw [hk]
+          exact (hW tr hmem).1
+        by_cases hown : ∃ fe ∈ tr.set, fe.1 = w.field
+        · obtain ⟨fe, hfe, hfeq⟩ := hown
+          obtain ⟨s, hlit⟩ := (hW tr hmem).2 fe hfe hfeq
+          obtain ⟨v, hv, hm⟩ := evalSets_mem _ tr.set as has fe hfe
+          have hvs : v = .str s := by
+            rw [hlit] at hv
+            simp [evalExpr] at hv
+            exact hv.symm
+          have hget := applySets_get_mem as cand hknd (fe.1, v) hm
+          refine ⟨s, ?_⟩
+          rw [← hfeq, ← hvs]
+          exact hget
+        · refine ⟨tr.target, ?_⟩
+          have hnot : ∀ fv ∈ as, fv.1 ≠ w.field := by
+            intro fv hfv
+            have hm : fv.1 ∈ tr.set.map Prod.fst := by
+              rw [← hk]
+              exact List.mem_map_of_mem (f := Prod.fst) hfv
+            obtain ⟨fe, hfe, hfeq⟩ := List.mem_map.mp hm
+            rw [← hfeq]
+            exact fun hf => hown ⟨fe, hfe, hf⟩
+          rw [applySets_get_other w.field as cand hnot, ht]
+
+/-- An operation's workflow leaves a field it does not assign as it was. -/
+theorem opFireOne_keeps {p : Principal} {old cand : Record} {w : Workflow} {r : Record} {f : FieldId}
+    (hf : ∀ tr ∈ w.transitions, ∀ fe ∈ tr.set, fe.1 ≠ f)
+    (h : opFireOne p old cand w = .ok r) : r.fields.get f = cand.fields.get f := by
+  unfold opFireOne at h
+  dsimp only at h
+  split at h
+  · cases h; rfl
+  · split at h
+    · cases h
+    · rename_i tr hT
+      split at h
+      · cases h
+      · rename_i as has
+        have hr := Except.ok.inj h
+        rw [← hr]
+        apply applySets_get_other f as cand
+        intro fv hfv
+        have hk := evalSets_keys _ tr.set as has
+        have hmem : fv.1 ∈ tr.set.map Prod.fst := by
+          rw [← hk]
+          exact List.mem_map_of_mem hfv
+        obtain ⟨fe, hfe, hfeq⟩ := List.mem_map.mp hmem
+        rw [← hfeq]
+        exact hf tr (List.mem_of_find?_eq_some hT) fe hfe
+
+/-- The workflows of an operation's update leave a field no transition of them assigns as it was. -/
+theorem opFireAll_keeps (p : Principal) (old : Record) (f : FieldId) :
+    ∀ (ws : List Workflow) (cand r : Record), (∀ w ∈ ws, ∀ tr ∈ w.transitions, ∀ fe ∈ tr.set, fe.1 ≠ f) →
+      opFireAll p old cand ws = .ok r → r.fields.get f = cand.fields.get f
+  | [], cand, r, _, h => by
+    unfold opFireAll at h
+    cases h
+    rfl
+  | w :: ws, cand, r, hf, h => by
+    unfold opFireAll at h
+    split at h
+    · cases h
+    · rename_i c1 hc1
+      have hk1 : c1.fields.get f = cand.fields.get f :=
+        opFireOne_keeps (f := f) (hf w List.mem_cons_self) hc1
+      have hk2 := opFireAll_keeps p old f ws c1 r (fun w' hw' => hf w' (List.mem_cons_of_mem _ hw')) h
+      rw [hk2, hk1]
+
+/-- The workflows of an operation's update hold a state in every workflow field, when the stored record did and
+    the workflows are defined by the rule. -/
+theorem opFireAll_present (p : Principal) (old : Record) :
+    ∀ (ws : List Workflow) (cand r : Record), WfDefined ws → (∀ w ∈ ws, ∃ s, old.fields.get w.field = .str s) →
+      opFireAll p old cand ws = .ok r → ∀ w ∈ ws, ∃ s, r.fields.get w.field = .str s
+  | [], _, _, _, _, _, w, hw => by simp at hw
+  | w0 :: ws', cand, r, hd, hold, h, w, hw => by
+    unfold opFireAll at h
+    split at h
+    · cases h
+    · rename_i c1 hc1
+      have hrh : r.fields.get w0.field = c1.fields.get w0.field :=
+        opFireAll_keeps p old w0.field ws' c1 r
+          (fun w' hw' tr htr fe hfe => wfDefined_foreign hd hw' htr hfe) h
+      have hW : ∀ tr ∈ w0.transitions, (tr.set.map Prod.fst).Nodup ∧
+          ∀ fe ∈ tr.set, fe.1 = w0.field → ∃ s, fe.2 = .lit (.str s) :=
+        fun tr htr => ⟨(hd.2 w0 List.mem_cons_self tr htr).1, fun fe hfe hf => by
+          obtain ⟨s, hs, -⟩ := ((hd.2 w0 List.mem_cons_self tr htr).2 fe hfe).2 hf
+          exact ⟨s, hs⟩⟩
+      rcases List.mem_cons.mp hw with hu0 | hu'
+      · rw [hu0, hrh]
+        exact opFireOne_present hW (hold w0 List.mem_cons_self) hc1
+      · exact opFireAll_present p old ws' c1 r (wfDefined_tail hd)
+          (fun u hu => hold u (List.mem_cons_of_mem _ hu)) h w hu'
+
+/-- An operation's create, as `opCreate_ok_parts`, also starts the record in an initial state of each workflow. -/
+theorem opCreate_init_parts {c : OpCtx} {st st' : OpState} {id : String} {ty : TypeId}
+    {fs : List (FieldId × Expr)} {o : ObjType} (ho : st.tenant.typ? ty = some o)
+    (h : opCreate c st id ty fs = .ok st') :
+    ∃ vals r, newRecord o.schema c.principal vals = .ok r ∧ initialsOk o.workflows r = true ∧
+      st'.tenant = { st.tenant.putType ty { o with records := (st.tenant.nextId, r) :: o.records } with
+        nextId := st.tenant.nextId + 1 } := by
+  unfold opCreate at h
+  simp only [ho] at h
+  split at h
+  · simp at h
+  rename_i vals hv
+  split at h
+  · simp at h
+  rename_i r hN
+  by_cases hI : initialsOk o.workflows r = true
+  · have hnc : ¬ ((!initialsOk o.workflows r) = true) := by simp [hI]
+    rw [if_neg hnc] at h
+    split at h
+    · simp at h
+    rename_i hP
+    split at h
+    · simp at h
+    rename_i hC
+    simp only [Except.ok.injEq] at h
+    subst h
+    exact ⟨vals, r, hN, hI, rfl⟩
+  · have hF : initialsOk o.workflows r = false := by simpa using hI
+    have hc : (!initialsOk o.workflows r) = true := by simp [hF]
+    rw [if_pos hc] at h
+    cases h
+
+/-- A delete of an operation changes the object types as a direct delete does: the named record is removed. -/
+theorem opDelete_tenant {c : OpCtx} {st st' : OpState} {ty : TypeId} {rec : Expr}
+    (h : opDelete c st ty rec = .ok st') : ∃ id, st'.tenant = st.tenant.afterDelete ty id := by
+  simp only [opDelete] at h
+  repeat' split at h
+  all_goals (try (simp at h; done))
+  all_goals (simp only [Except.ok.injEq] at h; subst h; exact ⟨_, rfl⟩)
+
+/-- A posting of an operation changes only the ledger of the tenant. -/
+theorem opPost_tenant {c : OpCtx} {st st' : OpState} {id : String} {owner : OpOwner} {unit : Nat}
+    {amount : Expr} {reason : String} (h : opPost c st id owner unit amount reason = .ok st') :
+    ∃ L, st'.tenant = { st.tenant with ledger := L } := by
+  simp only [opPost] at h
+  repeat' split at h
+  all_goals (try (simp at h; done))
+  all_goals (simp only [Except.ok.injEq] at h; subst h; exact ⟨_, rfl⟩)
+
+/-- A step of an operation keeps the workflow states of the tenant (`Tenant.StatesOk`), given the names are distinct
+    and the workflows are defined by the rule. -/
+theorem opStep_states (c : OpCtx) (st st' : OpState) (s : OpStep) (hs : st.tenant.StatesOk)
+    (hd : st.tenant.Distinct) (hwd : st.tenant.WfDefs) (h : opStep c st s = .ok st') :
+    st'.tenant.StatesOk := by
+  cases s with
+  | create _ ty fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opCreate, hty] at h
+    | some o =>
+      obtain ⟨vals, r, -, hi, ht⟩ := opCreate_init_parts hty h
+      rw [ht]
+      have hi' := hi
+      unfold initialsOk at hi'
+      intro T o'' hT'' q hq
+      by_cases hTy : T = ty
+      · subst hTy
+        change (st.tenant.putType T _).typ? T = _ at hT''
+        rw [typ?_putType_self st.tenant T o _ hty] at hT''
+        cases hT''
+        rcases List.mem_cons.mp (show q ∈ (st.tenant.nextId, r) :: o.records from hq) with rfl | hq'
+        · refine ⟨statesOk_of_initials hi, fun w hw => ?_⟩
+          obtain ⟨s, hs1, -⟩ := wfInitialOk_spec (List.all_eq_true.mp hi' w hw)
+          exact ⟨s, hs1⟩
+        · exact hs T o hty q hq'
+      · change (st.tenant.putType ty _).typ? T = _ at hT''
+        rw [typ?_putType_other st.tenant ty T _ hTy] at hT''
+        exact hs T o'' hT'' q hq
+  | update _ ty rec fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opUpdate, hty] at h
+    | some o =>
+      cases hid : opTarget c st.params rec with
+      | error e => simp [opStep, opUpdate, hty, hid] at h
+      | ok id =>
+        cases hL : o.records.lookup id with
+        | none => simp [opStep, opUpdate, hty, hid, hL] at h
+        | some old =>
+          obtain ⟨vals, r, -, hF, -, hS, -, ht⟩ := opUpdate_ok_parts_gen hty hid hL h
+          have hold : ∀ w ∈ o.workflows, ∃ s, old.fields.get w.field = .str s :=
+            (hs ty o hty (id, old) (lookup_mem hL)).2
+          have hpres := opFireAll_present c.principal old o.workflows _ r (hwd ty o hty) hold hF
+          rw [ht]
+          intro T o'' hT'' q hq
+          by_cases hTy : T = ty
+          · subst hTy
+            change (st.tenant.putType T _).typ? T = _ at hT''
+            rw [typ?_putType_self st.tenant T o _ hty] at hT''
+            cases hT''
+            obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp
+              (show q ∈ o.records.map (fun q => if q.1 == id then (q.1, r) else q) from hq)
+            by_cases hid' : (q₀.1 == id) = true
+            · simp only [hid', if_true] at hmap
+              rw [← hmap]
+              exact ⟨hS, hpres⟩
+            · simp only [hid', if_false] at hmap
+              rw [← hmap]
+              exact hs T o hty q₀ hq₀
+          · change (st.tenant.putType ty _).typ? T = _ at hT''
+            rw [typ?_putType_other st.tenant ty T _ hTy] at hT''
+            exact hs T o'' hT'' q hq
+  | delete _ ty rec =>
+    obtain ⟨id, ht⟩ := opDelete_tenant h
+    rw [ht]
+    intro T o'' hT'' q hq
+    rw [typ?_afterDelete] at hT''
+    cases hT : st.tenant.typ? T with
+    | none => simp [hT] at hT''
+    | some o =>
+      simp only [hT, Option.map_some] at hT''
+      have ho'' : delObj ty id T o = o'' := Option.some.inj hT''
+      subst ho''
+      have hq' : q ∈ delClear o.schema ty id (if T == ty then o.records.filter (fun q => q.1 != id)
+        else o.records) := hq
+      obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq'
+      have hmem : q₀ ∈ o.records := by
+        split at hq₀
+        · exact (List.mem_filter.mp hq₀).1
+        · exact hq₀
+      have hnd : (q₀.2.fields.map Prod.fst).Nodup := (hd.2 T o hT).2 q₀ hmem
+      rw [← hmap]
+      show statesOk o.workflows (clearRef o.schema ty id q₀.2) = true ∧
+        ∀ w ∈ o.workflows, ∃ s, (clearRef o.schema ty id q₀.2).fields.get w.field = .str s
+      obtain ⟨hs1, hs2⟩ := hs T o hT q₀ hmem
+      exact ⟨clearRef_statesOk hnd hs1, clearRef_present hnd hs2⟩
+  | post _ owner unit amt reason =>
+    obtain ⟨L, ht⟩ := opPost_tenant h
+    rw [ht]
+    exact hs
+
+/-- A step of an operation keeps the workflows defined by the rule (the types keep their workflows). -/
+theorem opStep_wfdefs (c : OpCtx) (st st' : OpState) (s : OpStep) (hw : st.tenant.WfDefs)
+    (h : opStep c st s = .ok st') : st'.tenant.WfDefs := by
+  cases s with
+  | create _ ty fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opCreate, hty] at h
+    | some o =>
+      obtain ⟨vals, r, -, -, ht⟩ := opCreate_init_parts hty h
+      rw [ht]
+      intro T o' hT'
+      by_cases hTy : T = ty
+      · subst hTy
+        change (st.tenant.putType T _).typ? T = _ at hT'
+        rw [typ?_putType_self st.tenant T o _ hty] at hT'
+        cases hT'
+        exact hw T o hty
+      · change (st.tenant.putType ty _).typ? T = _ at hT'
+        rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+        exact hw T o' hT'
+  | update _ ty rec fs =>
+    cases hty : st.tenant.typ? ty with
+    | none => simp [opStep, opUpdate, hty] at h
+    | some o =>
+      cases hid : opTarget c st.params rec with
+      | error e => simp [opStep, opUpdate, hty, hid] at h
+      | ok id =>
+        cases hL : o.records.lookup id with
+        | none => simp [opStep, opUpdate, hty, hid, hL] at h
+        | some old =>
+          obtain ⟨vals, r, -, -, -, -, -, ht⟩ := opUpdate_ok_parts_gen hty hid hL h
+          rw [ht]
+          intro T o' hT'
+          by_cases hTy : T = ty
+          · subst hTy
+            change (st.tenant.putType T _).typ? T = _ at hT'
+            rw [typ?_putType_self st.tenant T o _ hty] at hT'
+            cases hT'
+            exact hw T o hty
+          · change (st.tenant.putType ty _).typ? T = _ at hT'
+            rw [typ?_putType_other st.tenant ty T _ hTy] at hT'
+            exact hw T o' hT'
+  | delete _ ty rec =>
+    obtain ⟨id, ht⟩ := opDelete_tenant h
+    rw [ht]
+    intro T o' hT'
+    rw [typ?_afterDelete] at hT'
+    cases hT0 : st.tenant.typ? T with
+    | none => simp [hT0] at hT'
+    | some o0 =>
+      simp only [hT0, Option.map_some] at hT'
+      have ho' : delObj ty id T o0 = o' := Option.some.inj hT'
+      subst ho'
+      exact hw T o0 hT0
+  | post _ owner unit amt reason =>
+    obtain ⟨L, ht⟩ := opPost_tenant h
+    rw [ht]
+    exact hw
+
 /-- **Every accepted step keeps the workflow states.** An accepted step of a tenant that holds the states
     leaves it holding them; the distinct field names of the stored records are the one assumption the
     clearing of a delete needs. -/
@@ -654,6 +981,11 @@ theorem stepTenant_preserves_states (t t' : Tenant) (p : Principal) (i : Intent)
   | expireLedger now u c =>
     obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h
     exact hs
+  | invokeOperation now op ins key =>
+    exact (invokeOperationT_pres (fun x => x.StatesOk ∧ x.Distinct ∧ x.WfDefs)
+      (fun c s st st' hs' hp => ⟨opStep_states c st st' s hp.1 hp.2.1 hp.2.2 hs',
+        opStep_distinct c st st' s hp.2.1 hs', opStep_wfdefs c st st' s hp.2.2 hs'⟩)
+      ⟨hs, hd, hwd⟩ h).1
   | create ty fs =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h

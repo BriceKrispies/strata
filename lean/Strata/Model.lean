@@ -12,6 +12,7 @@ import Strata.Members
 import Strata.SchemaChange
 import Strata.Settings
 import Strata.LedgerModel
+import Strata.Operations
 
 namespace Strata
 
@@ -55,6 +56,9 @@ inductive Intent where
   | expireLedger (now : Int) (unit : Nat) (cutoff : Int)
   /-- Post a transaction: two or more legs that net to zero for each unit, each a posting, as one commit (slice 13). -/
   | postLedgerTx (now : Int) (tx : LedgerTx)
+  /-- Invoke an operation of the tenant as the caller, with its inputs and the caller's idempotency key: the
+      kernel's `InvokeOperation` (slice 14). `now` is the time of the invocation, which its postings carry. -/
+  | invokeOperation (now : Int) (operation : String) (inputs : List (String × Val)) (key : String)
   deriving Repr
 
 /-- The user an intent names, if it names one: the owner of a new tenant, the user a role is assigned
@@ -191,6 +195,7 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
   | .postLedger now ps => postLedgerT t p now ps
   | .expireLedger now u c => expireLedgerT t p now u c
   | .postLedgerTx now tx => postLedgerTxT t p now tx
+  | .invokeOperation now op inputs key => invokeOperationT t p now op inputs key
 /-- Whether the acting principal is allowed to make this intent at all: the object type exists,
     and the permission holds on the record (or, for a schema change, the owner). -/
 def authorized (t : Tenant) (p : Principal) : Intent → Bool
@@ -223,6 +228,8 @@ def authorized (t : Tenant) (p : Principal) : Intent → Bool
   | .postLedger _ _ => t.holdsCap p ledgerCapPost
   | .expireLedger _ _ _ => p == .system || t.holdsCap p ledgerCapConfigure
   | .postLedgerTx _ _ => t.holdsCap p ledgerCapPost
+  -- Invoking an operation asks for a signed-in caller; the operation's invokers and its steps decide the rest (slice 14).
+  | .invokeOperation _ _ _ _ => p.userId?.isSome
 
 /-- The object types a schema intent re-validates, as the kernel's `touched_objects` gives them: the
     type it names, and, for a field, the types the field refers to. Other intents touch none. -/
@@ -396,6 +403,13 @@ def removedEvents (t : Tenant) (cs : List Change) : List EventBody :=
       | none => []
     | _ => [])
 
+/-- The domain event of one change of an operation's steps (slice 14), as the kernel's event for the same change. -/
+def opLogBody : OpLog → EventBody
+  | .created ty id r => .recordCreated ty id r
+  | .updated ty id before after => .recordUpdated ty id before after []
+  | .deleted ty id before => .recordDeleted ty id before
+  | .posted e => .ledgerEntryPosted e
+
 /-- The events an accepted intent against a tenant that exists emits. `t` is the tenant before the step, `t'`
     the tenant the decision wrote (its revision and sequence not yet raised). -/
 def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventBody
@@ -415,6 +429,7 @@ def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventB
   | .postLedger now ps, _ => (postLedgerEvents t p now ps).map EventBody.ledgerEntryPosted
   | .expireLedger now u c, _ => (expireLedgerEvents t p now u c).map EventBody.ledgerEntryPosted
   | .postLedgerTx now tx, _ => (postLedgerTxEvents t p now tx).map EventBody.ledgerEntryPosted
+  | .invokeOperation now op inputs key, _ => (invokeOpLogs t p now op inputs key).map opLogBody
   | .changeSchema _ _ cs, t' =>
     .schemaChanged (t.schemaVersion + 1) (cs.map Change.line) (changeGrandfathered t.limits t'.types cs) ::
       (rewrittenEvents t t' (cs.flatMap Change.touched) ++ removedEvents t cs)

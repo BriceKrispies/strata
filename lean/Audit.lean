@@ -4374,3 +4374,221 @@ end Strata
 #print axioms Strata.postLedgerTxT_sound
 #print axioms Strata.postLedgerTxT_ok_shape
 #print axioms Strata.postLedgerTxT_ok_auth
+
+namespace Strata
+
+/-! ## Slice 14: operations (`Strata/Operations.lean`)
+
+The refusals of `InvokeOperation`, in the kernel's check order, and the atomicity, effect and invoker rules of an
+accepted invocation. -/
+
+/-- No operation of the name: `invalidIntent`. -/
+theorem invoke_unknown_refused (t : Tenant) (p : Principal) (now : Int) (name : String)
+    (ins : List (String × Val)) (key : String) (h : t.operations.lookup name = none) :
+    invokeOpCore t p now name ins key = .error .invalidIntent := by
+  unfold invokeOpCore
+  rw [h]
+
+/-- A caller who is not a signed-in person is refused: `unauthorized`. -/
+theorem invoke_non_user_refused (t : Tenant) (p : Principal) (now : Int) (name : String) (op : OpDef)
+    (ins : List (String × Val)) (key : String) (hp : ∀ u, p ≠ .user u) (h : t.operations.lookup name = some op) :
+    invokeOpCore t p now name ins key = .error .unauthorized := by
+  unfold invokeOpCore
+  rw [h]
+  cases p with
+  | user u => exact absurd rfl (hp u)
+  | system => rfl
+  | anonymous => rfl
+
+/-- A person none of whose roles the operation names, when the operation is not open to every signed-in person, is
+    refused: `unauthorized`. -/
+theorem invoke_uninvoker_refused (t : Tenant) (u : PrincipalId) (now : Int) (name : String) (op : OpDef)
+    (ins : List (String × Val)) (key : String) (h : t.operations.lookup name = some op)
+    (hs : op.signedIn = false) (hr : ∀ r ∈ op.roles, r ∉ t.rolesOf (.user u)) :
+    invokeOpCore t (.user u) now name ins key = .error .unauthorized := by
+  have hall : op.roles.all (fun r => !((t.rolesOf (.user u)).contains r)) = true := by
+    rw [List.all_eq_true]
+    intro r hrm
+    have hnm := hr r hrm
+    have hf : (t.rolesOf (.user u)).contains r = false := by
+      cases h2 : (t.rolesOf (.user u)).contains r with
+      | false => rfl
+      | true => exact absurd (List.mem_of_elem_eq_true h2) hnm
+    rw [hf]
+    rfl
+  have hg : (!op.signedIn && op.roles.all (fun r => !((t.rolesOf (.user u)).contains r))) = true := by
+    rw [hs, hall]
+    rfl
+  unfold invokeOpCore
+  rw [h]
+  dsimp only
+  rw [if_pos hg]
+
+/-- An idempotency key that is not 1 to 128 visible ASCII characters is refused: `invalidIntent`. -/
+theorem invoke_bad_key_refused (t : Tenant) (u : PrincipalId) (now : Int) (name : String) (op : OpDef)
+    (ins : List (String × Val)) (key : String) (h : t.operations.lookup name = some op)
+    (hs : op.signedIn = true) (hk : validKey key = false) :
+    invokeOpCore t (.user u) now name ins key = .error .invalidIntent := by
+  unfold invokeOpCore
+  rw [h]
+  dsimp only
+  have hg : (!op.signedIn && op.roles.all (fun r => !((t.rolesOf (.user u)).contains r))) = false := by
+    rw [hs]
+    rfl
+  rw [if_neg (by rw [hg]; decide)]
+  rw [if_pos (by rw [hk]; decide)]
+
+/-- An input the operation does not declare is refused: `invalid`. -/
+theorem invoke_undeclared_input_refused (t : Tenant) (u : PrincipalId) (now : Int) (name : String) (op : OpDef)
+    (ins : List (String × Val)) (key : String) (h : t.operations.lookup name = some op)
+    (hs : op.signedIn = true) (hk : validKey key = true)
+    (hd : ins.all (fun q => op.inputs.any (fun i => i.name == q.1)) = false) :
+    invokeOpCore t (.user u) now name ins key = .error .invalid := by
+  unfold invokeOpCore
+  rw [h]
+  dsimp only
+  have hg : (!op.signedIn && op.roles.all (fun r => !((t.rolesOf (.user u)).contains r))) = false := by
+    rw [hs]
+    rfl
+  rw [if_neg (by rw [hg]; decide)]
+  rw [if_neg (by rw [hk]; decide)]
+  rw [if_pos (by rw [hd]; decide)]
+
+/-- A required input that is not given is refused: `invalid` (`bindInput`). -/
+theorem bindInput_required_missing (t : Tenant) (ins : List (String × Val)) (i : OpInput)
+    (hv : inputOf ins i.name = .null) (hr : i.required = true) :
+    bindInput t ins i = .error .invalid := by
+  unfold bindInput
+  simp [hv, hr]
+
+/-- An input over a size bound is refused: `limitExceeded` (`bindInput`). -/
+theorem bindInput_oversized (t : Tenant) (ins : List (String × Val)) (i : OpInput)
+    (hv : inputOf ins i.name ≠ .null) (hl : Val.overLimit t.limits (inputOf ins i.name) = true) :
+    bindInput t ins i = .error .limitExceeded := by
+  unfold bindInput
+  simp [hv, hl]
+
+/-- An input of the wrong type is refused: `invalid` (`bindInput`). -/
+theorem bindInput_mistyped (t : Tenant) (ins : List (String × Val)) (i : OpInput)
+    (hv : inputOf ins i.name ≠ .null) (hl : Val.overLimit t.limits (inputOf ins i.name) = false)
+    (ht : (inputOf ins i.name).hasType i.ty = false) :
+    bindInput t ins i = .error .invalid := by
+  unfold bindInput
+  simp [hv, hl, ht]
+
+/-- A subject that is not a record the principal may read is refused: `notFound` (the kernel's `UnknownRecord`). -/
+theorem opSubject_unreadable_refused (t : Tenant) (p : Principal) (op : OpDef) (ps : List (String × Val))
+    (ty : TypeId) (name : String) (id : RecordId) (hs : op.subject = some (ty, name))
+    (hv : inputOf ps name = .ref id) (hn : t.recordAt ty id = none) :
+    opSubject t p op ps = .error .notFound := by
+  unfold opSubject
+  simp [hs, hv, hn]
+
+/-- A condition that is `false` refuses the invocation: `constraintViolated`. -/
+theorem opConditions_false_refused (c : OpCtx) (ps : List (String × Val)) (k : OpCond) (ks : List OpCond)
+    (hk : evalExpr (c.env ps) k.expr = .ok (.bool false)) :
+    opConditions c ps (k :: ks) = .error .constraintViolated := by
+  unfold opConditions
+  rw [hk]
+
+/-- A condition that is `null` refuses the invocation: `constraintViolated`. -/
+theorem opConditions_null_refused (c : OpCtx) (ps : List (String × Val)) (k : OpCond) (ks : List OpCond)
+    (hk : evalExpr (c.env ps) k.expr = .ok .null) :
+    opConditions c ps (k :: ks) = .error .constraintViolated := by
+  unfold opConditions
+  rw [hk]
+
+/-- A condition that cannot be evaluated refuses the invocation: `evaluation`. -/
+theorem opConditions_unevaluable_refused (c : OpCtx) (ps : List (String × Val)) (k : OpCond) (ks : List OpCond)
+    (e : Unit) (hk : evalExpr (c.env ps) k.expr = .error e) :
+    opConditions c ps (k :: ks) = .error .evaluation := by
+  unfold opConditions
+  rw [hk]
+
+/-- Atomicity: a step that is refused refuses the run of the steps it belongs to, whatever follows it. -/
+theorem invoke_step_refused_refuses_run (c : OpCtx) (s : OpStep) (ss : List OpStep) (st : OpState) (e : Err)
+    (h : opStep c st s = .error e) : runSteps c (s :: ss) st = .error e :=
+  runSteps_refused_of_step c s ss st e h
+
+/-- Atomicity of the invocation: an accepted invocation ran every step to an accepted state, and returns the
+    tenant those steps leave; a refused step therefore refuses the whole invocation. -/
+theorem invoke_accepted_all_steps (t t' : Tenant) (p : Principal) (now : Int) (name : String)
+    (ins : List (String × Val)) (key : String) (logs : List OpLog)
+    (h : invokeOpCore t p now name ins key = .ok (t', logs)) :
+    ∃ op ps c st, t.operations.lookup name = some op ∧
+      runSteps c op.steps { tenant := t, params := ps, logs := [] } = .ok st ∧ t' = st.tenant :=
+  invokeOpCore_ok h
+
+/-- The steps of an operation run in order: running a prefix and then a suffix is running the whole list. -/
+theorem invoke_steps_in_order (c : OpCtx) (xs ys : List OpStep) (st : OpState) :
+    runSteps c (xs ++ ys) st = (runSteps c xs st).bind (fun st1 => runSteps c ys st1) :=
+  runSteps_append c xs ys st
+
+/-- Only a signed-in person may invoke an operation, and only one the operation names as an invoker (or every
+    signed-in person, when it is open to them): an accepted invocation's caller has one of those rights. -/
+theorem invoke_only_invokers (t t' : Tenant) (p : Principal) (now : Int) (name : String)
+    (ins : List (String × Val)) (key : String) (logs : List OpLog) (op : OpDef)
+    (h : invokeOpCore t p now name ins key = .ok (t', logs)) (hop : t.operations.lookup name = some op) :
+    ∃ u, p = .user u ∧ (op.signedIn = true ∨ ∃ r ∈ op.roles, r ∈ t.rolesOf p) := by
+  cases p with
+  | system =>
+    rw [invoke_non_user_refused t .system now name op ins key (fun u h => by cases h) hop] at h
+    cases h
+  | anonymous =>
+    rw [invoke_non_user_refused t .anonymous now name op ins key (fun u h => by cases h) hop] at h
+    cases h
+  | user u =>
+    refine ⟨u, rfl, ?_⟩
+    refine Classical.byContradiction (fun hn => ?_)
+    have hsf : op.signedIn = false := by
+      cases hsi : op.signedIn with
+      | false => rfl
+      | true => exact absurd (Or.inl hsi) hn
+    have hr : ∀ r ∈ op.roles, r ∉ t.rolesOf (.user u) := fun r hr' hm => hn (Or.inr ⟨r, hr', hm⟩)
+    rw [invoke_uninvoker_refused t u now name op ins key hop hsf hr] at h
+    cases h
+
+/-- The ledger key of the posting a step makes is the operation's posting key for the step (the idempotency the model
+    states: a repeat of the same invocation names the same postings). -/
+theorem posting_key_of_invocation (op : String) (invoker : PrincipalId) (key step : String) :
+    postingKey op invoker key step = "op:" ++ op ++ ":p" ++ toString invoker ++ ":" ++ key ++ ":" ++ step := rfl
+
+
+
+/-- A record an accepted create writes names the invoker as its creator (the kernel's `created_by`, OPR-1548). -/
+theorem opCreate_owner_is_invoker {c : OpCtx} {st st' : OpState} {id : String} {ty : TypeId}
+    {fs : List (FieldId × Expr)} {o : ObjType} (ho : st.tenant.typ? ty = some o)
+    (hp : c.principal = .user c.invoker) (h : opCreate c st id ty fs = .ok st') :
+    ∃ r : Record, r.owner = some c.invoker := by
+  obtain ⟨vals, r, hN, -, -, -⟩ := opCreate_ok_parts ho h
+  refine ⟨r, ?_⟩
+  unfold newRecord at hN
+  cases hw : withDefaults { principal := c.principal.userId? } o.schema vals with
+  | error e => simp [hw, Except.map] at hN
+  | ok fs' =>
+    simp only [hw, Except.map, Except.ok.injEq] at hN
+    subst hN
+    simp [hp, Principal.userId?]
+
+
+/-! Axioms of the slice 14 (operations) theorems: only propext, Classical.choice and Quot.sound. -/
+#print axioms Strata.invoke_unknown_refused
+#print axioms Strata.invoke_non_user_refused
+#print axioms Strata.invoke_uninvoker_refused
+#print axioms Strata.invoke_bad_key_refused
+#print axioms Strata.invoke_undeclared_input_refused
+#print axioms Strata.bindInput_required_missing
+#print axioms Strata.bindInput_oversized
+#print axioms Strata.bindInput_mistyped
+#print axioms Strata.opSubject_unreadable_refused
+#print axioms Strata.opConditions_false_refused
+#print axioms Strata.opConditions_null_refused
+#print axioms Strata.opConditions_unevaluable_refused
+#print axioms Strata.invoke_step_refused_refuses_run
+#print axioms Strata.invoke_accepted_all_steps
+#print axioms Strata.invoke_steps_in_order
+#print axioms Strata.invoke_only_invokers
+#print axioms Strata.posting_key_of_invocation
+#print axioms Strata.opCreate_owner_is_invoker
+
+end Strata

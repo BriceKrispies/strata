@@ -934,6 +934,175 @@ theorem stepTenant_delete_eq {t t' : Tenant} {p : Principal} {ty : TypeId} {id :
 
 /-! ## The slice's properties -/
 
+/-! ## Operations (slice 14): referential integrity of their steps -/
+
+/-- The parts of an operation's create: its record is the one a direct create writes, checked as a direct create's
+    record is (`newRecord` of the evaluated fields, the structural checks and the constraints), at the next id. -/
+theorem opCreate_ok_parts {c : OpCtx} {st st' : OpState} {id : String} {ty : TypeId}
+    {fs : List (FieldId × Expr)} {o : ObjType} (ho : st.tenant.typ? ty = some o)
+    (h : opCreate c st id ty fs = .ok st') :
+    ∃ vals r, newRecord o.schema c.principal vals = .ok r ∧
+      problem st.tenant.limits o.schema o.uniques true st.tenant.env o.records st.tenant.nextId r = none ∧
+      constraintProblem (writeEnv c.principal r none) o.constraints = none ∧
+      st'.tenant = { st.tenant.putType ty { o with records := (st.tenant.nextId, r) :: o.records } with
+        nextId := st.tenant.nextId + 1 } := by
+  unfold opCreate at h
+  simp only [ho] at h
+  split at h
+  · simp at h
+  rename_i vals hv
+  split at h
+  · simp at h
+  rename_i r hN
+  split at h
+  · simp at h
+  split at h
+  · simp at h
+  rename_i hP
+  split at h
+  · simp at h
+  rename_i hC
+  simp only [Except.ok.injEq] at h
+  subst h
+  exact ⟨vals, r, hN, hP, hC, rfl⟩
+
+/-- An operation's create keeps referential integrity: the new record names existing records (`problem`), and no other
+    record changes. -/
+theorem opCreate_refsOk {c : OpCtx} {st st' : OpState} {id : String} {ty : TypeId}
+    {fs : List (FieldId × Expr)} (hrefs : st.tenant.RefsOk) (h : opCreate c st id ty fs = .ok st') :
+    st'.tenant.RefsOk := by
+  cases hT : st.tenant.typ? ty with
+  | none => simp [opCreate, hT] at h
+  | some o =>
+    obtain ⟨vals, r, -, hP, -, ht⟩ := opCreate_ok_parts hT h
+    rw [ht]
+    have hinc : ∀ k x, Records.has (st.tenant.env k) x = true →
+        Records.has ((st.tenant.putType ty { o with records := (st.tenant.nextId, r) ::
+          o.records }).env k) x = true := by
+      intro k x hx
+      rw [env_putType st.tenant ty o _ hT k]
+      by_cases hk : k == ty
+      · rw [if_pos hk]
+        have hk' : k = ty := by simpa using hk
+        subst hk'
+        have hr : st.tenant.env k = o.records := by
+          unfold Tenant.env; rw [hT]; simp
+        rw [hr] at hx
+        exact has_cons_of _ hx
+      · rw [if_neg hk]; exact hx
+    have hnew : ∀ q ∈ ({ o with records := (st.tenant.nextId, r) ::
+        o.records } : ObjType).records, q ∈ o.records ∨ refsOk st.tenant.env o.schema q.2 = true := by
+      intro q hq
+      rcases List.mem_cons.mp hq with rfl | hq'
+      · right; exact (problem_none hP).2
+      · left; exact hq'
+    exact refsOk_putType hT rfl hrefs hinc hnew
+
+/-- An operation's update keeps referential integrity: the patched record names existing records (`problem`). -/
+theorem opUpdate_refsOk {c : OpCtx} {st st' : OpState} {ty : TypeId} {record : Expr}
+    {fs : List (FieldId × Expr)} (hrefs : st.tenant.RefsOk) (h : opUpdate c st ty record fs = .ok st') :
+    st'.tenant.RefsOk := by
+  cases hT : st.tenant.typ? ty with
+  | none => simp [opUpdate, hT] at h
+  | some o =>
+    simp only [opUpdate, hT] at h
+    split at h
+    · simp at h
+    rename_i id _
+    split at h
+    · simp at h
+    rename_i old hL
+    split at h
+    · simp at h
+    rename_i vals _
+    split at h
+    · simp at h
+    rename_i r _
+    split at h
+    · simp at h
+    split at h
+    · simp at h
+    rename_i hP
+    split at h
+    · simp at h
+    rename_i hC
+    simp only [Except.ok.injEq] at h
+    subst h
+    have hinc : ∀ k x, Records.has (st.tenant.env k) x = true →
+        Records.has ((st.tenant.putType ty { o with records := o.records.map (fun q =>
+          if q.1 == id then (q.1, r) else q) }).env k) x = true := by
+      intro k x hx
+      rw [env_putType st.tenant ty o _ hT k]
+      by_cases hk : k == ty
+      · rw [if_pos hk]
+        have hk' : k = ty := by simpa using hk
+        subst hk'
+        have hr : st.tenant.env k = o.records := by
+          unfold Tenant.env; rw [hT]; simp
+        rw [hr] at hx
+        rw [has_replace]
+        exact hx
+      · rw [if_neg hk]; exact hx
+    have hnew : ∀ q ∈ ({ o with records := o.records.map (fun q =>
+        if q.1 == id then (q.1, r) else q) } : ObjType).records,
+        q ∈ o.records ∨ refsOk st.tenant.env o.schema q.2 = true := by
+      intro q hq
+      obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+      by_cases hid : (q₀.1 == id) = true
+      · simp only [hid, if_true] at hmap
+        right
+        rw [← hmap]
+        exact (problem_none hP).2
+      · simp only [hid, if_false] at hmap
+        left
+        rw [← hmap]
+        exact hq₀
+    exact refsOk_putType hT rfl hrefs hinc hnew
+
+/-- Deleting a record of a tenant with referential integrity clears the references to it in every type. -/
+theorem afterDelete_refsOk (t : Tenant) (ty : TypeId) (id : RecordId) (hrefs : t.RefsOk) :
+    (t.afterDelete ty id).RefsOk := by
+  intro T o'' hT q hq
+  rw [typ?_afterDelete] at hT
+  cases ho : t.typ? T with
+  | none => rw [ho] at hT; cases hT
+  | some o =>
+    rw [ho] at hT
+    simp only [Option.map_some, Option.some.injEq] at hT
+    subst hT
+    obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp hq
+    subst hmap
+    have hq₀' : q₀ ∈ o.records := by
+      by_cases hTy : (T == ty) = true
+      · rw [if_pos hTy] at hq₀
+        exact (List.mem_filter.mp hq₀).1
+      · rw [if_neg hTy] at hq₀
+        exact hq₀
+    exact refsOk_clear (fun k x hx hxk => env_afterDelete_inc t ty id k x hx hxk)
+      (hrefs T o ho q₀ hq₀')
+
+/-- An operation's delete keeps referential integrity: the references to the deleted record are cleared in every
+    type, as a direct delete clears them. -/
+theorem opDelete_refsOk {c : OpCtx} {st st' : OpState} {ty : TypeId} {record : Expr}
+    (hrefs : st.tenant.RefsOk) (h : opDelete c st ty record = .ok st') : st'.tenant.RefsOk := by
+  simp only [opDelete] at h
+  repeat' split at h
+  all_goals (try (simp at h; done))
+  all_goals (simp only [Except.ok.injEq] at h; subst h; exact afterDelete_refsOk _ _ _ hrefs)
+
+/-- A step of an operation keeps referential integrity. -/
+theorem opStep_refsOk (c : OpCtx) (st st' : OpState) (s : OpStep) (hrefs : st.tenant.RefsOk)
+    (h : opStep c st s = .ok st') : st'.tenant.RefsOk := by
+  cases s with
+  | create id ty fs => exact opCreate_refsOk hrefs h
+  | update _ ty rec fs => exact opUpdate_refsOk hrefs h
+  | delete _ ty rec => exact opDelete_refsOk hrefs h
+  | post id owner unit amt reason =>
+    simp only [opStep, opPost] at h
+    repeat' split at h
+    all_goals (try (simp at h; done))
+    all_goals (simp only [Except.ok.injEq] at h; subst h; exact hrefs)
+
 /-- Referential integrity is kept by every accepted step on a tenant, strict or not: a write names
     only existing records of the types its fields name, single or in a list; a delete is refused or
     clears what named the deleted record in every type; and a schema change touches no record and
@@ -944,6 +1113,8 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
   | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact hrefs
   | postLedgerTx now tx => obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape h; exact hrefs
   | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact hrefs
+  | invokeOperation now op ins key =>
+    exact invokeOperationT_pres Tenant.RefsOk (fun c s st st' hs hp => opStep_refsOk c st st' s hp hs) hrefs h
   | changeSchema ev strict cs =>
     have hs : strict = true := by
       cases strict
