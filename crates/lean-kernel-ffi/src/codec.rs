@@ -57,6 +57,12 @@
 //! a natural, zero when no automation caused the intent. A principal has no automation form here: Lean's tag
 //! `3` (an automation principal) is refused by the decoder.
 //!
+//! Slice 16 adds segments. A tenant ends, after its automations, with three more lists: its segments (each
+//! entry the id, then its id, name, subject, predicate, version, principal field and optional definer), its
+//! memberships (segment, person, version) and its segment log (segment, person, a direction byte `0` entered or
+//! `1` exited, a reason byte `0` change or `1` predicate change, version, revision, hop and principal). A
+//! trigger's event gains tag `4` (a segment entered) and `5` (a segment exited), each with the segment number.
+//!
 //! Every value has one encoding and the decoders accept nothing else: [`decode_all`] requires the
 //! input to be consumed exactly.
 //!
@@ -604,6 +610,12 @@ pub struct Tenant {
     pub triggers: Vec<(u64, TriggerDef)>,
     /// The automations, by id (slice 15).
     pub automations: Vec<(u64, AutomationDef)>,
+    /// The segments, by id (slice 16).
+    pub segments: Vec<(u64, SegmentDef)>,
+    /// The current memberships (slice 16).
+    pub memberships: Vec<Membership>,
+    /// The log of segment events (slice 16).
+    pub seg_log: Vec<SegEvent>,
 }
 
 /// The event a trigger listens for (slice 15), Lean's `TriggerOn`: a record of an object type created (`0`),
@@ -614,6 +626,59 @@ pub enum TriggerOn {
     RecordUpdated(u64, Option<String>),
     RecordDeleted(u64),
     LedgerPosted(u64),
+    /// A person entered a segment (slice 16), tag `4`.
+    SegmentEntered(u64),
+    /// A person exited a segment (slice 16), tag `5`.
+    SegmentExited(u64),
+}
+
+/// A segment (slice 16), Lean's `SegmentDef`: its id, name, the object type it ranges over, its predicate, its
+/// version, the field naming the person and its definer (none for the system).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SegmentDef {
+    pub id: u64,
+    pub name: String,
+    pub subject: u64,
+    pub predicate: Expr,
+    pub version: u64,
+    pub principal_field: u64,
+    pub defined_by: Option<u64>,
+}
+
+/// A membership (slice 16), Lean's `Membership`: a person in a segment at a version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Membership {
+    pub segment: u64,
+    pub person: u64,
+    pub version: u64,
+}
+
+/// Whether a person entered (`0`) or exited (`1`) a segment (slice 16), Lean's `SegDirection`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SegDirection {
+    Entered,
+    Exited,
+}
+
+/// Why a membership changed (slice 16), Lean's `SegReason`: a record change (`0`) or a predicate change (`1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SegReason {
+    Change,
+    PredicateChange,
+}
+
+/// A segment event (slice 16), Lean's `SegEvent`: who entered or exited which segment, why, at which version
+/// and revision, the hop and the acting principal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SegEvent {
+    pub segment: u64,
+    pub person: u64,
+    pub direction: SegDirection,
+    pub reason: SegReason,
+    pub version: u64,
+    pub revision: u64,
+    pub hop: u64,
+    pub principal: Principal,
 }
 
 /// A trigger (slice 15), Lean's `TriggerDef`: its id, its event, its condition (none for every event), the
@@ -1255,6 +1320,52 @@ fn put_tenant(out: &mut Vec<u8>, t: &Tenant) {
     put_list(out, t.operations.as_slice(), put_op_entry);
     put_list(out, t.triggers.as_slice(), put_trigger_entry);
     put_list(out, t.automations.as_slice(), put_automation_entry);
+    put_list(out, t.segments.as_slice(), put_segment_entry);
+    put_list(out, t.memberships.as_slice(), put_membership);
+    put_list(out, t.seg_log.as_slice(), put_seg_event);
+}
+
+/// A segment (`encSegDef`): its id, name, subject, predicate, version, principal field and optional definer.
+fn put_segment_def(out: &mut Vec<u8>, d: &SegmentDef) {
+    put_nat(out, d.id);
+    put_str(out, &d.name);
+    put_nat(out, d.subject);
+    put_expr(out, &d.predicate);
+    put_nat(out, d.version);
+    put_nat(out, d.principal_field);
+    put_opt(out, &d.defined_by, put_u64);
+}
+
+/// A segment entry (`encSegEntry`): its id, then the segment.
+fn put_segment_entry(out: &mut Vec<u8>, e: &(u64, SegmentDef)) {
+    put_nat(out, e.0);
+    put_segment_def(out, &e.1);
+}
+
+/// A membership (`encMembership`): its segment, person and version.
+fn put_membership(out: &mut Vec<u8>, m: &Membership) {
+    put_nat(out, m.segment);
+    put_nat(out, m.person);
+    put_nat(out, m.version);
+}
+
+/// A segment event (`encSegEvent`): segment, person, direction and reason (one byte each), version,
+/// revision, hop and principal.
+fn put_seg_event(out: &mut Vec<u8>, e: &SegEvent) {
+    put_nat(out, e.segment);
+    put_nat(out, e.person);
+    out.push(match e.direction {
+        SegDirection::Entered => 0,
+        SegDirection::Exited => 1,
+    });
+    out.push(match e.reason {
+        SegReason::Change => 0,
+        SegReason::PredicateChange => 1,
+    });
+    put_nat(out, e.version);
+    put_nat(out, e.revision);
+    put_nat(out, e.hop);
+    put_principal(out, &e.principal);
 }
 
 /// A trigger's event (`encTriggerOn`): tag `0` created, `1` updated (its type, then its transition if any),
@@ -1277,6 +1388,14 @@ fn put_trigger_on(out: &mut Vec<u8>, t: &TriggerOn) {
         TriggerOn::LedgerPosted(unit) => {
             out.push(3);
             put_nat(out, *unit);
+        }
+        TriggerOn::SegmentEntered(seg) => {
+            out.push(4);
+            put_nat(out, *seg);
+        }
+        TriggerOn::SegmentExited(seg) => {
+            out.push(5);
+            put_nat(out, *seg);
         }
     }
 }
@@ -2488,6 +2607,9 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
     let operations = get_list(r, get_op_entry)?;
     let triggers = get_list(r, get_trigger_entry)?;
     let automations = get_list(r, get_automation_entry)?;
+    let segments = get_list(r, get_segment_entry)?;
+    let memberships = get_list(r, get_membership)?;
+    let seg_log = get_list(r, get_seg_event)?;
     Some(Tenant {
         types,
         members,
@@ -2510,10 +2632,82 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
         operations,
         triggers,
         automations,
+        segments,
+        memberships,
+        seg_log,
     })
 }
 
-/// A trigger's event (`decTriggerOn`): tags `0` to `3`, each with its natural (and the transition for `1`).
+/// A segment (`decSegDef`).
+fn get_segment_def(r: &mut Reader<'_>) -> Option<SegmentDef> {
+    let id = get_nat(r)?;
+    let name = get_str(r)?;
+    let subject = get_nat(r)?;
+    let predicate = get_expr_root(r)?;
+    let version = get_nat(r)?;
+    let principal_field = get_nat(r)?;
+    let defined_by = get_opt(r, get_u64)?;
+    Some(SegmentDef {
+        id,
+        name,
+        subject,
+        predicate,
+        version,
+        principal_field,
+        defined_by,
+    })
+}
+
+/// A segment entry (`decSegEntry`).
+fn get_segment_entry(r: &mut Reader<'_>) -> Option<(u64, SegmentDef)> {
+    let id = get_nat(r)?;
+    let def = get_segment_def(r)?;
+    Some((id, def))
+}
+
+/// A membership (`decMembership`).
+fn get_membership(r: &mut Reader<'_>) -> Option<Membership> {
+    let segment = get_nat(r)?;
+    let person = get_nat(r)?;
+    let version = get_nat(r)?;
+    Some(Membership {
+        segment,
+        person,
+        version,
+    })
+}
+
+/// A segment event (`decSegEvent`).
+fn get_seg_event(r: &mut Reader<'_>) -> Option<SegEvent> {
+    let segment = get_nat(r)?;
+    let person = get_nat(r)?;
+    let direction = match r.byte()? {
+        0 => SegDirection::Entered,
+        1 => SegDirection::Exited,
+        _ => return None,
+    };
+    let reason = match r.byte()? {
+        0 => SegReason::Change,
+        1 => SegReason::PredicateChange,
+        _ => return None,
+    };
+    let version = get_nat(r)?;
+    let revision = get_nat(r)?;
+    let hop = get_nat(r)?;
+    let principal = get_principal(r)?;
+    Some(SegEvent {
+        segment,
+        person,
+        direction,
+        reason,
+        version,
+        revision,
+        hop,
+        principal,
+    })
+}
+
+/// A trigger's event (`decTriggerOn`): tags `0` to `5`, each with its natural (and the transition for `1`).
 fn get_trigger_on(r: &mut Reader<'_>) -> Option<TriggerOn> {
     match r.byte()? {
         0 => Some(TriggerOn::RecordCreated(get_nat(r)?)),
@@ -2524,6 +2718,8 @@ fn get_trigger_on(r: &mut Reader<'_>) -> Option<TriggerOn> {
         }
         2 => Some(TriggerOn::RecordDeleted(get_nat(r)?)),
         3 => Some(TriggerOn::LedgerPosted(get_nat(r)?)),
+        4 => Some(TriggerOn::SegmentEntered(get_nat(r)?)),
+        5 => Some(TriggerOn::SegmentExited(get_nat(r)?)),
         _ => None,
     }
 }

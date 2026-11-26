@@ -167,6 +167,9 @@ pub enum OpKind {
     /// An invocation of an operation (slice 14): the time, the operation's name, the idempotency key token (the text
     /// after `key=`; none writes no `key=`) and the inputs, each as its name and value token.
     Invoke(i64, String, Option<String>, Vec<(String, String)>),
+    /// A segment intent (slice 16): the text after `segment`, as `define <n> <name> <type> <field> <refresh|-> <expr>`,
+    /// `remove <n>` or `rebuild <n>`.
+    Segment(String),
 }
 
 pub type Scenario = Vec<Op>;
@@ -330,6 +333,7 @@ impl Op {
                     .map(|(name, value)| format!(" {name}={value}"))
                     .collect::<String>()
             ),
+            OpKind::Segment(text) => format!("{head} segment {text}"),
             OpKind::LedgerRead(unit, owner, scope, own) => format!(
                 "read {} {} ledger {unit} {owner}{}{}",
                 self.tenant,
@@ -2973,17 +2977,322 @@ pub const TRIGGER_KINDS: &[&str] = &[
     "event automation-suspended",
 ];
 
+// ---------------------------------------------------------------------------------------------
+// Segments (slice 16)
+// ---------------------------------------------------------------------------------------------
+//
+// The generator never writes a schema change that touches the profiles (type 20) or their fields: the model does not
+// check SEG-006 on a schema change, and the kernel refuses a change that removes or retypes a field a segment names.
+// The schema scripts of `generate` change types 1 and 2 and the types 5 to 8 only, so that holds. A tenant's profiles
+// stay far below the batch size of a segment decision (100), so no continuation is needed.
+
+/// Pairs of predicates over a profile (`f1` the person, `f2` the score): a segment defined with the first and then with
+/// the second changes who is a member, so the rebuild after the second one exits and enters persons.
+const SEGMENT_PREDICATE_PAIRS: [(&str, &str); 6] = [
+    ("ge f2 i:5", "lt f2 i:5"),
+    ("lt f2 i:8", "ge f2 i:8"),
+    ("not isnull f2", "isnull f2"),
+    ("eq f1 prin", "ne f1 prin"),
+    ("and ge f2 i:3 lt f2 i:9", "or lt f2 i:3 ge f2 i:9"),
+    ("eq f2 i:7", "ne f2 i:7"),
+];
+
+/// Definitions the segment capability, the name, the principal field, the predicate and the refresh interval refuse,
+/// each with the offset from the owner of the caller: `0` the owner, `1` the editor (holds the capability, may not
+/// read profiles), `2` a writer (holds no capability).
+const SEGMENT_REFUSALS: [(u64, &str); 14] = [
+    (2, "define 2 low_scorers 20 1 - lt f2 i:5"),
+    (1, "define 2 low_scorers 20 1 - lt f2 i:5"),
+    (3, "define 3 low_scorers 20 1 - lt f2 i:5"),
+    (0, "define 2 _ 20 1 - lt f2 i:5"),
+    (0, "define 2 high_scorers 20 1 - lt f2 i:5"),
+    (0, "define 2 low_scorers 20 2 - lt f2 i:5"),
+    (0, "define 2 low_scorers 20 1 - lt f9 i:5"),
+    (0, "define 2 low_scorers 20 1 - lt o2 i:5"),
+    (0, "define 2 low_scorers 20 1 - eq p:x i:5"),
+    (0, "define 2 low_scorers 20 1 - f2"),
+    (0, "define 2 low_scorers 20 1 60 lt f2 i:5"),
+    (0, "define 2 low_scorers 99 1 - lt f2 i:5"),
+    (0, "define 2 low_scorers 20 1 - eq f2 s:x"),
+    (0, "define 1 high_scorers 20 2 - ge f2 i:10"),
+];
+
+/// A short sequence on tenant `tenant` (1 or 2) over the profiles and the segments. `first` is the id of the first
+/// record the sequence creates, as far as the generator can tell (exact when the sequence opens the scenario). The
+/// principals are the tenant's owner (`home`), editor (`home + 1`) and writers (`home + 2`, `home + 3`). A person is
+/// `p<n>`, a number the principal field of a profile holds; no other text names a person in the model.
+fn segment_script(rng: &mut Lcg, tenant: u64, first: u64) -> Vec<Op> {
+    let home = home_of(tenant);
+    let op = |principal: u64, hop: Option<u64>, object: u64, kind: OpKind| Op {
+        tenant,
+        principal: Caller::User(principal),
+        object,
+        kind,
+        hop,
+    };
+    let fields = |who: u64, score: Option<u64>| -> Vec<(u64, String)> {
+        vec![
+            (1, format!("s:p{who}")),
+            (2, score.map_or("n".to_string(), |s| format!("i:{s}"))),
+        ]
+    };
+    let segment = |principal: u64, text: String| op(principal, None, 1, OpKind::Segment(text));
+    // A score mostly present, sometimes absent (a predicate over a missing field).
+    let score = |rng: &mut Lcg| -> Option<u64> {
+        if rng.below(6) == 0 {
+            None
+        } else {
+            Some(rng.below(20))
+        }
+    };
+    match rng.below(11) {
+        // A person enters, leaves and enters again as the score changes, and a delete of a member leaves it.
+        0 | 1 => {
+            let who = home + rng.below(8);
+            let mut ops = vec![
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Create(fields(who, Some(10 + rng.below(6)))),
+                ),
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Update(first, None, fields(who, Some(rng.below(10)))),
+                ),
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Update(first, None, fields(who, Some(10 + rng.below(6)))),
+                ),
+            ];
+            if rng.below(2) == 0 {
+                ops.push(op(home, None, 20, OpKind::Delete(first, None)));
+            }
+            ops
+        }
+        // An entry and an exit at a hop past the limit: the triggers on them decline `hop-limit`.
+        2 => {
+            let hop = Some(9 + rng.below(2));
+            let who = home + rng.below(8);
+            vec![
+                op(
+                    home,
+                    hop,
+                    20,
+                    OpKind::Create(fields(who, Some(10 + rng.below(6)))),
+                ),
+                op(
+                    home,
+                    hop,
+                    20,
+                    OpKind::Update(first, None, fields(who, Some(rng.below(10)))),
+                ),
+            ]
+        }
+        // Definitions the checks refuse.
+        3 => {
+            let count = 2 + rng.below(3);
+            (0..count)
+                .map(|_| {
+                    let (offset, text) = rng.pick(&SEGMENT_REFUSALS);
+                    segment(home + offset, text.to_string())
+                })
+                .collect()
+        }
+        // A segment defined with one predicate, rebuilt, defined with another and rebuilt, and sometimes removed.
+        4..=6 => {
+            let number = 1 + rng.below(3);
+            let name = match number {
+                1 => "high_scorers".to_string(),
+                n => format!("seg_{n}"),
+            };
+            let (before, after) = rng.pick(&SEGMENT_PREDICATE_PAIRS);
+            let (a, b) = (home + rng.below(4), home + 4 + rng.below(4));
+            let mut ops = vec![
+                op(home, None, 20, OpKind::Create(fields(a, score(rng)))),
+                op(home, None, 20, OpKind::Create(fields(b, score(rng)))),
+                segment(
+                    home,
+                    format!("define {number} {name} 20 1 - {before}"),
+                ),
+                segment(home, format!("rebuild {number}")),
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Update(first, None, fields(a, Some(rng.below(20)))),
+                ),
+                segment(home, format!("define {number} {name} 20 1 - {after}")),
+                segment(home, format!("rebuild {number}")),
+            ];
+            if rng.below(3) == 0 {
+                ops.push(segment(home, format!("remove {number}")));
+            }
+            ops
+        }
+        // A removal, a second removal (`not_found`), one by a writer (`unauthorized`) and one of a segment never defined.
+        7 => {
+            let number = 1 + rng.below(3);
+            vec![
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Create(fields(home + rng.below(8), Some(10 + rng.below(6)))),
+                ),
+                segment(home, format!("remove {number}")),
+                op(
+                    home,
+                    None,
+                    20,
+                    OpKind::Update(first, None, fields(home, Some(rng.below(10)))),
+                ),
+                segment(home, format!("remove {number}")),
+                segment(home + 2, format!("remove {number}")),
+                segment(home, "remove 7".to_string()),
+            ]
+        }
+        // A rebuild of the fixture segment, by the owner and by a writer (the model checks no capability for a
+        // rebuild, which is a continuation of a job), and of a segment never defined.
+        8 => vec![
+            op(
+                home,
+                None,
+                20,
+                OpKind::Create(fields(home + rng.below(8), Some(rng.below(20)))),
+            ),
+            segment(home, "rebuild 1".to_string()),
+            segment(home + 2, "rebuild 1".to_string()),
+            segment(home, "rebuild 9".to_string()),
+        ],
+        // Writes of profiles by principals that may not make them.
+        9 => vec![
+            op(
+                home + 2,
+                None,
+                20,
+                OpKind::Create(fields(home + rng.below(8), Some(12))),
+            ),
+            op(
+                home + 1,
+                None,
+                20,
+                OpKind::Create(fields(home + rng.below(8), Some(12))),
+            ),
+            op(home + 2, None, 20, OpKind::Delete(first, None)),
+        ],
+        // More segments over the profiles than one object type allows: the 26th is `limit_exceeded`, and a profile
+        // then enters every segment it satisfies.
+        _ => {
+            let mut ops: Vec<Op> = (2..=26)
+                .map(|n| segment(home, format!("define {n} limit_{n} 20 1 - ge f2 i:{n}")))
+                .collect();
+            ops.push(op(
+                home,
+                None,
+                20,
+                OpKind::Create(fields(home + rng.below(8), Some(30))),
+            ));
+            ops
+        }
+    }
+}
+
+/// Segment sequences over a scenario (slice 16): one to three `segment_script`s, each on tenant 1 or 2. Half of them
+/// open the scenario, where the first record they create has the id 1; the others go at a random point, with the
+/// records the scenario has probably made before counted for the first id (an approximation, as `generate` keeps).
+fn with_segments(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7365_676d_656e_7473);
+    for _ in 0..1 + rng.below(3) {
+        let tenant = if rng.below(3) == 0 { 2 } else { 1 };
+        let at = if rng.below(2) == 0 {
+            0
+        } else {
+            rng.below(ops.len() as u64 + 1) as usize
+        };
+        let created = ops[..at]
+            .iter()
+            .filter(|op| op.tenant == tenant && matches!(op.kind, OpKind::Create(_)))
+            .count() as u64;
+        for (n, op) in segment_script(&mut rng, tenant, created + 1)
+            .into_iter()
+            .enumerate()
+        {
+            ops.insert(at + n, op);
+        }
+    }
+    ops
+}
+
+/// The segment outcomes a run must reach (slice 16), counted by intent (`segment-define`, `segment-remove`,
+/// `segment-rebuild`) as the other `REQUIRED_PER_INTENT` entries are, and by `segment_shapes`: an entry and an exit for
+/// each reason, a start of an automation by a segment trigger, and a hop-limit decline of one.
+pub const SEGMENT_KINDS: &[&str] = &[
+    "segment-define ok",
+    "segment-define err unauthorized",
+    "segment-define err invalid_intent",
+    "segment-define err limit_exceeded",
+    "segment-remove ok",
+    "segment-remove err unauthorized",
+    "segment-remove err not_found",
+    "segment-rebuild ok",
+    "segment-event entered change",
+    "segment-event exited change",
+    "segment-event entered predicate-change",
+    "segment-event exited predicate-change",
+    "segment start-automation",
+    "segment decline-automation hop-limit",
+];
+
+/// The segment outcomes of an operation as the coverage counts them (slice 16): each entry or exit event by direction
+/// and reason, each automation started by a segment trigger, and each decline of triggers 9 and 10 (the fixture's
+/// triggers on segment 1) by its reason. These are the `segment-event` lines and the effect lines of the operation's
+/// group, which `op_outcomes` attributes to the operation that caused them.
+pub fn segment_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
+    group
+        .iter()
+        .filter_map(|line| {
+            let line = line.as_ref();
+            let word = |key: &str| line.split_whitespace().find_map(|w| w.strip_prefix(key));
+            if line.starts_with("segment-event ") {
+                Some(format!(
+                    "segment-event {} {}",
+                    word("direction=")?,
+                    word("reason=")?
+                ))
+            } else if line.starts_with("effect start-automation ") && line.contains(" params=")
+                && line.contains("segment=s:")
+            {
+                Some("segment start-automation".to_string())
+            } else if line.starts_with("effect decline-automation trigger=9 ")
+                || line.starts_with("effect decline-automation trigger=10 ")
+            {
+                Some(format!("segment decline-automation {}", word("reason=")?))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// The scenario of case `seed` with its searches, aggregates, settings and ledger operations placed in (see
 /// `with_queries`, `with_settings` and `with_ledger`). `generate` alone is what the fixture scenarios are made of, so
 /// the fixture does not change.
 pub fn generate_reads(seed: u64) -> Scenario {
     with_triggers(
         seed,
-        with_invokes(
+        with_segments(
             seed,
-            with_ledger(
+            with_invokes(
                 seed,
-                with_settings(seed, with_queries(seed, generate(seed))),
+                with_ledger(
+                    seed,
+                    with_settings(seed, with_queries(seed, generate(seed))),
+                ),
             ),
         ),
     )
@@ -3119,6 +3428,15 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::LedgerTx(..) => "ledger-tx",
         OpKind::LedgerRead(..) => "read-ledger",
         OpKind::Invoke(..) => "invoke",
+        OpKind::Segment(ref text) => {
+            if text.starts_with("define ") {
+                "segment-define"
+            } else if text.starts_with("remove ") {
+                "segment-remove"
+            } else {
+                "segment-rebuild"
+            }
+        }
     }
 }
 
@@ -3137,6 +3455,7 @@ fn count_outcomes(scenarios: &[Scenario], lean: &[Vec<String>]) -> Outcomes {
             shapes.extend(setting_shapes(&op.render(), group));
             shapes.extend(ledger_shapes(&op.render(), group));
             shapes.extend(trigger_shapes(group));
+            shapes.extend(segment_shapes(group));
             for shape in shapes {
                 if !shape.ends_with(" ok") {
                     *counts.entry(shape).or_default() += 1;
@@ -3265,6 +3584,7 @@ fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
         | OpKind::LedgerExpire(..)
         | OpKind::LedgerTx(..)
         | OpKind::LedgerRead(..)
+        | OpKind::Segment(..)
         | OpKind::Invoke(..) => None,
     }
 }
@@ -3486,6 +3806,7 @@ pub fn check_coverage(outcomes: &Outcomes, main_source: &str) -> Result<(), Stri
     wanted.extend(LEDGER_KINDS.iter().map(|s| s.to_string()));
     wanted.extend(INVOKE_KINDS.iter().map(|s| s.to_string()));
     wanted.extend(TRIGGER_KINDS.iter().map(|s| s.to_string()));
+    wanted.extend(SEGMENT_KINDS.iter().map(|s| s.to_string()));
     let seen = |k: &str| outcomes.get(k).copied().unwrap_or(0);
     let thin: Vec<String> = wanted
         .iter()

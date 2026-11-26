@@ -409,6 +409,8 @@ fn intent_of(op: &str) -> &'static str {
         Some("ledger") => "ledger-expire",
         // An invocation of an operation (slice 14).
         Some("invoke") => "invoke",
+        // A segment definition, removal or rebuild (slice 16).
+        Some("segment") => "segment",
         _ => "unknown",
     }
 }

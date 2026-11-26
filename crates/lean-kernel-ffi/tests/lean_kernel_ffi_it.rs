@@ -7,8 +7,9 @@ use strata_lean_kernel_ffi::codec::{
     encode_ctx, encode_field_def, encode_intent, encode_member_intent, encode_policy,
     encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
     Action, Change, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, InvitationDef, LedgerLeg,
-    LedgerOwner, LedgerPosting, LedgerState, LedgerTx, Limits, MemberIntent, ObjType, OnDelete,
-    Policy, Principal, Record, Refusal, Resource, Scope, StepResult, TeamDef, Tenant, Ty, Val,
+    LedgerOwner, LedgerPosting, LedgerState, LedgerTx, Limits, MemberIntent, Membership, ObjType,
+    OnDelete, Policy, Principal, Record, Refusal, Resource, Scope, SegDirection, SegEvent,
+    SegReason, SegmentDef, StepResult, TeamDef, Tenant, TriggerDef, TriggerOn, Ty, Val,
     WfTransition, Workflow, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
 };
 use strata_lean_kernel_ffi::{step, step_reference};
@@ -96,8 +97,112 @@ fn fixture_tenant() -> Tenant {
 
 const FIXTURE_TENANT: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
-    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
+
+/// The fixture tenant with one segment, one membership and one segment event (`fxTenantSeg` in
+/// `lean/Strata/Codec/Fixtures.lean`, slice 16).
+fn fixture_tenant_segments() -> Tenant {
+    Tenant {
+        segments: vec![(
+            1,
+            SegmentDef {
+                id: 1,
+                name: "a".into(),
+                subject: 1,
+                predicate: Expr::Cmp(
+                    CmpOp::Ge,
+                    Box::new(Expr::Field(Scope::Record, 2)),
+                    Box::new(Expr::Lit(Val::Int(10))),
+                ),
+                version: 2,
+                principal_field: 1,
+                defined_by: Some(7),
+            },
+        )],
+        memberships: vec![Membership {
+            segment: 1,
+            person: 7,
+            version: 2,
+        }],
+        seg_log: vec![SegEvent {
+            segment: 1,
+            person: 7,
+            direction: SegDirection::Entered,
+            reason: SegReason::Change,
+            version: 2,
+            revision: 3,
+            hop: 1,
+            principal: Principal::User(7),
+        }],
+        ..fixture_tenant()
+    }
+}
+
+/// The Lean encoding of `fxTenantSeg`.
+const FIXTURE_TENANT_SEGMENTS: &[u8] = &[
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
+    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 97, 1, 3, 5, 1,
+    0, 2, 0, 1, 0, 10, 2, 1, 1, 7, 1, 1, 7, 2, 1, 1, 7, 0, 0, 2, 3, 1, 0, 7,
+];
+
+#[test]
+fn fixture_tenant_with_segments_matches_lean() {
+    assert_eq!(
+        encode_tenant(&fixture_tenant_segments()),
+        FIXTURE_TENANT_SEGMENTS
+    );
+    assert_eq!(
+        decode_tenant(FIXTURE_TENANT_SEGMENTS),
+        Some(fixture_tenant_segments())
+    );
+}
+
+#[test]
+fn segment_event_and_trigger_encodings_match_lean() {
+    // An exited event with a predicate-change reason and the system principal, appended to the
+    // empty segment tail of the fixture tenant (its last byte is the empty event list).
+    let exited = Tenant {
+        seg_log: vec![SegEvent {
+            segment: 1,
+            person: 7,
+            direction: SegDirection::Exited,
+            reason: SegReason::PredicateChange,
+            version: 2,
+            revision: 3,
+            hop: 1,
+            principal: Principal::System,
+        }],
+        ..fixture_tenant()
+    };
+    let mut expected = FIXTURE_TENANT[..FIXTURE_TENANT.len() - 1].to_vec();
+    expected.extend_from_slice(&[1, 1, 7, 1, 1, 2, 3, 1, 1]);
+    assert_eq!(encode_tenant(&exited), expected);
+    assert_eq!(decode_tenant(&expected), Some(exited));
+    // The trigger events `segmentEntered 1` and `segmentExited 3`.
+    for (on, bytes) in [
+        (TriggerOn::SegmentEntered(1), [4u8, 1]),
+        (TriggerOn::SegmentExited(3), [5u8, 3]),
+    ] {
+        let tenant = Tenant {
+            triggers: vec![(
+                1,
+                TriggerDef {
+                    id: 1,
+                    on,
+                    condition: None,
+                    automation: 1,
+                    paused: false,
+                    defined_by: None,
+                },
+            )],
+            ..fixture_tenant()
+        };
+        let encoded = encode_tenant(&tenant);
+        assert!(encoded.windows(2).any(|w| w == bytes));
+        assert_eq!(decode_tenant(&encoded), Some(tenant));
+    }
+}
 
 /// The fixture tenant with a role `2`, a team and an invitation (`fxTenantM` in
 /// `lean/Strata/Codec/Fixtures.lean`): team `5` labelled `ab` with member 7 holding role 2, and
@@ -133,7 +238,7 @@ fn fixture_tenant_members() -> Tenant {
 const FIXTURE_TENANT_MEMBERS: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
     128, 16, 3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1,
-    7, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    7, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 /// The fixture tenant with one workflow on its object type `1` (slice 9): id `""`, field 1, initial
@@ -171,7 +276,7 @@ const FIXTURE_TENANT_WORKFLOW: &[u8] = &[
     6, 99, 108, 111, 115, 101, 100, // to "closed"
     0, 0, // no guard, no assignments
     1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 #[test]
@@ -832,6 +937,9 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
         operations: vec![],
         triggers: vec![],
         automations: vec![],
+        segments: vec![],
+        memberships: vec![],
+        seg_log: vec![],
     }
 }
 

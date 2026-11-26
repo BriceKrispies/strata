@@ -644,8 +644,7 @@ Covered in the model for `InvokeOperation` (slice 14, `lean/Strata/Operations.le
 
 ### Segments, erasure, retention, approvals
 
-Not covered; slices 16 and 17. Segments: definition refusals (capability, name, predicate checks,
-counts, refresh interval) and membership changes with entry and exit events. `EraseSubject`: not
+Segments are covered from slice 16 (WG-5672): `lean/Strata/Segments.lean` for the decisions and the slice 16 review note for what is left out. Erasure and retention: not covered; slice 17. `EraseSubject`: not
 an owner who is a person (`Unauthorized`); it would leave no owner (`InvalidIntent`); personal
 fields cleared or held, memberships, teams and invitations stripped, sessions revoked.
 `ExpireRecords`: not the system (`Unauthorized`); unknown type (`UnknownObject`); no retention,
@@ -697,7 +696,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **13 (done, with the gaps of the slice 13 review note)** | Ledger: the posting and expiry intents, the balance reads, the fixture ledger, the theorems (`lean/Strata/LedgerModel.lean`, the slice 13 review note) | 6 |
 | **14 (done, with the gaps of the slice 14 review note)** | Operations: the declared operations, `InvokeOperation` in the kernel's check order, its steps as one atomic decision, the fixture operations; the executable kernels, the codec and the harness (`lean/Strata/Operations.lean`, the slice 14 review note) | 1 to 8, 13 |
 | 15 (done, with the gaps of the slice 15 review note) | Triggers and automations: the declarations, the authority suspension, `triggers::after_decision` in the model, the executable kernels, the codec, the harness and the h-trigger scenarios (`lean/Strata/Triggers.lean`, `lean/Strata/Events.lean`, the slice 15 section of `lean/Audit.lean`, the slice 15 review note) | 6, 9 |
-| 16 | Segments | 5, 9, 15 |
+| 16 (done, with the gaps of the slice 16 review note) | Segments: the definition (capability, name, predicate checks, the definer's read power, refresh interval, bounds), memberships, the entry and exit events of the record pass, the rebuild, the removal and the triggers on the segment log (`lean/Strata/Segments.lean`, `lean/Strata/SegmentsStep.lean`, the slice 16 review note) | 5, 9, 15 |
 | 17 | Erasure and retention | 1, 7 |
 
 ### Slice 1 review note: what was abstracted
@@ -1626,6 +1625,48 @@ Not proven: that every accepted event yields exactly one start or decline for ea
 Checked: `lake build strata_model` and `lake build Strata` build; `lake env lean Audit.lean` reports no error; the three kernels print identical text on `fixtures/scenarios.txt`; every outcome line of the 255 committed scenarios is unchanged (`fixtures/expected.txt` is not edited, and the appended `h-trigger-*` scenarios have no outcome lines in it yet); the run key of the deleted `hello` item agrees with `sha256sum` of `{"Str":"hello"}`.
 
 Not checked: the Rust sides (codec, harness, fixture batch, generator, coverage) were written by reading and are not compiled or run.
+
+### Slice 16 review note (WG-5672): what was abstracted
+
+Slice 16 is segments. The decisions are in `lean/Strata/Segments.lean` (the definition, the removal, the rebuild, the record pass and the triggers on the segment log) and `lean/Strata/SegmentsStep.lean` (the segment intents as a step). `transition` (`lean/Strata/Model.lean`) runs the record pass after each accepted step, through `acceptedT`. The executable stages are `lean/Strata/Impl/SegTransition.lean` and the accepted-step functions of `lean/Strata/Impl/Transition.lean`. The codec is in `lean/Strata/Codec/Boundary.lean` (segment definitions, memberships and events, the trigger kinds `4` and `5`, and a trailing tenant component that holds the segments, memberships and log). The proofs are in the slice 16 section of `lean/Audit.lean`. The harness is `lean/Main.lean` (segment operations and their printing), and the fixture is `lean/Strata/Fixture.lean`: a profile type (id `20`, principal field `1`, score `2`), the segment `high scorers` (score at least 10, defined by the owner), the segments-define capability granted to the editor role, automation `5` (run as the owner), and triggers `9` and `10` on the entry and exit of segment `1`.
+
+Abstractions (each is a difference from the kernel, by design):
+
+1. **No clock.** The model's expressions read no time, so a segment has no refresh interval and no wake row; a refresh interval is refused (SEG-020). The time of an event is not bound (`param.at`).
+2. **No reference hop.** The model's expression language has no `through`, so a predicate reads the person's own record only. The kernel's one-hop referrer planning does not arise.
+3. **No read rules, no member visibility.** The definer's power is the unconditional record-level read decision (`Tenant.holdsRead`). Who may list a segment, and the suspension of a segment whose definer lost a permission, are not modelled.
+4. **One step per decision.** A decision evaluates every person the kernel's plan names. The kernel's batches (at most `BATCH` persons per transaction) and their continuations are not modelled; the harness keeps every profile count below the batch size.
+5. **Erasure not modelled** (slice 17). A role does not enter a predicate of the model's fragment (`principal` is the person's own id), so a change of roles plans no segment change.
+6. **Persons are `p<n>`.** The principal field holds the string `p<n>`; another string names no person in the model.
+7. **Events.** The correlation of an event is not modelled. A trigger's `principal` is null for an automation, as for record triggers (slice 15).
+8. **Trimming.** A segment name is trimmed of ASCII whitespace, as the model's members are (`trimWs`); the kernel trims Unicode whitespace.
+9. **Schema changes (SEG-006) not modelled.** The kernel refuses a schema change that removes or retypes a field a segment names. The model's schema changes do not check it, so the generator must not change the profile type's schema (stated in the generator; the coverage does not include such changes).
+10. **Segment numbers.** Segments are numbers in the model. The harness maps each number to a kernel `SegmentId` through a fixed table whose ids increase with the number, so the kernel's order (by id) is the model's order (by number).
+11. **Definitions are not printed.** A segment's definition shows only through its memberships and events; the state dump prints memberships, not definitions.
+12. **The predicate fragment.** The predicate language is the model's expression language. The kernel's `old` and `new` scopes, parameters, and the time are refused at definition, as SEG-002 and SEG-003 require (`predicateOk`).
+
+Kernel differences. The model found none that needed a kernel change. No Rust kernel code was edited.
+
+What is proven (`lean/Audit.lean`, the slice 16 section):
+
+- **Definition refusals**, each under the checks before it in the kernel's order: no capability (`define_unauthorized_without_capability`); a blank name (`define_blank_name_refused`); a name over 120 characters (`define_long_name_refused`); a name another segment holds (`define_name_taken_refused`); a changed subject type or principal field (`define_subject_change_refused`); a principal field that is not a required unique string (`define_principal_field_refused`); a predicate the checks refuse (`define_predicate_refused`); a definer without the read power (`define_definer_unauthorized`); a refresh interval (`define_refresh_refused`); the bound of 100 segments (`define_segment_limit_refused`); the bound of 25 segments per object type (`define_object_limit_refused`).
+- **Membership of a pair.** After a decision on a pair, the person is in the segment exactly when the decision is a member (`segPair_member`); a pair does not change the row of another pair (`segPair_other`, `segPairs_other`); over a list of persons the row of each person is its decision (`segPairs_member`).
+- **Entry and exit events, exactly.** A decided pair appends an entry exactly when the person becomes a member and was not one (`segPair_entered_iff`), and an exit exactly when a member stops (`segPair_exited_iff`). Over a segment's persons in order, without repeats, the same holds for the segment's whole step (`fold_entered_iff`, `fold_exited_iff`). An evaluation that fails changes nothing (SEG-030, the `none` case).
+- **Rebuild.** After a rebuild, a person with a subject record is a member exactly when the predicate holds on that record (`rebuild_member_iff`). This assumes that the principal field identifies the record (`segPersonRecord` finds it) and that the segment's key is its id (`hsid`), both true of every state the model reaches through `define`.
+- **Removal.** A removal writes no event and no effect (`segTransition_remove_quiet`), and leaves no membership of the removed segment (`segRemove_memberships`).
+- **Triggers on the segment log.** A paused trigger decides nothing (`segTrigger_paused_no_effect`); a missing automation declines `automationRemoved` (`segTrigger_missing_automation_declined`); a suspended one declines `runAsSuspended` (`segTrigger_suspended_declined`); a trigger on entries matches exactly the entries into its segment (`segment_trigger_matches_entries`).
+
+What is not proven. The record pass over all segments (`segRecordPass`, through `segAfterRecords` and `transition`) is not yet composed from the per-segment step: each segment's step is proven, and the composition needs the segments' ids to be distinct and the steps for other segments to leave a segment's rows and events alone. The membership and event theorems above are about one segment's step. Not proven: the invariant that every membership names a defined segment; that each matching trigger yields exactly one effect (the hop-limit and condition declines are defined but their theorems are not stated); the trigger decisions for a present, active automation with a condition; the executable stages' agreement on segment events beyond the three-mode run.
+
+What was checked. `lake build` builds the library and `strata_model`, with no `sorry`, no `admit`, no new axiom and no `native_decide`. `lake env lean Audit.lean` reports no error, and every new theorem depends only on `propext`, `Classical.choice` and `Quot.sound`. `strata_model`, with `--impl` and `--indexed`, prints the same text on `fixtures/scenarios.txt`. Every committed scenario block keeps its outcome lines, checked block by block against `fixtures/expected.txt` (264 of 264). The `h-segment-*` scenarios are appended to `fixtures/scenarios.txt`; they have no lines in `expected.txt`, which is not edited. The new outcomes of the `h-segment-*` scenarios were read from the model and checked by hand against the rules above.
+
+Not checked: the Rust sides (the codec mirror in `crates/lean-kernel-ffi`, the harness, the generator and the coverage kinds in `crates/verification`) were written by reading and are not compiled or run here. `to_run` below gives the commands and their expected results.
+
+to_run:
+
+- `cargo test -p strata-lean-kernel-ffi --test lean_kernel_ffi_it`: the codec fixtures, including `fixture_tenant_with_segments_matches_lean`, must pass; the tenant constants now end with three zero bytes (the three empty lists).
+- `cargo test -p strata-verification --test verification_it`: the Lean harness on `fixtures/scenarios.txt` must print the same text as the model for every `h-segment-*` scenario (the model's output for them is the file `lean` produced by `strata_model fixtures/scenarios.txt`); the blessing of `expected.txt` is not done here.
+- `cargo test -p strata-verification --test verification_slow`: the generated million-operation run; the segment coverage kinds must each be reached. Its expected result is no difference between the model and the kernel other than those named in a review note.
 
 ## What covers the rest
 

@@ -60,6 +60,10 @@
 //! | `read <t> <p> ledger <unit> <owner> [scope=<s>] [own]` (slice 13) | `ledger::read_balance`; `err <kind>`, or `ok`, the balance and the sequence number |
 //! | `invoke @<now> <operation> [key=<k>] [<input>=<value> ..]` after `op <t> <p>` (slice 14) | `Intent::InvokeOperation` in a context whose `now` is `<now>` and whose `idempotency_key` stays none; `key=<k>` is the intent's idempotency key (empty when absent) and each other token an input, its value read as a field value is |
 //! | the fixture operations (slice 14) | `fixture_operations`: `note`, `note_count`, `retag`, `drop`, `grant` and `note_grant`, defined on tenants `t1` and `t2` in the fixture batch that defines the settings (so no further revision or event) |
+//! | type `20`, the profiles (slice 16) | `profile`: `f01: string, required, unique` (the principal field), `f02: int`; printed in the state only while it holds a record |
+//! | `segment define <n> <name> <type> <field> <refresh\|-> <expr>`, `segment remove <n>`, `segment rebuild <n>` (slice 16) | `segments::define`, `segments::remove`, and the rebuild pass over every person of the subject type (decided with the reason `predicate-change`); the segment tables are one `SegmentTables` a tenant, and an accepted record step is followed by `plan_change`, `targets`, `decide_write` and `apply` (batches stripped: the model has none) |
+//! | segment number `n` (slice 16) | a fixed `SegmentId` per tenant and number (`segment_ids`), increasing with `n`, so the kernel's order of the segments by id is the model's by number |
+//! | segment 1, the editor's `segments-define`, automation 5, triggers 9 and 10 (slice 16) | `high scorers` over the profiles (`f02 >= 10`, defined by the owner after the schema batches); the capability on the editor role; automation `w5` run as the owner; triggers `t9` and `t10` on its entry and exit; the schema batch adds no revision or event |
 //! | the fixture ledger (slice 13) | `fixture_ledger_decls` on tenants `t1` and `t2`, set on the schema after the fixture batch (no event) |
 //!
 //! # The Main.lean protocol
@@ -115,8 +119,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use strata_kernel::rules::Lookup;
 use strata_kernel::search::{SearchRequest, SearchResult};
+use strata_kernel::segments::{
+    Definition, Locate, Occasion, SegmentEvent, SegmentId, SegmentKey, SegmentReason,
+    SegmentTables, Target,
+};
 use strata_kernel::triggers::{AutomationDecline, AutomationStart};
 use strata_kernel::types::{PageCursor, QueryId};
 use strata_kernel::*;
@@ -312,7 +321,36 @@ fn object_of(ty: u64) -> ObjectTypeId {
         1 => item(),
         2 => part(),
         4 => ticket(),
+        20 => profile(),
         n => id(format!("type{n}")),
+    }
+}
+
+/// The object type of the profiles, the model's type `20` (slice 16): the people a segment groups. The generator
+/// never writes a schema change that touches it or its fields, since the model does not check SEG-006 on a schema
+/// change (the kernel refuses a change that removes or retypes a field a segment names).
+fn profile() -> ObjectTypeId {
+    id("profile".to_string())
+}
+
+/// Field `n` of a profile: `1` a required unique string (the principal field, `p<n>`), `2` an optional integer (the
+/// score).
+fn profile_field_def(n: u64) -> FieldDef {
+    FieldDef {
+        id: field_id(n),
+        label: format!("f{n}"),
+        ty: if n == 1 {
+            FieldType::Str
+        } else {
+            FieldType::Int
+        },
+        required: n == 1,
+        unique: n == 1,
+        default: None,
+        read: None,
+        personal: None,
+        normalise: None,
+        computed: None,
     }
 }
 
@@ -325,6 +363,8 @@ fn fixture_fields(object: &ObjectTypeId) -> Vec<u64> {
     } else if *object == ticket() {
         vec![1, 2, 3]
     } else {
+        // The profiles (type 20) have none, as the model's `fieldsOf` has none: an `update` names the fields it
+        // changes, as a patch does, and the generator names both.
         Vec::new()
     }
 }
@@ -1916,11 +1956,16 @@ fn fixture_automation_changes(owner: u64) -> Vec<SchemaChange> {
             None,
             Some(AutomationState::Draft),
         )),
+        // Automation 5 (slice 16) runs as the owner role, for the triggers on the entries and exits of segment 1.
+        SchemaChange::DefineAutomation(fixture_automation(5, owner, &[0], None, None)),
     ]
 }
 
-/// The triggers of the fixture (slice 15), as the model's `fixtureTriggers` lists them.
-fn fixture_trigger_changes(owner: u64) -> Vec<SchemaChange> {
+/// The triggers of the fixture (slice 15), as the model's `fixtureTriggers` lists them. Triggers 9 and 10 (slice 16)
+/// fire on the entry and the exit of segment 1 of `tenant`; the kernel does not check the segment reference of a
+/// trigger, so the segment may be defined after the schema batch.
+fn fixture_trigger_changes(owner: u64, tenant: &TenantId) -> Vec<SchemaChange> {
+    let first = segment_id(tenant, 1).expect("segment 1 has an id");
     let hop_positive = Expr::Cmp(
         CmpOp::Gt,
         Box::new(Expr::Param("hop".into())),
@@ -2000,7 +2045,85 @@ fn fixture_trigger_changes(owner: u64) -> Vec<SchemaChange> {
             None,
             owner,
         )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            9,
+            TriggerEvent::SegmentEntered { segment: first },
+            None,
+            5,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            10,
+            TriggerEvent::SegmentExited { segment: first },
+            None,
+            5,
+            None,
+            owner,
+        )),
     ]
+}
+
+/// How many numbered segments the harness has ids for.
+const SEGMENT_NUMBERS: u64 = 100;
+
+/// The slice of the id space a segment number owns: the id's top 64 bits scaled to `0..SEGMENT_NUMBERS`.
+fn segment_slot(segment: SegmentId) -> u64 {
+    let high = (segment.0.as_u128() >> 64) as u64;
+    ((u128::from(high) * u128::from(SEGMENT_NUMBERS)) >> 64) as u64
+}
+
+/// The ids of segments `1..=SEGMENT_NUMBERS` of a tenant. Number `n` takes the first of the keys
+/// `harness-seg-<n>-<k>` (`k` from zero) whose derived id lies in the `n`th slice of the id space, so the ids rise
+/// with the numbers, and the kernel's order of the segments by id is the model's by number.
+fn numbered_segment_ids(tenant: &TenantId) -> Vec<SegmentId> {
+    (1..=SEGMENT_NUMBERS)
+        .map(|n| {
+            (0u64..)
+                .map(|k| {
+                    strata_kernel::segments::derive_segment_id(
+                        tenant,
+                        &SegmentKey(format!("harness-seg-{n}-{k}")),
+                    )
+                })
+                .find(|candidate| segment_slot(*candidate) == n - 1)
+                .expect("a key in each slice exists")
+        })
+        .collect()
+}
+
+/// The segment ids of tenant `t1`, `t2` or `t3`, by number minus one (empty for another tenant).
+fn segment_ids(tenant: &TenantId) -> &'static [SegmentId] {
+    static TABLE: OnceLock<BTreeMap<String, Vec<SegmentId>>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        ["t1", "t2", "t3"]
+            .iter()
+            .map(|name| {
+                (
+                    name.to_string(),
+                    numbered_segment_ids(&id::<TenantId>(name.to_string())),
+                )
+            })
+            .collect()
+    });
+    match table.get(tenant.as_str()) {
+        Some(ids) => ids.as_slice(),
+        None => &[],
+    }
+}
+
+/// The id of segment number `n` of a tenant.
+fn segment_id(tenant: &TenantId, n: u64) -> Option<SegmentId> {
+    let index = usize::try_from(n.checked_sub(1)?).ok()?;
+    segment_ids(tenant).get(index).copied()
+}
+
+/// The number of a segment id of a tenant: the inverse of [`segment_id`].
+fn segment_number(tenant: &TenantId, segment: SegmentId) -> Option<u64> {
+    segment_ids(tenant)
+        .iter()
+        .position(|candidate| *candidate == segment)
+        .map(|index| index as u64 + 1)
 }
 
 /// The kernel world that corresponds to the model's `initialWorld`.
@@ -2063,6 +2186,13 @@ fn initial_world() -> World {
         let mut changes = vec![
             SchemaChange::DefineRole(role("editor")),
             SchemaChange::DefineRole(role("writer")),
+            // The editor may define, remove and rebuild segments (slice 16, the model's `grants`).
+            SchemaChange::DefineRolePermissions {
+                role: id("editor".to_string()),
+                permissions: vec![Permission::Capability(
+                    strata_kernel::segments::SEGMENTS_DEFINE.to_string(),
+                )],
+            },
             SchemaChange::DefineObject {
                 id: item(),
                 label: "Item".into(),
@@ -2100,6 +2230,15 @@ fn initial_world() -> World {
             field: ticket_field_def(n),
         }));
         changes.push(SchemaChange::DefineWorkflow(ticket_workflow()));
+        // The profiles (the model's type `20`, slice 16): the people a segment groups.
+        changes.push(SchemaChange::DefineObject {
+            id: profile(),
+            label: "Profile".into(),
+        });
+        changes.extend([1u64, 2].map(|n| SchemaChange::DefineField {
+            object: profile(),
+            field: profile_field_def(n),
+        }));
         changes.extend([
             policy(
                 item(),
@@ -2211,7 +2350,7 @@ fn initial_world() -> World {
         changes.extend(fixture_operations());
         // The automations, then the triggers that start them (slice 15), in the same batch.
         changes.extend(fixture_automation_changes(owner));
-        changes.extend(fixture_trigger_changes(owner));
+        changes.extend(fixture_trigger_changes(owner, &tenant));
         world = run(
             &world,
             principal(owner),
@@ -2253,6 +2392,423 @@ fn initial_world() -> World {
         set_fixture_ledger(&mut world, &tenant);
     }
     world
+}
+
+/// The segment tables of the fixture tenants (slice 16): segment 1, `high scorers`, defined by the owner after the
+/// schema batches with the kernel's `define`, its write applied without the batches (the model has none). It adds no
+/// event, and the tenant's revision, event sequence and schema version stay the fixture's.
+fn initial_segments(world: &World) -> BTreeMap<TenantId, SegmentTables> {
+    let mut tables = BTreeMap::new();
+    for n in [1u64, 2] {
+        let tenant_id: TenantId = id(format!("t{n}"));
+        let state = world
+            .tenants
+            .get(&tenant_id)
+            .expect("the fixture tenant exists");
+        let ctx = Context {
+            tenant: tenant_id.clone(),
+            principal: principal(n * 100),
+            session: None,
+            now: Timestamp(500),
+            correlation: "fixture".into(),
+            verified_address: None,
+            idempotency_key: None,
+            language: None,
+            hop: None,
+            agent: None,
+        };
+        let definition = Definition {
+            id: segment_id(&tenant_id, 1).expect("segment 1 has an id"),
+            name: "high scorers".to_string(),
+            subject: profile(),
+            predicate: Expr::Cmp(
+                CmpOp::Ge,
+                Box::new(Expr::Var(Scope::Record, field_id(2).as_str().to_string())),
+                Box::new(Expr::Lit(Value::Int(10))),
+            ),
+            refresh_seconds: None,
+            principal_field: field_id(1),
+            visible_to_members: false,
+        };
+        let mut write = strata_kernel::segments::define(state, &[], definition, &ctx)
+            .expect("the fixture segment defines")
+            .write;
+        write.clear_batches.clear();
+        write.batches.clear();
+        let mut table = SegmentTables::default();
+        table
+            .apply(&write)
+            .expect("the fixture segment is applied");
+        tables.insert(tenant_id, table);
+    }
+    tables
+}
+
+/// A segment intent of a scenario (slice 16), as the model's `SegIntent`.
+enum SegmentOp {
+    Define {
+        number: u64,
+        name: String,
+        subject: u64,
+        principal_field: u64,
+        refresh: Option<u32>,
+        predicate: Expr,
+    },
+    Remove(u64),
+    Rebuild(u64),
+}
+
+/// A literal token of a segment expression: `n`, `i:<int>`, `s:<text>`, `b:1`, `b:0` or `r:<id>` (nothing else).
+fn segment_literal(token: &str) -> Option<Value> {
+    if token == "n" {
+        return Some(Value::Null);
+    }
+    match token.split_once(':') {
+        Some(("i", n)) => n.parse().ok().map(Value::Int),
+        Some(("s", text)) => Some(Value::Str(text.to_string())),
+        Some(("b", flag)) => match flag {
+            "1" => Some(Value::Bool(true)),
+            "0" => Some(Value::Bool(false)),
+            _ => None,
+        },
+        Some(("r", n)) => n.parse().ok().map(|n| Value::Ref(RecordId(n))),
+        _ => None,
+    }
+}
+
+/// A segment expression in prefix form and the tokens after it (the model's `parseSegExpr`): `f<n>` reads field `n`
+/// of the record, `o<n>` and `w<n>` of the old and the new record, `c` is the creator, `prin` the principal,
+/// `p:<name>` a parameter, a literal is a value token; `eq ne lt le gt ge and or` take two operands, `not isnull` one.
+fn parse_segment_expr<'a, 'b>(tokens: &'b [&'a str]) -> Option<(Expr, &'b [&'a str])> {
+    let (token, rest) = tokens.split_first()?;
+    let name = |digits: &str| -> Option<String> {
+        Some(field_id(digits.parse().ok()?).as_str().to_string())
+    };
+    match *token {
+        "prin" => Some((Expr::Principal, rest)),
+        "c" => Some((
+            Expr::Var(Scope::Record, "$created_by".to_string()),
+            rest,
+        )),
+        "not" => {
+            let (a, rest) = parse_segment_expr(rest)?;
+            Some((Expr::Not(Box::new(a)), rest))
+        }
+        "isnull" => {
+            let (a, rest) = parse_segment_expr(rest)?;
+            Some((Expr::IsNull(Box::new(a)), rest))
+        }
+        "and" | "or" | "eq" | "ne" | "lt" | "le" | "gt" | "ge" => {
+            let (a, rest) = parse_segment_expr(rest)?;
+            let (b, rest) = parse_segment_expr(rest)?;
+            let compare = |op: CmpOp| Expr::Cmp(op, Box::new(a.clone()), Box::new(b.clone()));
+            let expr = match *token {
+                "and" => Expr::And(vec![a.clone(), b.clone()]),
+                "or" => Expr::Or(vec![a.clone(), b.clone()]),
+                "eq" => compare(CmpOp::Eq),
+                "ne" => compare(CmpOp::Ne),
+                "lt" => compare(CmpOp::Lt),
+                "le" => compare(CmpOp::Le),
+                "gt" => compare(CmpOp::Gt),
+                _ => compare(CmpOp::Ge),
+            };
+            Some((expr, rest))
+        }
+        other => {
+            if let Some(digits) = other.strip_prefix('f') {
+                Some((Expr::Var(Scope::Record, name(digits)?), rest))
+            } else if let Some(digits) = other.strip_prefix('o') {
+                Some((Expr::Var(Scope::Old, name(digits)?), rest))
+            } else if let Some(digits) = other.strip_prefix('w') {
+                Some((Expr::Var(Scope::New, name(digits)?), rest))
+            } else if let Some(parameter) = other.strip_prefix("p:") {
+                Some((Expr::Param(parameter.to_string()), rest))
+            } else {
+                Some((Expr::Lit(segment_literal(other)?), rest))
+            }
+        }
+    }
+}
+
+/// A segment intent, as the model's `parseSegOp` reads what follows `op <t> <p> [hop=<n>]`: `segment define <n> <name>
+/// <type> <principal field> <refresh|-> <expression>` (a name's spaces are `_`), `segment remove <n>` or `segment
+/// rebuild <n>`.
+fn parse_segment_op(tokens: &[&str]) -> Option<SegmentOp> {
+    match tokens {
+        ["segment", "define", number, name, subject, field, refresh, expression @ ..] => {
+            let refresh = if *refresh == "-" {
+                None
+            } else {
+                Some(refresh.parse::<u32>().ok()?)
+            };
+            let (predicate, left) = parse_segment_expr(expression)?;
+            if !left.is_empty() {
+                return None;
+            }
+            Some(SegmentOp::Define {
+                number: number.parse().ok()?,
+                name: name.replace('_', " "),
+                subject: subject.parse().ok()?,
+                principal_field: field.parse().ok()?,
+                refresh,
+                predicate,
+            })
+        }
+        ["segment", "remove", number] => Some(SegmentOp::Remove(number.parse().ok()?)),
+        ["segment", "rebuild", number] => Some(SegmentOp::Rebuild(number.parse().ok()?)),
+        _ => None,
+    }
+}
+
+/// Decide `targets` on the world's state and write the result to the tables, as the kernel's commit does (slice 16):
+/// the rows of the pairs, `decide_write` with the reason, the hop of the context and the revision, the batch fields
+/// of the write stripped (the model has no batches), then `check` and `apply`. The events are in the tables' log.
+fn decide_segments(
+    world: &World,
+    tables: &mut SegmentTables,
+    ctx: &Context,
+    targets: &[Target],
+    reason: SegmentReason,
+) {
+    if targets.is_empty() {
+        return;
+    }
+    let Some(tenant) = world.tenants.get(&ctx.tenant) else {
+        return;
+    };
+    let catalog = tables.catalog();
+    let rows = tables.rows(&strata_kernel::segments::pairs(targets));
+    let occasion = Occasion {
+        reason,
+        hop: u64::from(ctx.hop.unwrap_or(0)),
+        revision: tenant.revision,
+        now: ctx.now,
+    };
+    let mut decided = strata_kernel::segments::decide_write(
+        &catalog,
+        &world.state(&ctx.tenant),
+        targets,
+        &rows,
+        &occasion,
+        ctx,
+    )
+    .expect("the segment decision is made on the complete state");
+    decided.write.clear_batches.clear();
+    decided.write.batches.clear();
+    tables
+        .check(&decided.write)
+        .expect("the segment write rests on the tables");
+    tables
+        .apply(&decided.write)
+        .expect("the segment write is applied");
+}
+
+/// The segment decisions after an accepted step (slice 16, the model's `segAfterRecords`): the change plan of its
+/// events, the targets (no referenced records, the model has no reference hop), and their decision.
+fn segment_record_pass(
+    world: &World,
+    tables: &mut SegmentTables,
+    ctx: &Context,
+    events: &[DomainEvent],
+) {
+    let Some(tenant) = world.tenants.get(&ctx.tenant) else {
+        return;
+    };
+    let catalog = tables.catalog();
+    if catalog.is_empty() {
+        return;
+    }
+    let plan = strata_kernel::segments::plan_change(&catalog, &tenant.schema, events);
+    let changed = strata_kernel::segments::changes(events);
+    let (targets, _batches) = strata_kernel::segments::targets(
+        &plan,
+        &catalog,
+        &[],
+        &strata_kernel::segments::after_map(&changed),
+        u64::from(ctx.hop.unwrap_or(0)),
+        ctx.now,
+    );
+    decide_segments(world, tables, ctx, &targets, SegmentReason::Change);
+}
+
+/// The rebuild of a segment (slice 16, the model's `segRebuildPass`): every subject record of the segment's subject
+/// type in record id order, as its person (the first of two records of one person only), decided with the reason
+/// `predicate-change`. A segment the tenant does not hold rebuilds nothing.
+fn segment_rebuild_pass(
+    world: &World,
+    tables: &mut SegmentTables,
+    ctx: &Context,
+    segment: SegmentId,
+) {
+    let Some(tenant) = world.tenants.get(&ctx.tenant) else {
+        return;
+    };
+    let Some(held) = tables.segments.get(&segment).cloned() else {
+        return;
+    };
+    let mut seen = BTreeSet::new();
+    let mut targets = Vec::new();
+    for record in tenant.records_of(&held.subject) {
+        let Some(person) = strata_kernel::segments::person_of(record, &held.principal_field)
+        else {
+            continue;
+        };
+        if seen.insert(person.clone()) {
+            targets.push(Target {
+                segment,
+                person,
+                locate: Locate::Id(record.id),
+            });
+        }
+    }
+    decide_segments(world, tables, ctx, &targets, SegmentReason::PredicateChange);
+}
+
+/// One entry or exit event of the segment log as the model's `showSegEvent` prints it: the tenant, the position in the
+/// log, the segment's number, the person, the direction, the reason, the version, the revision, the hop and the
+/// principal.
+fn segment_event_line(tenant: &str, position: usize, logged: &SegmentEvent) -> String {
+    let event = &logged.event;
+    let number = segment_number(&logged.tenant, event.segment)
+        .expect("a logged segment is one the harness numbers");
+    format!(
+        "segment-event {tenant} seq={position} seg={number} person={} direction={} reason={} version={} revision={} hop={} by={}",
+        event.person.as_str(),
+        event.direction.as_str(),
+        event.reason.as_str(),
+        event.version,
+        event.revision.0,
+        event.hop,
+        principal_text(&logged.principal)
+    )
+}
+
+/// The lines of the segment events a step appended to the log (from index `first`), and the effect lines of the
+/// triggers on them, in the order of the pump (`segment_pump::decide_all`): each event in position order, and for
+/// each the triggers that match it in trigger id order.
+fn segment_report(
+    world: &World,
+    tables: &SegmentTables,
+    ctx: &Context,
+    tenant: &str,
+    first: usize,
+) -> (Vec<String>, Vec<String>) {
+    let events: Vec<String> = tables
+        .events
+        .iter()
+        .enumerate()
+        .skip(first)
+        .map(|(index, logged)| segment_event_line(tenant, index + 1, logged))
+        .collect();
+    let mut effects = Vec::new();
+    let state = world.state(&ctx.tenant);
+    let Some(stored) = state.tenant.as_deref() else {
+        return (events, effects);
+    };
+    let lookup = Lookup {
+        tenant: stored,
+        coverage: &state.coverage,
+    };
+    let catalog = tables.catalog();
+    let mut triggers: Vec<&TriggerDef> = stored
+        .schema
+        .triggers
+        .iter()
+        .flat_map(|all| all.values())
+        .collect();
+    triggers.sort_by_key(|trigger| trigger_number(&trigger.id));
+    for (index, logged) in tables.events.iter().enumerate().skip(first) {
+        let position = index as u64 + 1;
+        let Some(segment) = catalog.iter().find(|s| s.id == logged.event.segment) else {
+            continue;
+        };
+        for trigger in &triggers {
+            if !strata_kernel::segment_flow::matches(&trigger.on, &logged.event) {
+                continue;
+            }
+            let subject =
+                strata_kernel::segment_flow::subject_of(&lookup, segment, &logged.event.person)
+                    .expect("the subject of a segment event is looked up on the complete state");
+            let effect = strata_kernel::segment_flow::decide(
+                lookup,
+                ctx,
+                position,
+                logged,
+                subject.map(|record| &**record),
+                trigger,
+            )
+            .expect("a segment trigger is decided on the complete state");
+            if let Some(text) = effect.and_then(|effect| effect_text(&effect, &ctx.tenant)) {
+                effects.push(text);
+            }
+        }
+    }
+    (events, effects)
+}
+
+/// The lines of a segment intent (slice 16): `err <kind>`, or `ok`, the tenant's revision, the segment events it
+/// appended and the effects of the triggers on them. `None` for a segment number the harness has no id for.
+fn run_segment_op(
+    world: &World,
+    tables: &mut BTreeMap<TenantId, SegmentTables>,
+    ctx: &Context,
+    tenant: &str,
+    op: SegmentOp,
+) -> Option<Vec<String>> {
+    let Some(stored) = world.tenants.get(&ctx.tenant) else {
+        return Some(vec!["err no_tenant".to_string()]);
+    };
+    let table = tables.entry(ctx.tenant.clone()).or_default();
+    let first = table.events.len();
+    match op {
+        SegmentOp::Define {
+            number,
+            name,
+            subject,
+            principal_field,
+            refresh,
+            predicate,
+        } => {
+            let definition = Definition {
+                id: segment_id(&ctx.tenant, number)?,
+                name,
+                subject: object_of(subject),
+                predicate,
+                refresh_seconds: refresh,
+                principal_field: field_id(principal_field),
+                visible_to_members: false,
+            };
+            match strata_kernel::segments::define(stored, &table.catalog(), definition, ctx) {
+                Err(error) => return Some(vec![format!("err {}", show_error(error.kind))]),
+                Ok(defined) => {
+                    let mut write = defined.write;
+                    write.clear_batches.clear();
+                    write.batches.clear();
+                    table
+                        .apply(&write)
+                        .expect("an accepted definition is applied");
+                }
+            }
+        }
+        SegmentOp::Remove(number) => {
+            let segment = segment_id(&ctx.tenant, number)?;
+            match strata_kernel::segments::remove(stored, &table.catalog(), segment, ctx) {
+                Err(error) => return Some(vec![format!("err {}", show_error(error.kind))]),
+                Ok(write) => table
+                    .apply(&write)
+                    .expect("an accepted removal is applied"),
+            }
+        }
+        SegmentOp::Rebuild(number) => {
+            let segment = segment_id(&ctx.tenant, number)?;
+            segment_rebuild_pass(world, table, ctx, segment);
+        }
+    }
+    let (events, effects) = segment_report(world, table, ctx, tenant, first);
+    let mut lines = vec!["ok".to_string(), format!("revision {}", stored.revision.0)];
+    lines.extend(events);
+    lines.extend(effects);
+    Some(lines)
 }
 
 /// A scalar, reference or `n`: the element of a list, or a whole value. Garbage reads as `null`,
@@ -2573,11 +3129,12 @@ fn setting_read_lines(world: &World, ctx: &Context, name: &str) -> Vec<String> {
     }
 }
 
-fn show_world(world: &World) -> Vec<String> {
+fn show_world(world: &World, segments: &BTreeMap<TenantId, SegmentTables>) -> Vec<String> {
     let mut out = Vec::new();
     // Tenants 1 and 2 are always printed, `absent` when they are; tenant 3 only when a creation made it.
     for n in [1u64, 2, 3] {
-        let Some(tenant) = world.tenants.get(&id::<TenantId>(format!("t{n}"))) else {
+        let tenant_id: TenantId = id(format!("t{n}"));
+        let Some(tenant) = world.tenants.get(&tenant_id) else {
             if n != 3 {
                 out.push(format!("tenant {n} absent"));
             }
@@ -2631,6 +3188,10 @@ fn show_world(world: &World) -> Vec<String> {
             .objects
             .keys()
             .filter(|object| !["item", "part", "ticket"].contains(&object.as_str()))
+            // The profiles (type 20, slice 16) print only while they hold a record, as the tickets do.
+            .filter(|object| {
+                object.as_str() != "profile" || tenant.records_of(object).next().is_some()
+            })
             .map(|object| (object_number(object), object))
             .collect();
         defined.sort_unstable_by_key(|(number, _)| *number);
@@ -2653,6 +3214,19 @@ fn show_world(world: &World) -> Vec<String> {
         out.extend(setting_lines(n, tenant));
         // The ledger accounts and their entries (slice 13), last, as the model prints them.
         out.extend(ledger_lines(n, tenant));
+        // The memberships of segments (slice 16), last, sorted by segment number and then by person, as the model
+        // prints them: the tables' order is by segment id (which rises with the number) and then by person.
+        if let Some(table) = segments.get(&tenant_id) {
+            for membership in table.memberships.values() {
+                let number = segment_number(&tenant_id, membership.segment)
+                    .expect("a member of a segment the harness numbers");
+                out.push(format!(
+                    "segment-member {n} seg={number} person={} version={}",
+                    membership.person.as_str(),
+                    membership.version
+                ));
+            }
+        }
     }
     out
 }
@@ -2735,10 +3309,11 @@ fn object_number(object: &ObjectTypeId) -> u64 {
         "item" => 1,
         "part" => 2,
         "ticket" => 4,
+        "profile" => 20,
         other => other
             .strip_prefix("type")
             .and_then(|n| n.parse().ok())
-            .expect("fixture object types are item, part, ticket or type<number>"),
+            .expect("fixture object types are item, part, ticket, profile or type<number>"),
     }
 }
 
@@ -2946,6 +3521,7 @@ pub fn outcome_lines(output: &str) -> String {
         .filter(|line| {
             !(line.starts_with("revision ")
                 || line.starts_with("event ")
+                || line.starts_with("segment-event ")
                 || line.starts_with("effect "))
         })
         .collect();
@@ -3112,6 +3688,7 @@ fn type_number(object: &ObjectTypeId) -> u64 {
         "item" => 1,
         "part" => 2,
         "ticket" => 4,
+        "profile" => 20,
         other => other
             .strip_prefix("type")
             .and_then(|number| number.parse().ok())
@@ -3209,12 +3786,24 @@ fn aggregate_lines(result: &Result<AggregateResult, DomainError>) -> Vec<String>
 /// hop, the automation as the caused-by principal, the definer (`p<n>`, or `-`), the definition version, the
 /// run key (or `-`) and the parameters by name (or `-`). The parameter `at` is not bound by the model, so it
 /// is left out.
-fn start_text(start: &AutomationStart) -> String {
+fn start_text(start: &AutomationStart, tenant: &TenantId) -> String {
     let params: Vec<String> = start
         .params
         .iter()
         .filter(|(name, _)| name.as_str() != "at")
-        .map(|(name, value)| format!("{name}={}", show_value(value)))
+        .map(|(name, value)| match (name.as_str(), value) {
+            // A segment event's `segment` parameter is the segment's id, which the model names by its number.
+            ("segment", Value::Str(text)) => {
+                let number = segment_ids(tenant)
+                    .iter()
+                    .position(|candidate| candidate.to_string() == *text);
+                match number {
+                    Some(index) => format!("{name}=s:{}", index + 1),
+                    None => format!("{name}={}", show_value(value)),
+                }
+            }
+            _ => format!("{name}={}", show_value(value)),
+        })
         .collect();
     let params = if params.is_empty() {
         "-".to_string()
@@ -3252,10 +3841,10 @@ fn decline_text(decline: &AutomationDecline) -> String {
 
 /// The output line of a kernel effect that the model prints: `effect publish` for a publish, and the run or
 /// the decline of a trigger. The kernel's other effects are not in the model and print nothing.
-fn effect_text(effect: &Effect) -> Option<String> {
+fn effect_text(effect: &Effect, tenant: &TenantId) -> Option<String> {
     match effect {
         Effect::Publish { seq } => Some(format!("effect publish {seq}")),
-        Effect::StartAutomation(start) => Some(start_text(start)),
+        Effect::StartAutomation(start) => Some(start_text(start, tenant)),
         Effect::DeclineAutomation(decline) => Some(decline_text(decline)),
         _ => None,
     }
@@ -3264,7 +3853,10 @@ fn effect_text(effect: &Effect) -> Option<String> {
 /// Run a scenario file through the Rust kernel and print what the Lean program prints.
 pub fn kernel_output(scenarios: &str) -> String {
     let initial = initial_world();
+    let initial_tables = initial_segments(&initial);
     let mut world = initial.clone();
+    // The segment tables of each tenant (slice 16): the storage block the kernel's segment decisions read and write.
+    let mut tables = initial_tables.clone();
     let mut out = Vec::new();
     let mut at = 1_000;
     for line in scenarios.lines() {
@@ -3273,13 +3865,15 @@ pub fn kernel_output(scenarios: &str) -> String {
             [] => {}
             ["scenario", name @ ..] => {
                 world = initial.clone();
+                tables = initial_tables.clone();
                 out.push(format!("scenario {}", name.join(" ")));
             }
             ["end"] => {
                 out.push("state".to_string());
-                out.extend(show_world(&world));
+                out.extend(show_world(&world, &tables));
                 out.push("end".to_string());
                 world = initial.clone();
+                tables = initial_tables.clone();
             }
             ["op", tenant, who, after_who @ ..] => {
                 // An optional `hop=<n>` token, right after the principal, gives the hop of the event that caused
@@ -3313,6 +3907,16 @@ pub fn kernel_output(scenarios: &str) -> String {
                     hop,
                     agent: None,
                 };
+                // A segment intent (slice 16) is decided by the segment block, not by a transition of the kernel.
+                if rest.first() == Some(&"segment") {
+                    match parse_segment_op(rest)
+                        .and_then(|op| run_segment_op(&world, &mut tables, &ctx, tenant, op))
+                    {
+                        Some(lines) => out.extend(lines),
+                        None => out.push(format!("unparsed {line}")),
+                    }
+                    continue;
+                }
                 let intent = match rest {
                     ["create", fields @ ..] => Intent::CreateRecord {
                         object: object.clone(),
@@ -3479,20 +4083,30 @@ pub fn kernel_output(scenarios: &str) -> String {
                                 .iter()
                                 .map(|event| event_text(event, &changes)),
                         );
+                        // The segment decisions of the step (slice 16): the entries and exits of the persons its
+                        // records changed, printed after its events, and the effects of the triggers on them,
+                        // printed after the step's own trigger effects.
+                        let table = tables.entry(ctx.tenant.clone()).or_default();
+                        let first = table.events.len();
+                        segment_record_pass(&world, table, &ctx, &transition.events);
+                        let (segment_events, segment_effects) =
+                            segment_report(&world, table, &ctx, tenant, first);
+                        out.extend(segment_events);
                         out.extend(
                             transition
                                 .effects
                                 .iter()
                                 .filter(|effect| matches!(effect, Effect::Publish { .. }))
-                                .filter_map(effect_text),
+                                .filter_map(|effect| effect_text(effect, &ctx.tenant)),
                         );
                         out.extend(
                             transition
                                 .effects
                                 .iter()
                                 .filter(|effect| !matches!(effect, Effect::Publish { .. }))
-                                .filter_map(effect_text),
+                                .filter_map(|effect| effect_text(effect, &ctx.tenant)),
                         );
+                        out.extend(segment_effects);
                     }
                     Err(error) => out.push(format!("err {}", show_error(error.kind))),
                 }
@@ -3682,9 +4296,10 @@ pub fn parse_audit(output: &str) -> Vec<Checked> {
 /// a first line with the lines that follow it up to the next first line; the state lines at the end
 /// are not an operation's. The `k`th group is the outcome of the `k`th operation.
 pub fn op_outcomes<S: AsRef<str>>(output: &[S]) -> Vec<&[S]> {
-    const CONTINUATION: [&str; 16] = [
+    const CONTINUATION: [&str; 17] = [
         "revision ",
         "event ",
+        "segment-event ",
         "effect ",
         "next ",
         "row ",
