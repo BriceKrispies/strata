@@ -101,12 +101,58 @@ def parsePrincipal (s : String) : Option Principal :=
   else if s = "anon" then some .anonymous
   else (s.toNat?).map Principal.user
 
+/-- A text token of the membership lines: `s:<text>`, where `_` is a space (so a blank name or label is
+    `s:_`, and an address may have spaces around it). -/
+def parseText (s : String) : Option String :=
+  if s.startsWith "s:" then some (String.ofList ((dropChars s 2).toList.map (fun c => if c == '_' then ' ' else c)))
+  else none
+
+/-- The roles of an invitation: numbers separated by commas, or `-` for none. -/
+def parseRoles (s : String) : Option (List RoleId) :=
+  if s = "-" then some [] else (s.splitOn ",").mapM String.toNat?
+
+/-- The time of a request: `@<milliseconds>`. -/
+def parseNow (s : String) : Option Nat :=
+  if s.startsWith "@" then (dropChars s 1).toNat? else none
+
+/-- A membership or creation line: the intents of slice 7. -/
+def parseMemberOp (rest : List String) : Option Intent :=
+  match rest with
+  | ["create-tenant", owner, name] => do pure (.createTenant (← owner.toNat?) (← parseText name))
+  | ["assign", u, r] => do pure (.member (.assignRole (← u.toNat?) (← r.toNat?)))
+  | ["revoke", u, r] => do pure (.member (.revokeRole (← u.toNat?) (← r.toNat?)))
+  | ["team", t, l] => do pure (.member (.defineTeam (← t.toNat?) (← parseText l)))
+  | ["team-assign", t, r] => do pure (.member (.assignTeamRole (← t.toNat?) (← r.toNat?)))
+  | ["team-revoke", t, r] => do pure (.member (.revokeTeamRole (← t.toNat?) (← r.toNat?)))
+  | ["team-add", t, u] => do pure (.member (.addTeamMember (← t.toNat?) (← u.toNat?)))
+  | ["team-remove", t, u] => do pure (.member (.removeTeamMember (← t.toNat?) (← u.toNat?)))
+  | ["invite", i, a, rs, n] =>
+    do pure (.member (.createInvitation (← i.toNat?) (← parseText a) (← parseRoles rs) (← parseNow n)))
+  | ["invite-revoke", i] => do pure (.member (.revokeInvitation (← i.toNat?)))
+  | ["redeem", i, n] => do pure (.member (.redeemInvitation (← i.toNat?) (← parseNow n) none))
+  | ["redeem", i, n, v] =>
+    if v.startsWith "verified=" then
+      do pure (.member (.redeemInvitation (← i.toNat?) (← parseNow n) (some (← parseText (dropChars v 9)))))
+    else none
+  | _ => none
+
 def parseOp (tokens : List String) : Option (Ctx × Intent) :=
   match tokens with
   | "op" :: t :: p :: rest0 => do
     let c : Ctx := { tenant := ← t.toNat?, principal := ← parsePrincipal p }
     let (ty, rest) ← splitType rest0
     match rest with
+    | "create-tenant" :: _ => pure (c, ← parseMemberOp rest)
+    | "assign" :: _ => pure (c, ← parseMemberOp rest)
+    | "revoke" :: _ => pure (c, ← parseMemberOp rest)
+    | "team" :: _ => pure (c, ← parseMemberOp rest)
+    | "team-assign" :: _ => pure (c, ← parseMemberOp rest)
+    | "team-revoke" :: _ => pure (c, ← parseMemberOp rest)
+    | "team-add" :: _ => pure (c, ← parseMemberOp rest)
+    | "team-remove" :: _ => pure (c, ← parseMemberOp rest)
+    | "invite" :: _ => pure (c, ← parseMemberOp rest)
+    | "invite-revoke" :: _ => pure (c, ← parseMemberOp rest)
+    | "redeem" :: _ => pure (c, ← parseMemberOp rest)
     | "create" :: fields => pure (c, .create ty (← parseFields fields))
     | "update" :: id :: rest => do
       let (ev, fields) ← parseExpected rest
@@ -171,6 +217,10 @@ def showErr : Err → String
   | .invalidSchema => "invalid_schema"
   | .constraintViolated => "constraint_violated"
   | .evaluation => "evaluation"
+  | .invalidIntent => "invalid_intent"
+  | .unknownRole => "unknown_role"
+  | .lastOwner => "last_owner"
+  | .tenantExists => "tenant_exists"
 
 /-- Insertion sort on a key; the lists here are a handful of elements. -/
 def sortBy {α : Type} (key : α → Nat) : List α → List α
@@ -195,20 +245,50 @@ def recordLines (pre : String) (o : ObjType) : List String :=
     let fields := (sortBy (fun (fv : FieldId × Val) => fv.1) q.2.fields).map fun fv => s!"{fv.1}={showVal fv.2}"
     trimEnd s!"{pre}record {q.1} owner={ownerText q.2.owner} v={q.2.version} {" ".intercalate fields}"
 
+/-- A list of numbers, sorted, separated by commas; `-` for none. -/
+def showNats (l : List Nat) : String :=
+  if l.isEmpty then "-" else ",".intercalate ((sortBy id l).map toString)
+
+/-- A text as the membership lines print it: `s:<text>` with each space written `_`. -/
+def showText (s : String) : String :=
+  "s:" ++ String.ofList (s.toList.map (fun c => if c == ' ' then '_' else c))
+
+/-- A user or `-`. -/
+def showUser : Option PrincipalId → String
+  | some n => toString n
+  | none => "-"
+
+/-- The membership of a tenant, one line each: its roles, its members, its teams and its invitations,
+    sorted by id, lists sorted. -/
+def membershipLines (id : Nat) (t : Tenant) : List String :=
+  [s!"roles {id} {showNats t.roles}"] ++
+  (sortBy (fun (e : PrincipalId × List RoleId) => e.1) t.members).map
+    (fun e => s!"member {id} {e.1} {showNats e.2}") ++
+  (sortBy (fun (e : TeamId × TeamDef) => e.1) t.teams).map
+    (fun e => s!"team {id} {e.1} {showText e.2.label} {showNats e.2.members} {showNats e.2.roles}") ++
+  (sortBy (fun (e : InvitationId × InvitationDef) => e.1) t.invitations).map
+    (fun e => s!"invitation {id} {e.1} {showText e.2.address} {showNats e.2.roles} by={e.2.createdBy} expires={e.2.expiresAt} redeemed={showUser e.2.redeemedBy} revoked={showUser e.2.revokedBy}")
+
 /-- The tenant: its counter and the default type's required fields and records, then each other
-    object type's required fields and records, marked with its id. -/
+    object type's required fields and records, marked with its id. Then its membership, when it is
+    not the one the fixture starts a tenant with (always for tenant 3, which only a creation makes). -/
 def showTenant (id : Nat) (t : Tenant) : List String :=
   let d : ObjType := (t.typ? 1).getD { schema := [] }
   let header := s!"tenant {id} next={t.nextId} required={requiredOf d}"
   let others := sortBy (fun (e : TypeId × ObjType) => e.1) (t.types.filter (fun e => e.1 != 1))
   header :: recordLines "" d ++
-    others.flatMap fun e => s!"type {e.1} required={requiredOf e.2}" :: recordLines s!"type {e.1} " e.2
+    (others.flatMap fun e => s!"type {e.1} required={requiredOf e.2}" :: recordLines s!"type {e.1} " e.2) ++
+    (if id == 3 || membershipLines id t != membershipLines id (initialTenant id) then membershipLines id t
+     else [])
 
 def showWorld (w : World) : List String :=
-  [1, 2].flatMap fun id =>
+  [1, 2].flatMap (fun id =>
     match w id with
     | some t => showTenant id t
-    | none => [s!"tenant {id} absent"]
+    | none => [s!"tenant {id} absent"]) ++
+  (match w 3 with
+    | some t => showTenant 3 t
+    | none => [])
 
 
 /-- One kernel the scenario runner drives: its start state, its transition function and how it

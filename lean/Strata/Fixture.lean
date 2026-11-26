@@ -79,7 +79,10 @@ def fixturePolicies : List Policy :=
     { role := writerRole, resource := .object 2, actions := [.read, .create] },
     { role := writerRole, resource := .object 2, actions := [.update, .delete], condition := some ownRecord },
     { role := publicRole, resource := .object 2, actions := [.create],
-      condition := some (.isNull .principal) } ]
+      condition := some (.isNull .principal) },
+    -- Slice 7: an editor may manage the tenant's members (`editors_manage_members`), so a manager who
+    -- is not the owner is in the fixture: it may confer the roles whose powers it holds.
+    { role := editorRole, resource := .members, actions := [.manage] } ]
 
 /-- The two object types every scenario starts from, each tenant with an owner, an editor and two
     writers. The size limits are the kernel's. -/
@@ -91,7 +94,8 @@ def initialTenant (n : Nat) : Tenant :=
     grants := [],
     policies := fixturePolicies,
     nextId := 1,
-    limits := Limits.kernel }
+    limits := Limits.kernel,
+    roles := [ownerRole, publicRole, editorRole, writerRole] }
 
 /-- The fields an `update` line names for each object type: the item's fields, or the part's.
     A line that does not name one of them gives it `null`, so it replaces the record (`patch`

@@ -59,8 +59,9 @@ theorem lawful_onDelete : Lawful encOnDelete decOnDelete := by
         repeat' split at h
         all_goals first | omega | simp at h
 
-/-- The kernel's errors: fourteen tags, no payload. `unknownObject` is tag `11`,
-    `constraintViolated` `12` and `evaluation` `13`. -/
+/-- The kernel's errors: eighteen tags, no payload. `unknownObject` is tag `11`,
+    `constraintViolated` `12` and `evaluation` `13`; slice 7 adds `invalidIntent` `14`,
+    `unknownRole` `15`, `lastOwner` `16` and `tenantExists` `17`. -/
 def encErr : Err → Bytes
   | .noTenant => [tag 0]
   | .unauthorized => [tag 1]
@@ -76,6 +77,10 @@ def encErr : Err → Bytes
   | .unknownObject => [tag 11]
   | .constraintViolated => [tag 12]
   | .evaluation => [tag 13]
+  | .invalidIntent => [tag 14]
+  | .unknownRole => [tag 15]
+  | .lastOwner => [tag 16]
+  | .tenantExists => [tag 17]
 
 def decErr : Dec Err := fun bs =>
   match bs with
@@ -96,6 +101,10 @@ def decErr : Dec Err := fun bs =>
     | 11 => some (.unknownObject, r)
     | 12 => some (.constraintViolated, r)
     | 13 => some (.evaluation, r)
+    | 14 => some (.invalidIntent, r)
+    | 15 => some (.unknownRole, r)
+    | 16 => some (.lastOwner, r)
+    | 17 => some (.tenantExists, r)
     | _ => none
 
 theorem lawful_err : Lawful encErr decErr := by
@@ -108,8 +117,10 @@ theorem lawful_err : Lawful encErr decErr := by
     | cons b r =>
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
           b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨
-          b.toNat = 10 ∨ b.toNat = 11 ∨ b.toNat = 12 ∨ b.toNat = 13 ∨ 14 ≤ b.toNat by omega)
-        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
+          b.toNat = 10 ∨ b.toNat = 11 ∨ b.toNat = 12 ∨ b.toNat = 13 ∨ b.toNat = 14 ∨
+          b.toNat = 15 ∨ b.toNat = 16 ∨ b.toNat = 17 ∨ 18 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk |
+          hk | hk
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 0 hk]
@@ -152,6 +163,18 @@ theorem lawful_err : Lawful encErr decErr := by
       · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encErr, byte_eq_tag b 13 hk]
+      · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encErr, byte_eq_tag b 14 hk]
+      · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encErr, byte_eq_tag b 15 hk]
+      · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encErr, byte_eq_tag b 16 hk]
+      · simp only [decErr, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encErr, byte_eq_tag b 17 hk]
       · simp only [decErr] at h
         repeat' split at h
         all_goals first | omega | simp at h
@@ -1170,48 +1193,229 @@ def decTypeEntry : Dec (TypeId × ObjType) := decPair decNat decObjType
 theorem lawful_typeEntry : Lawful encTypeEntry decTypeEntry :=
   lawful_pair lawful_nat lawful_objType
 
+/-- A team (slice 7): its label, its members, then the roles it holds. -/
+def encTeamDef : TeamDef → Bytes :=
+  encIso (encPair encStr (encPair (encList encNat) (encList encNat)))
+    (fun d => (d.label, d.members, d.roles))
+
+def decTeamDef : Dec TeamDef :=
+  decIso (decPair decStr (decPair (decList decNat) (decList decNat)))
+    (fun p => { label := p.1, members := p.2.1, roles := p.2.2 })
+
+theorem lawful_teamDef : Lawful encTeamDef decTeamDef :=
+  lawful_iso (lawful_pair lawful_str (lawful_pair (lawful_list lawful_nat) (lawful_list lawful_nat)))
+    (fun d => by cases d; rfl) (fun _ => rfl)
+
+/-- A team of the tenant: its id, then the team. -/
+def encTeamEntry : TeamId × TeamDef → Bytes := encPair encNat encTeamDef
+
+def decTeamEntry : Dec (TeamId × TeamDef) := decPair decNat decTeamDef
+
+theorem lawful_teamEntry : Lawful encTeamEntry decTeamEntry :=
+  lawful_pair lawful_nat lawful_teamDef
+
+/-- An invitation (slice 7): its address, the roles it offers, who issued it, when it expires, then who
+    redeemed it and who revoked it, if anyone. -/
+def encInvitationDef : InvitationDef → Bytes :=
+  encIso (encPair encStr (encPair (encList encNat) (encPair encNat (encPair encNat
+    (encPair (encOpt encNat) (encOpt encNat))))))
+    (fun d => (d.address, d.roles, d.createdBy, d.expiresAt, d.redeemedBy, d.revokedBy))
+
+def decInvitationDef : Dec InvitationDef :=
+  decIso (decPair decStr (decPair (decList decNat) (decPair decNat (decPair decNat
+    (decPair (decOpt decNat) (decOpt decNat))))))
+    (fun p => { address := p.1, roles := p.2.1, createdBy := p.2.2.1, expiresAt := p.2.2.2.1,
+                redeemedBy := p.2.2.2.2.1, revokedBy := p.2.2.2.2.2 })
+
+theorem lawful_invitationDef : Lawful encInvitationDef decInvitationDef :=
+  lawful_iso (lawful_pair lawful_str (lawful_pair (lawful_list lawful_nat)
+    (lawful_pair lawful_nat (lawful_pair lawful_nat
+      (lawful_pair (lawful_opt lawful_nat) (lawful_opt lawful_nat))))))
+    (fun d => by cases d; rfl) (fun _ => rfl)
+
+/-- An invitation of the tenant: its id, then the invitation. -/
+def encInvitationEntry : InvitationId × InvitationDef → Bytes := encPair encNat encInvitationDef
+
+def decInvitationEntry : Dec (InvitationId × InvitationDef) := decPair decNat decInvitationDef
+
+theorem lawful_invitationEntry : Lawful encInvitationEntry decInvitationEntry :=
+  lawful_pair lawful_nat lawful_invitationDef
+
 /-- The tenant's fields as one nested product: its object types, members, grants, policies, next id,
-    limits. -/
+    limits, then (slice 7) the roles its schema defines, its teams and its invitations. -/
 def encTenantBody : List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
-    List (RoleId × Grant) × List Policy × Nat × Limits → Bytes :=
+    List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
+    List (TeamId × TeamDef) × List (InvitationId × InvitationDef) → Bytes :=
   encPair (encList encTypeEntry)
     (encPair (encList encMember)
       (encPair (encList encGrantEntry)
         (encPair (encList encPolicy)
-          (encPair encNat encLimits))))
+          (encPair encNat
+            (encPair encLimits
+              (encPair (encList encNat)
+                (encPair (encList encTeamEntry) (encList encInvitationEntry))))))))
 
 def decTenantBody :
     Dec (List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
-      List (RoleId × Grant) × List Policy × Nat × Limits) :=
+      List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
+      List (TeamId × TeamDef) × List (InvitationId × InvitationDef)) :=
   decPair (decList decTypeEntry)
     (decPair (decList decMember)
       (decPair (decList decGrantEntry)
         (decPair (decList decPolicy)
-          (decPair decNat decLimits))))
+          (decPair decNat
+            (decPair decLimits
+              (decPair (decList decNat)
+                (decPair (decList decTeamEntry) (decList decInvitationEntry))))))))
 
 theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
   lawful_pair (lawful_list lawful_typeEntry)
     (lawful_pair (lawful_list lawful_member)
       (lawful_pair (lawful_list lawful_grantEntry)
         (lawful_pair (lawful_list lawful_policy)
-          (lawful_pair lawful_nat lawful_limits))))
+          (lawful_pair lawful_nat
+            (lawful_pair lawful_limits
+              (lawful_pair (lawful_list lawful_nat)
+                (lawful_pair (lawful_list lawful_teamEntry) (lawful_list lawful_invitationEntry))))))))
 
 def encTenant : Tenant → Bytes :=
   encIso encTenantBody
-    (fun t => (t.types, t.members, t.grants, t.policies, t.nextId, t.limits))
+    (fun t => (t.types, t.members, t.grants, t.policies, t.nextId, t.limits, t.roles, t.teams,
+      t.invitations))
 
 def decTenant : Dec Tenant :=
   decIso decTenantBody fun p =>
-    ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1, p.2.2.2.2.1, p.2.2.2.2.2⟩
+    ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1, p.2.2.2.2.1, p.2.2.2.2.2.1, p.2.2.2.2.2.2.1,
+      p.2.2.2.2.2.2.2.1, p.2.2.2.2.2.2.2.2⟩
 
 theorem lawful_tenant : Lawful encTenant decTenant :=
   lawful_iso lawful_tenantBody (fun t => by cases t; rfl) (fun _ => rfl)
 
 /-! ## Intents, contexts and results -/
 
+/-- The payload of a constructor is decoded and mapped into the sum. -/
+theorem dec_ctor_enc {α β : Type} {e : β → Bytes} {d : Dec β} (h : Lawful e d) (f : β → α)
+    (x : β) (rest : Bytes) : decIso d f (e x ++ rest) = some (f x, rest) := by
+  unfold decIso
+  rw [h.1 x rest]
+
+/-- Whatever a constructor's decoder reads is the encoding of its payload. -/
+theorem dec_ctor_inv {α β : Type} {e : β → Bytes} {d : Dec β} (h : Lawful e d) (f : β → α)
+    (bs : Bytes) (y : α) (rest : Bytes) (hd : decIso d f bs = some (y, rest)) :
+    ∃ x, y = f x ∧ e x ++ rest = bs := by
+  unfold decIso at hd
+  cases hx : d bs with
+  | none => simp [hx] at hd
+  | some p =>
+    obtain ⟨x, r⟩ := p
+    simp only [hx, Option.some.injEq, Prod.mk.injEq] at hd
+    obtain ⟨rfl, rfl⟩ := hd
+    exact ⟨x, rfl, (h.2 bs x r hx).symm⟩
+
+/-- A membership intent (slice 7): tags `0` assign a role, `1` revoke a role, `2` define a team, `3`
+    give a team a role, `4` take a team's role away, `5` add a team member, `6` remove one, `7` create an
+    invitation, `8` revoke one, `9` redeem one; each is followed by its fields in declaration order. -/
+def encMemberIntent : MemberIntent → Bytes
+  | .assignRole p r => tag 0 :: encPair encNat encNat (p, r)
+  | .revokeRole p r => tag 1 :: encPair encNat encNat (p, r)
+  | .defineTeam t l => tag 2 :: encPair encNat encStr (t, l)
+  | .assignTeamRole t r => tag 3 :: encPair encNat encNat (t, r)
+  | .revokeTeamRole t r => tag 4 :: encPair encNat encNat (t, r)
+  | .addTeamMember t p => tag 5 :: encPair encNat encNat (t, p)
+  | .removeTeamMember t p => tag 6 :: encPair encNat encNat (t, p)
+  | .createInvitation i a rs n =>
+    tag 7 :: encPair encNat (encPair encStr (encPair (encList encNat) encNat)) (i, a, rs, n)
+  | .revokeInvitation i => tag 8 :: encNat i
+  | .redeemInvitation i n v =>
+    tag 9 :: encPair encNat (encPair encNat (encOpt encStr)) (i, n, v)
+
+def decMemberIntent : Dec MemberIntent := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => decIso (decPair decNat decNat) (fun x => MemberIntent.assignRole x.1 x.2) r
+    | 1 => decIso (decPair decNat decNat) (fun x => MemberIntent.revokeRole x.1 x.2) r
+    | 2 => decIso (decPair decNat decStr) (fun x => MemberIntent.defineTeam x.1 x.2) r
+    | 3 => decIso (decPair decNat decNat) (fun x => MemberIntent.assignTeamRole x.1 x.2) r
+    | 4 => decIso (decPair decNat decNat) (fun x => MemberIntent.revokeTeamRole x.1 x.2) r
+    | 5 => decIso (decPair decNat decNat) (fun x => MemberIntent.addTeamMember x.1 x.2) r
+    | 6 => decIso (decPair decNat decNat) (fun x => MemberIntent.removeTeamMember x.1 x.2) r
+    | 7 => decIso (decPair decNat (decPair decStr (decPair (decList decNat) decNat)))
+        (fun x => MemberIntent.createInvitation x.1 x.2.1 x.2.2.1 x.2.2.2) r
+    | 8 => decIso decNat (fun x => MemberIntent.revokeInvitation x) r
+    | 9 => decIso (decPair decNat (decPair decNat (decOpt decStr)))
+        (fun x => MemberIntent.redeemInvitation x.1 x.2.1 x.2.2) r
+    | _ => none
+
+theorem lawful_memberIntent : Lawful encMemberIntent decMemberIntent := by
+  have hnn := lawful_pair lawful_nat lawful_nat
+  have hns := lawful_pair lawful_nat lawful_str
+  have hci := lawful_pair lawful_nat (lawful_pair lawful_str
+    (lawful_pair (lawful_list lawful_nat) lawful_nat))
+  have hri := lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_opt lawful_str))
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | assignRole p r => simp [encMemberIntent, decMemberIntent, tag, dec_ctor_enc hnn, List.append_assoc]
+    | revokeRole p r => simp [encMemberIntent, decMemberIntent, tag, dec_ctor_enc hnn, List.append_assoc]
+    | defineTeam t l => simp [encMemberIntent, decMemberIntent, tag, dec_ctor_enc hns, List.append_assoc]
+    | assignTeamRole t r => simp [encMemberIntent, decMemberIntent, tag, dec_ctor_enc hnn, List.append_assoc]
+    | revokeTeamRole t r => simp [encMemberIntent, decMemberIntent, tag, dec_ctor_enc hnn, List.append_assoc]
+    | addTeamMember t p => simp [encMemberIntent, decMemberIntent, tag, dec_ctor_enc hnn, List.append_assoc]
+    | removeTeamMember t p => simp [encMemberIntent, decMemberIntent, tag, dec_ctor_enc hnn, List.append_assoc]
+    | createInvitation i a rs n =>
+      simp [encMemberIntent, decMemberIntent, tag, dec_ctor_enc hci, List.append_assoc]
+    | revokeInvitation i =>
+      simp [encMemberIntent, decMemberIntent, tag, dec_ctor_enc lawful_nat, List.append_assoc]
+    | redeemInvitation i n v =>
+      simp [encMemberIntent, decMemberIntent, tag, dec_ctor_enc hri, List.append_assoc]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decMemberIntent] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
+          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨ 10 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
+      · simp only [decMemberIntent, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hnn _ r x rest h
+        simp [encMemberIntent, byte_eq_tag b 0 hk, ← hy]
+      · simp only [decMemberIntent, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hnn _ r x rest h
+        simp [encMemberIntent, byte_eq_tag b 1 hk, ← hy]
+      · simp only [decMemberIntent, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hns _ r x rest h
+        simp [encMemberIntent, byte_eq_tag b 2 hk, ← hy]
+      · simp only [decMemberIntent, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hnn _ r x rest h
+        simp [encMemberIntent, byte_eq_tag b 3 hk, ← hy]
+      · simp only [decMemberIntent, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hnn _ r x rest h
+        simp [encMemberIntent, byte_eq_tag b 4 hk, ← hy]
+      · simp only [decMemberIntent, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hnn _ r x rest h
+        simp [encMemberIntent, byte_eq_tag b 5 hk, ← hy]
+      · simp only [decMemberIntent, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hnn _ r x rest h
+        simp [encMemberIntent, byte_eq_tag b 6 hk, ← hy]
+      · simp only [decMemberIntent, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hci _ r x rest h
+        simp [encMemberIntent, byte_eq_tag b 7 hk, ← hy]
+      · simp only [decMemberIntent, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv lawful_nat _ r x rest h
+        simp [encMemberIntent, byte_eq_tag b 8 hk, ← hy]
+      · simp only [decMemberIntent, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hri _ r x rest h
+        simp [encMemberIntent, byte_eq_tag b 9 hk, ← hy]
+      · simp only [decMemberIntent] at h
+        exfalso
+        repeat' split at h
+        all_goals first | omega | simp at h
+
 /-- An intent: tag `0` create, `1` update, `2` delete, `3` set required, `4` set unique, `5`
     define a composite unique constraint. Each names its object type first, right after the tag,
-    as a natural. -/
+    as a natural. Slice 7: `6` creates a tenant (its owner, then its name) and `7` is a membership
+    intent (`encMemberIntent`). -/
 def encIntent : Intent → Bytes
   | .create ty fs => tag 0 :: (encNat ty ++ encList encFieldVal fs)
   | .update ty id fs ev => tag 1 :: (encNat ty ++ encNat id ++ encList encFieldVal fs ++ encOpt encNat ev)
@@ -1219,6 +1423,8 @@ def encIntent : Intent → Bytes
   | .setRequired ty f s => tag 3 :: (encNat ty ++ encNat f ++ encBool s)
   | .setUnique ty f s => tag 4 :: (encNat ty ++ encNat f ++ encBool s)
   | .defineUnique ty fs => tag 5 :: (encNat ty ++ encList encNat fs)
+  | .createTenant owner name => tag 6 :: (encNat owner ++ encStr name)
+  | .member j => tag 7 :: encMemberIntent j
 
 def decIntent : Dec Intent := fun bs =>
   match bs with
@@ -1265,6 +1471,14 @@ def decIntent : Dec Intent := fun bs =>
         | some (fs, r2) => some (.defineUnique ty fs, r2)
         | none => none
       | none => none
+    | 6 => match decNat r with
+      | some (owner, r1) => match decStr r1 with
+        | some (name, r2) => some (.createTenant owner name, r2)
+        | none => none
+      | none => none
+    | 7 => match decMemberIntent r with
+      | some (j, r1) => some (.member j, r1)
+      | none => none
     | _ => none
 
 theorem lawful_intent : Lawful encIntent decIntent := by
@@ -1284,12 +1498,17 @@ theorem lawful_intent : Lawful encIntent decIntent := by
       simp [encIntent, decIntent, tag, lawful_nat.1, lawful_bool.1, List.append_assoc]
     | defineUnique ty fs =>
       simp [encIntent, decIntent, tag, lawful_nat.1, (lawful_list lawful_nat).1, List.append_assoc]
+    | createTenant owner name =>
+      simp [encIntent, decIntent, tag, lawful_nat.1, lawful_str.1, List.append_assoc]
+    | member j =>
+      simp [encIntent, decIntent, tag, lawful_memberIntent.1]
   · intro bs x rest h
     cases bs with
     | nil => simp [decIntent] at h
     | cons b r =>
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
-          b.toNat = 5 ∨ 6 ≤ b.toNat by omega) with hk | hk | hk | hk | hk | hk | hk
+          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ 8 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk
       · simp only [decIntent, hk] at h
         cases hd1 : decNat r with
         | none => simp [hd1] at h
@@ -1399,6 +1618,29 @@ theorem lawful_intent : Lawful encIntent decIntent := by
             have e1 := lawful_nat.2 r ty r1 hd1
             have e2 := (lawful_list lawful_nat).2 r1 fs r2 hd2
             simp [encIntent, byte_eq_tag b 5 hk, e1, e2, List.append_assoc]
+      · simp only [decIntent, hk] at h
+        cases hd1 : decNat r with
+        | none => simp [hd1] at h
+        | some p1 =>
+          obtain ⟨owner, r1⟩ := p1
+          cases hd2 : decStr r1 with
+          | none => simp [hd1, hd2] at h
+          | some p2 =>
+            obtain ⟨name, r2⟩ := p2
+            simp only [hd1, hd2, Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            have e1 := lawful_nat.2 r owner r1 hd1
+            have e2 := lawful_str.2 r1 name r2 hd2
+            simp [encIntent, byte_eq_tag b 6 hk, e1, e2, List.append_assoc]
+      · simp only [decIntent, hk] at h
+        cases hd1 : decMemberIntent r with
+        | none => simp [hd1] at h
+        | some p1 =>
+          obtain ⟨j, r1⟩ := p1
+          simp only [hd1, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have e1 := lawful_memberIntent.2 r j r1 hd1
+          simp [encIntent, byte_eq_tag b 7 hk, e1]
       · simp only [decIntent] at h
         exfalso
         repeat' split at h
