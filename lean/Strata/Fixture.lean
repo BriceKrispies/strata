@@ -6,6 +6,7 @@ and its facts are audited.
 -/
 
 import Strata.Model
+import Strata.Reads
 
 namespace Strata
 
@@ -162,5 +163,48 @@ theorem initialWorld_records (x : TenantId) (t : Tenant) (h : initialWorld x = s
   · split at h
     · cases h; intro e he; simp at he; rcases he with rfl | rfl | rfl <;> rfl
     · cases h
+
+
+/-! ## The read declarations of the fixture (slice 10)
+
+The kernel holds a field's read rule in its definition and a named query in the tenant's schema; the
+model holds them beside the write model, in a `ReadSpec` (see the slice 10 review note). The kernel's
+fixture (`crates/verification/src/lean.rs`) declares exactly these, in tenants `t1` and `t2`; a tenant
+that a scenario creates (tenant `3`) declares none. Every query is one the kernel plans as a scan: it
+orders, and either has no filter or orders by more than one key. -/
+
+/-- The read rules of the fixture. An item's field `10` is shown only when its boolean field `3` is
+    `true`; a part's field `4` only to `p100`; a ticket's note (field `3`) only once it has a vote. -/
+def fixtureReadRules : FieldRules :=
+  [(1, 10, .cmp .eq (.field .record 3) (.lit (.bool true))),
+   (2, 4, .cmp .eq .principal (.lit (.str "p100"))),
+   (4, 3, .cmp .ge (.field .record 2) (.lit (.int 1)))]
+
+/-- The named queries of the fixture. `items_by_rank` lists the items by field `2` descending;
+    `items_not_elm` those not named `elm`, by field `3` then field `2` descending, three to a page,
+    and declares a parameter `tag` that its filter does not read; `parts_ranked` the parts by field
+    `4`; `tickets_open` the open tickets by field `2` then field `3`, two to a page. -/
+def fixtureQueries : List (QueryId × QueryDef) :=
+  [("items_by_rank", { ty := 1, order := [(2, true)] }),
+   ("items_not_elm",
+    { ty := 1
+      params := ["tag"]
+      filter := some (.cmp .ne (.field .record 1) (.lit (.str "elm")))
+      order := [(3, false), (2, true)]
+      limit := some 3 }),
+   ("parts_ranked", { ty := 2, order := [(4, false)] }),
+   ("tickets_open",
+    { ty := 4
+      filter := some (.cmp .eq (.field .record 1) (.lit (.str "open")))
+      order := [(2, false), (3, false)]
+      limit := some 2 })]
+
+/-- The read declarations of the fixture's tenants `1` and `2`. -/
+def fixtureReadSpec : ReadSpec := { rules := fixtureReadRules, queries := fixtureQueries }
+
+/-- The read declarations of tenant `x`: the fixture's for the two tenants that start with it, none
+    for a tenant a scenario creates. -/
+def readSpecOf (x : TenantId) : ReadSpec :=
+  if x = 1 ∨ x = 2 then fixtureReadSpec else {}
 
 end Strata

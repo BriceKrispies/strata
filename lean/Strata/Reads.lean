@@ -92,8 +92,80 @@ def defaultPage : Nat := 50
 
 /-! ## Values in order keys
 
-The kernel sorts by the order of its values: by kind (null, bool, int, string, reference, list), then
-by payload within a kind. Two lists compare equal here; a query's keys are scalars in practice. -/
+The kernel sorts by its `Value` order, which is the derived order of the enum: by variant (null, bool,
+int, str, time, ref, list), then by payload; two lists compare lexicographically, element by element,
+a prefix before its extension. The model has no time, and its order on the other kinds is the same. -/
+
+/-- The position of an element's kind in the order of values. -/
+def Elem.rank : Elem → Nat
+  | .null => 0
+  | .bool _ => 1
+  | .int _ => 2
+  | .str _ => 3
+  | .ref _ => 4
+
+/-- The order of two elements: `true` when the first is at most the second. -/
+def Elem.leb : Elem → Elem → Bool
+  | .null, .null => true
+  | .bool x, .bool y => decide (x.toNat ≤ y.toNat)
+  | .int x, .int y => decide (x ≤ y)
+  | .str x, .str y => decide (x ≤ y)
+  | .ref x, .ref y => decide (x ≤ y)
+  | a, b => decide (a.rank < b.rank)
+
+theorem Elem.leb_total (a b : Elem) : (a.leb b || b.leb a) = true := by
+  cases a <;> cases b <;> simp only [Elem.leb, Elem.rank, Bool.or_eq_true, decide_eq_true_eq] <;>
+    simp_all [Nat.le_total, Int.le_total, String.le_total] <;> omega
+
+theorem Elem.leb_trans {a b c : Elem} (h1 : a.leb b = true) (h2 : b.leb c = true) :
+    a.leb c = true := by
+  cases a <;> cases b <;> cases c <;>
+    simp only [Elem.leb, Elem.rank, decide_eq_true_eq, Bool.toNat] at h1 h2 ⊢ <;>
+    first
+    | exact Nat.le_trans h1 h2
+    | exact Int.le_trans h1 h2
+    | exact String.le_trans h1 h2
+    | simp_all
+    | omega
+
+/-- The lexicographic order of two lists, given an order on their elements: the first position at
+    which they differ decides, and a list that is a prefix of the other comes first. -/
+def lexLe {α : Type} (le : α → α → Bool) : List α → List α → Bool
+  | [], _ => true
+  | _ :: _, [] => false
+  | x :: xs, y :: ys => if le x y && le y x then lexLe le xs ys else le x y
+
+theorem lexLe_total {α : Type} (le : α → α → Bool) (ht : ∀ a b, (le a b || le b a) = true) :
+    ∀ xs ys : List α, (lexLe le xs ys || lexLe le ys xs) = true
+  | [], _ => by simp [lexLe]
+  | _ :: _, [] => by simp [lexLe]
+  | x :: xs, y :: ys => by
+      have ih := lexLe_total le ht xs ys
+      have hxy := ht x y
+      simp only [lexLe]
+      cases h1 : le x y <;> cases h2 : le y x <;> simp_all
+
+theorem lexLe_trans {α : Type} (le : α → α → Bool) (ht : ∀ a b, (le a b || le b a) = true)
+    (htr : ∀ {a b c}, le a b = true → le b c = true → le a c = true) :
+    ∀ xs ys zs : List α, lexLe le xs ys = true → lexLe le ys zs = true → lexLe le xs zs = true
+  | [], _, _, _, _ => by simp [lexLe]
+  | _ :: _, [], _, h, _ => by simp [lexLe] at h
+  | _ :: _, _ :: _, [], _, h => by simp [lexLe] at h
+  | x :: xs, y :: ys, z :: zs, h1, h2 => by
+      have ih := lexLe_trans le ht htr xs ys zs
+      simp only [lexLe] at h1 h2 ⊢
+      have k1 : le x y = true → le y z = true → le x z = true := fun a b => htr a b
+      have k2 : le x z = true → le z y = true → le x y = true := fun a b => htr a b
+      have k3 : le y x = true → le x z = true → le y z = true := fun a b => htr a b
+      have k4 : le y z = true → le z x = true → le y x = true := fun a b => htr a b
+      have k5 : le z x = true → le x y = true → le z y = true := fun a b => htr a b
+      have k6 : le z y = true → le y x = true → le z x = true := fun a b => htr a b
+      have t1 : (le x y || le y x) = true := ht x y
+      have t2 : (le y z || le z y) = true := ht y z
+      have t3 : (le x z || le z x) = true := ht x z
+      cases hxy : le x y <;> cases hyx : le y x <;> cases hyz : le y z <;>
+        cases hzy : le z y <;> cases hxz : le x z <;> cases hzx : le z x <;>
+        simp_all
 
 /-- The position of a kind in the order of values. -/
 def Val.rank : Val → Nat
@@ -111,12 +183,15 @@ def Val.leb : Val → Val → Bool
   | .int x, .int y => decide (x ≤ y)
   | .str x, .str y => decide (x ≤ y)
   | .ref x, .ref y => decide (x ≤ y)
-  | .list _, .list _ => true
+  | .list xs, .list ys => lexLe Elem.leb xs ys
   | a, b => decide (a.rank < b.rank)
 
 theorem Val.leb_total (a b : Val) : (a.leb b || b.leb a) = true := by
-  cases a <;> cases b <;> simp only [Val.leb, Val.rank, Bool.or_eq_true, decide_eq_true_eq] <;>
-    simp_all [Nat.le_total, Int.le_total, String.le_total] <;> omega
+  cases a <;> cases b <;>
+    first
+    | exact lexLe_total Elem.leb Elem.leb_total _ _
+    | (simp only [Val.leb, Val.rank, Bool.or_eq_true, decide_eq_true_eq]
+       simp_all [Nat.le_total, Int.le_total, String.le_total] <;> omega)
 
 theorem Val.leb_trans {a b c : Val} (h1 : a.leb b = true) (h2 : b.leb c = true) :
     a.leb c = true := by
@@ -126,6 +201,7 @@ theorem Val.leb_trans {a b c : Val} (h1 : a.leb b = true) (h2 : b.leb c = true) 
     | exact Nat.le_trans h1 h2
     | exact Int.le_trans h1 h2
     | exact String.le_trans h1 h2
+    | exact lexLe_trans Elem.leb Elem.leb_total Elem.leb_trans _ _ _ h1 h2
     | simp_all
     | omega
 
