@@ -911,6 +911,64 @@ The messages table has 80 rows (a row is one message, or one family of messages 
 types `types.js` declares and `navigate_away`, which it does not declare. Slice 1 covers the covered
 rows of routing, the view, the session and sign-in and sign-out; the other rows are slices 2 to 14.
 
+## 7c. No XSS in the browser client (WG-5677)
+
+Requirement fe-024 (decision D-FE-14): tenant scripts and record values cannot run script in the
+page. The model is `lean/Strata/Client/Dom.lean`, with its audit lines in `lean/Audit.lean`.
+
+**Proved, for every UI tree** (a view model's, a tenant script's, or a record value's, since the tree
+type takes arbitrary strings in every position). The render function emits DOM operations from a
+closed vocabulary (`createElement`, `createText`, `setAttribute`, `append`, `remove`). There is no
+operation that carries markup.
+
+- `script_output_emits_no_script_element`: every element created is of an allowed kind. Anything
+  else becomes a `span`. The forbidden set is `script, iframe, frame, frameset, object, embed,
+  applet, param, base, link, meta, style, template, noscript, portal, foreignObject, animate,
+  animateMotion, animateTransform, set, use, handler, listener`.
+- `script_output_sets_no_handler_style_or_url`: every attribute set is under an allowed name, and no
+  name is an event handler (`on*`), `style`, `srcdoc` or `formaction`. A URL attribute (`href`,
+  `src`, `action`) is set only with a value the URL policy accepts, and an accepted value is never
+  a `javascript:`, `vbscript:` or `data:` address (`urlOk_not_script`). The policy: `src` takes a
+  path on this site only (one leading `/`, no `//` or `/\`, no backslash, tab or line break); `href`
+  and `action` take such a path, or a fragment, `https:`, `http:` or `mailto:`.
+- `text_is_only_text`: text is one text node, and no element or attribute is made of it.
+
+The allowed element kinds and attribute names are the ones the renderer uses today, listed in the
+model and mirrored in `web/src/components/dom.js` (`ALLOWED_TAGS`, `ALLOWED_ATTRS`). The audit lists
+only `propext`, `Classical.choice` and `Quot.sound`, and the proofs contain no `sorry`, no axiom and
+no `native_decide`.
+
+**Finding.** Before this slice the renderer passed every tag and attribute name it was given. No
+path from tenant data reached those names, since the views fix them in code, but the renderer did
+not enforce it, and the model's UI tree allows any name. `h()` now enforces the vocabulary.
+
+**Checked mechanically, on every change.**
+
+- `web/test/no-sinks.test.js` (in `npm run test:web`) fails on an HTML or script sink in `web/src`:
+  `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `eval(`, `new Function`, a
+  string argument to a timer, a `javascript:` literal, a `srcdoc` being set, `createContextualFragment`
+  and `parseFromString`. Comments are removed first. The scan is a text search with a small
+  tokenizer, so it guards against a sink added by mistake and is not a proof.
+- `web/test/dom-vocabulary.test.js` checks the renderer's filter.
+- `tests/e2e/xss-fuzz.spec.js` (the `xss` Playwright project) replaces the string values of the view
+  endpoint's replies with at least 1,000 seeded hostile values, renders the pages, and checks the live
+  DOM: no script element beyond the page's own, no handler, style or `srcdoc` attribute, no URL with a
+  script scheme, no frame, object or embed in the body, and `window.__xss` never set. It also checks
+  the Content Security Policy headers.
+
+**The browser enforces.** The DOM's `createElement`, `createTextNode` and `setAttribute` (text is
+never parsed). The Content Security Policy the BFF sends (`crates/bff/src/routes.rs`:
+`script-src 'self'`, `object-src 'none'`, `base-uri 'none'`, `require-trusted-types-for 'script'`,
+`trusted-types strata-worker`) and Trusted Types enforcement, which make a string unable to become a
+script address (`web/src/trusted-urls.js`, the one policy the page creates).
+
+**Trusted, and not proved.** The browser's DOM and CSP enforcement, that the URL parser resolves the
+accepted addresses as the model says (the model's same-site check is narrower than the browser's
+`sitePath`, so it accepts less), and the small adapter in `web/src/components/dom.js` that applies the
+operations. The tenant-script iframe that D-FE-14 names does not exist yet: no `iframe` is created,
+and when one is added it needs its own origin and `default-src 'none'`, which this section does not
+cover.
+
 ## 8. System spec and protocol (WG-5655)
 
 WG-5655 is written in `lean/Strata/System/`: `Spec.lean` (the trusted system specification) and

@@ -28,6 +28,7 @@ import Strata.Client.Cache
 import Strata.Client.Privacy
 import Strata.Client.Queue
 import Strata.Client.Drafts
+import Strata.Client.Dom
 import Strata.UI.Composition
 import Strata.UI.Contrast
 import Strata.UI.Visibility
