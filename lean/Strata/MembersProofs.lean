@@ -590,4 +590,419 @@ theorem stepMember_teamsNodup (m m' : MTenant) (c : MCtx) (i : MemberIntent) (hn
   | revokeInvitation i => exact revokeInvitation_nodup m m' c i hn h
   | redeemInvitation i => exact redeemInvitation_nodup m m' c i hn h
 
+
+/-! ## Conferring -/
+
+/-- An accepted direct grant gives the role directly to its target, and the conferrer may confer it. -/
+theorem changeRole_grant_form (m m' : MTenant) (c : MCtx) (target : PrincipalId) (role : RoleId)
+    (h : changeRole m c target role true = .ok m') :
+    m' = setDirect m target ((m.directOf target).insert role) ∧
+      mayConfer m c.principal role = true := by
+  constructor
+  · unfold changeRole at h
+    dsimp only at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals first | rfl | simp_all
+  · unfold changeRole at h
+    dsimp only at h
+    repeat' split at h
+    all_goals (try cases h)
+    all_goals simp_all
+
+/-- Assigning a role directly gives no principal a role that the conferrer could not confer. -/
+theorem assign_only_conferrable (m m' : MTenant) (c : MCtx) (target : PrincipalId) (role : RoleId)
+    (h : stepMember m c (.assignRole target role) = .ok m') :
+    ∀ q x, x ∈ m'.rolesOf (.user q) → x ∈ m.rolesOf (.user q) ∨ mayConfer m c.principal x = true := by
+  obtain ⟨hm', hconf⟩ := changeRole_grant_form m m' c target role h
+  subst hm'
+  intro q x hx
+  rw [effective_roles] at hx
+  rcases hx with hx | hx | ⟨e, he, hq, hxe⟩
+  · exact Or.inl ((effective_roles m q x).mpr (Or.inl hx))
+  · rw [directOf_setDirect] at hx
+    by_cases hqt : q = target
+    · subst hqt
+      simp only [if_true] at hx
+      rcases List.mem_insert_iff.mp hx with hx1 | hx1
+      · subst hx1
+        exact Or.inr hconf
+      · exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inl hx1)))
+    · simp only [hqt, if_false] at hx
+      exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inl hx)))
+  · exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inr ⟨e, he, hq, hxe⟩)))
+
+/-- An accepted grant of a team role gives the role to the team's members, and the conferrer may confer it. -/
+theorem teamRole_grant_form (m m' : MTenant) (c : MCtx) (team : TeamId) (role : RoleId)
+    (h : teamRoleStep m c team role true = .ok m') :
+    ∃ d, m.teams.lookup team = some d ∧ m' = putTeam m team { d with roles := d.roles.insert role } ∧
+      mayConfer m c.principal role = true := by
+  unfold teamRoleStep at h
+  cases hl : m.teams.lookup team with
+  | none => simp only [hl] at h; repeat' split at h; all_goals try cases h
+  | some d =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals first | (refine ⟨d, rfl, rfl, ?_⟩; simp_all) | simp_all
+
+/-- Granting a team role gives no principal a role that the conferrer could not confer. -/
+theorem teamRole_only_conferrable (m m' : MTenant) (c : MCtx) (team : TeamId) (role : RoleId)
+    (hn : m.TeamsNodup) (h : stepMember m c (.assignTeamRole team role) = .ok m') :
+    ∀ q x, x ∈ m'.rolesOf (.user q) → x ∈ m.rolesOf (.user q) ∨ mayConfer m c.principal x = true := by
+  obtain ⟨d, hl, hm', hconf⟩ := teamRole_grant_form m m' c team role h
+  subst hm'
+  intro q x hx
+  rw [effective_roles] at hx
+  rcases hx with hx | hx | ⟨e, he, hq, hxe⟩
+  · exact Or.inl ((effective_roles m q x).mpr (Or.inl hx))
+  · exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inl hx)))
+  · have hx' : x ∈ (putTeam m team _).teamRoles q := (mem_teamRoles _ _ _).mpr ⟨e, he, hq, hxe⟩
+    rw [mem_teamRoles_putTeam] at hx'
+    rcases hx' with ⟨hq', hx'⟩ | ⟨e', he', _, hq'', hx''⟩
+    · have hx2 := List.mem_insert_iff.mp hx'
+      rcases hx2 with hx3 | hx3
+      · subst hx3
+        exact Or.inr hconf
+      · exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inr
+          ⟨(team, d), mem_of_lookup_some m.teams team d hl, hq', hx3⟩)))
+    · exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inr ⟨e', he', hq'', hx''⟩)))
+
+/-- An accepted addition of a team member gives it the team's roles, which the conferrer may confer. -/
+theorem teamMember_add_form (m m' : MTenant) (c : MCtx) (team : TeamId) (p : PrincipalId)
+    (h : teamMemberStep m c team p true = .ok m') :
+    ∃ d, m.teams.lookup team = some d ∧ m' = putTeam m team { d with members := d.members.insert p } ∧
+      ∀ x ∈ d.roles, mayConfer m c.principal x = true := by
+  unfold teamMemberStep at h
+  cases hl : m.teams.lookup team with
+  | none => simp only [hl] at h; repeat' split at h; all_goals try cases h
+  | some d =>
+    simp only [hl] at h
+    repeat' split at h
+    all_goals try cases h
+    all_goals first | (refine ⟨d, rfl, rfl, ?_⟩; simp_all) | simp_all
+
+/-- Adding a team member gives it no role that the conferrer could not confer. -/
+theorem teamMember_only_conferrable (m m' : MTenant) (c : MCtx) (team : TeamId) (p : PrincipalId)
+    (h : stepMember m c (.addTeamMember team p) = .ok m') :
+    ∀ q x, x ∈ m'.rolesOf (.user q) → x ∈ m.rolesOf (.user q) ∨ mayConfer m c.principal x = true := by
+  obtain ⟨d, hl, hm', hconf⟩ := teamMember_add_form m m' c team p h
+  subst hm'
+  intro q x hx
+  rw [effective_roles] at hx
+  rcases hx with hx | hx | ⟨e, he, hq, hxe⟩
+  · exact Or.inl ((effective_roles m q x).mpr (Or.inl hx))
+  · exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inl hx)))
+  · have hx' : x ∈ (putTeam m team _).teamRoles q := (mem_teamRoles _ _ _).mpr ⟨e, he, hq, hxe⟩
+    rw [mem_teamRoles_putTeam] at hx'
+    rcases hx' with ⟨hq', hx''⟩ | ⟨e', he', _, hq'', hx'''⟩
+    · rcases List.mem_insert_iff.mp hq' with hq1 | hq1
+      · subst hq1
+        exact Or.inr (hconf x hx'')
+      · exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inr
+          ⟨(team, d), mem_of_lookup_some m.teams team d hl, hq1, hx''⟩)))
+    · exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inr ⟨e', he', hq'', hx'''⟩)))
+
+/-- An accepted redemption: the invitation names the redeemer and the caller's issuer still holds the
+    authority it stands on, and the redeemer gains the roles offered. -/
+theorem redeem_ok_form (m m' : MTenant) (c : MCtx) (inv : InvitationId)
+    (h : redeemInvitationStep m c inv = .ok m') :
+    ∃ redeemer o, c.principal = .user redeemer ∧ m.invitations.lookup inv = some o ∧
+      m' = putInv (setDirect m redeemer (o.roles.foldl (fun acc r => acc.insert r) (m.directOf redeemer)))
+        inv { o with redeemedBy := some redeemer } ∧
+      o.redeemedBy = none ∧ o.revokedBy = none ∧ c.now < o.expiresAt ∧
+      manageMembers m (.user o.createdBy) = true ∧
+      (∀ x ∈ o.roles, mayConfer m (.user o.createdBy) x = true) := by
+  unfold redeemInvitationStep at h
+  cases hp : c.principal with
+  | system => simp only [hp] at h; cases h
+  | anonymous => simp only [hp] at h; cases h
+  | user redeemer =>
+    simp only [hp] at h
+    cases hl : m.invitations.lookup inv with
+    | none => simp only [hl] at h; cases h
+    | some o =>
+      simp only [hl] at h
+      refine ⟨redeemer, o, rfl, rfl, ?_⟩
+      repeat' split at h
+      all_goals try cases h
+      all_goals (try rfl)
+      all_goals simp_all
+
+/-- Redeeming an invitation gives the redeemer no role that the issuer could not confer, and the issuer
+    is the one the invitation names. -/
+theorem redeem_only_conferrable (m m' : MTenant) (c : MCtx) (inv : InvitationId)
+    (h : stepMember m c (.redeemInvitation inv) = .ok m') :
+    ∃ o, m.invitations.lookup inv = some o ∧
+      ∀ q x, x ∈ m'.rolesOf (.user q) → x ∈ m.rolesOf (.user q) ∨
+        mayConfer m (.user o.createdBy) x = true := by
+  obtain ⟨redeemer, o, _, hl, hm', _, _, _, _, hconf⟩ := redeem_ok_form m m' c inv h
+  refine ⟨o, hl, ?_⟩
+  intro q x hx
+  subst hm'
+  rw [rolesOf_putInv, effective_roles] at hx
+  rcases hx with hx | hx | ⟨e, he, hq, hxe⟩
+  · exact Or.inl ((effective_roles m q x).mpr (Or.inl hx))
+  · rw [directOf_setDirect] at hx
+    by_cases hqr : q = redeemer
+    · subst hqr
+      simp only [if_true] at hx
+      rcases mem_of_mem_foldl_insert o.roles _ x hx with hx1 | hx1
+      · exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inl hx1)))
+      · exact Or.inr (hconf x hx1)
+    · simp only [hqr, if_false] at hx
+      exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inl hx)))
+  · exact Or.inl ((effective_roles m q x).mpr (Or.inr (Or.inr ⟨e, he, hq, hxe⟩)))
+
+/-! ## Invitations -/
+
+/-- The table after an entry for `i` is put has that entry under `i`. -/
+theorem lookup_putInv_self (m : MTenant) (i : InvitationId) (d : InvitationDef) :
+    (putInv m i d).invitations.lookup i = some d := by
+  unfold putInv
+  simp
+
+/-- An accepted creation records the invitation for the issuer, expiring fourteen days after the time. -/
+theorem create_invitation_expiry (m m' : MTenant) (c : MCtx) (inv : InvitationId) (address : String)
+    (roles : List RoleId) (h : createInvitationStep m c inv address roles = .ok m') :
+    ∃ creator, c.principal = .user creator ∧
+      ∃ d, m'.invitations.lookup inv = some d ∧ d.expiresAt = c.now + invitationLifetime ∧
+        d.createdBy = creator := by
+  unfold createInvitationStep at h
+  cases hp : c.principal with
+  | system => simp only [hp] at h; repeat' split at h; all_goals cases h
+  | anonymous => simp only [hp] at h; repeat' split at h; all_goals cases h
+  | user creator =>
+    simp only [hp] at h
+    refine ⟨creator, rfl, ?_⟩
+    repeat' split at h
+    all_goals try cases h
+    all_goals exact ⟨_, lookup_putInv_self _ _ _, rfl, rfl⟩
+
+/-- An accepted redemption leaves the invitation redeemed by the redeemer. -/
+theorem redeem_sets_redeemed (m m' : MTenant) (c : MCtx) (inv : InvitationId)
+    (h : redeemInvitationStep m c inv = .ok m') :
+    ∃ redeemer o', m'.invitations.lookup inv = some o' ∧ o'.redeemedBy = some redeemer := by
+  obtain ⟨redeemer, o, _, _, hm', _, _, _, _, _⟩ := redeem_ok_form m m' c inv h
+  subst hm'
+  exact ⟨redeemer, _, lookup_putInv_self _ _ _, rfl⟩
+
+/-- An invitation that is redeemed or revoked is refused any redemption, whoever asks. -/
+theorem redeem_refused_of_closed (m : MTenant) (c : MCtx) (inv : InvitationId) (o : InvitationDef)
+    (hl : m.invitations.lookup inv = some o) (hc : (o.redeemedBy.isSome || o.revokedBy.isSome) = true) :
+    ∃ e, redeemInvitationStep m c inv = .error e := by
+  unfold redeemInvitationStep
+  repeat' split
+  all_goals first
+    | exact ⟨_, rfl⟩
+    | (exfalso; simp_all)
+    | (simp_all)
+
+/-- A redeemed invitation is never redeemed again. -/
+theorem redeem_twice_refused (m' : MTenant) (c' : MCtx) (inv : InvitationId) (o : InvitationDef)
+    (hl : m'.invitations.lookup inv = some o) (hr : o.redeemedBy.isSome = true) :
+    ∃ e, redeemInvitationStep m' c' inv = .error e :=
+  redeem_refused_of_closed m' c' inv o hl (by simp [hr])
+
+/-- A revoked invitation is never redeemed. -/
+theorem revoked_not_redeemable (m m' : MTenant) (c : MCtx) (inv : InvitationId)
+    (h : revokeInvitationStep m c inv = .ok m') (c' : MCtx) :
+    ∃ e, redeemInvitationStep m' c' inv = .error e := by
+  unfold revokeInvitationStep at h
+  cases hp : c.principal with
+  | system => simp only [hp] at h; repeat' split at h; all_goals cases h
+  | anonymous => simp only [hp] at h; repeat' split at h; all_goals cases h
+  | user actor =>
+    simp only [hp] at h
+    cases hl : m.invitations.lookup inv with
+    | none => simp only [hl] at h; repeat' split at h; all_goals cases h
+    | some o =>
+      simp only [hl] at h
+      repeat' split at h
+      all_goals try cases h
+      all_goals (subst_vars; exact redeem_refused_of_closed _ c' inv _ (lookup_putInv_self _ _ _) (by simp))
+
+/-- An accepted redemption is made only before expiry: the invitation was not past its time. -/
+theorem redeem_not_expired (m m' : MTenant) (c : MCtx) (inv : InvitationId)
+    (h : redeemInvitationStep m c inv = .ok m') :
+    ∃ o, m.invitations.lookup inv = some o ∧ c.now < o.expiresAt := by
+  obtain ⟨_, o, _, hl, _, _, _, hexp, _, _⟩ := redeem_ok_form m m' c inv h
+  exact ⟨o, hl, hexp⟩
+
+/-- An accepted redemption is of an invitation that is neither redeemed nor revoked. -/
+theorem redeem_not_closed (m m' : MTenant) (c : MCtx) (inv : InvitationId)
+    (h : redeemInvitationStep m c inv = .ok m') :
+    ∃ o, m.invitations.lookup inv = some o ∧ o.redeemedBy = none ∧ o.revokedBy = none := by
+  obtain ⟨_, o, _, hl, _, hr, hv, _, _, _⟩ := redeem_ok_form m m' c inv h
+  exact ⟨o, hl, hr, hv⟩
+
+/-- An accepted redemption is made while the issuer may still manage members and confer each role. -/
+theorem redeem_issuer_authority (m m' : MTenant) (c : MCtx) (inv : InvitationId)
+    (h : redeemInvitationStep m c inv = .ok m') :
+    ∃ o, m.invitations.lookup inv = some o ∧ manageMembers m (.user o.createdBy) = true ∧
+      ∀ x ∈ o.roles, mayConfer m (.user o.createdBy) x = true := by
+  obtain ⟨_, o, _, hl, _, _, _, _, hman, hconf⟩ := redeem_ok_form m m' c inv h
+  exact ⟨o, hl, hman, hconf⟩
+
+/-! ## Reserved principal ids -/
+
+/-- A step that names a reserved principal, or whose caller is one, is refused before anything else. -/
+theorem reserved_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx) (i : MIntent)
+    (h : reservedRefused reserved c i = true) : stepWorld reserved w c i = .error .invalidIntent := by
+  unfold stepWorld
+  simp [h]
+
+/-- Assigning a reserved principal a role is refused. -/
+theorem assign_reserved_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx)
+    (p : PrincipalId) (r : RoleId) (h : reserved p = true) :
+    stepWorld reserved w c (.member (.assignRole p r)) = .error .invalidIntent := by
+  apply reserved_refused
+  simp [reservedRefused, h]
+
+/-- Adding a reserved principal to a team is refused. -/
+theorem add_member_reserved_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx)
+    (team : TeamId) (p : PrincipalId) (h : reserved p = true) :
+    stepWorld reserved w c (.member (.addTeamMember team p)) = .error .invalidIntent := by
+  apply reserved_refused
+  simp [reservedRefused, h]
+
+/-- Creating a tenant for a reserved owner is refused. -/
+theorem create_reserved_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx)
+    (owner : PrincipalId) (name : String) (h : reserved owner = true) :
+    stepWorld reserved w c (.createTenant owner name) = .error .invalidIntent := by
+  apply reserved_refused
+  simp [reservedRefused, h]
+
+/-! ## Creating a tenant -/
+
+/-- An accepted creation makes the genesis tenant under the named owner, when the tenant did not exist,
+    by the system, with a name that is not blank. -/
+theorem create_genesis (reserved : PrincipalId → Bool) (w w' : MWorld) (c : MCtx) (owner : PrincipalId)
+    (name : String) (h : stepWorld reserved w c (.createTenant owner name) = .ok w') :
+    w c.tenant = none ∧ c.principal = .system ∧ w' c.tenant = some (genesisTenant owner) := by
+  unfold stepWorld at h
+  split at h
+  · cases h
+  · cases hw : w c.tenant with
+    | some _ => simp only [hw] at h; cases h
+    | none =>
+      simp only [hw] at h
+      split at h
+      · cases h
+      · split at h
+        · cases h
+        · cases h
+          simp_all
+
+/-- A tenant that exists is not created again. -/
+theorem create_existing_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx) (owner : PrincipalId)
+    (name : String) (hr : reservedRefused reserved c (.createTenant owner name) = false)
+    (hs : (w c.tenant).isSome = true) :
+    stepWorld reserved w c (.createTenant owner name) = .error .tenantExists := by
+  obtain ⟨m, hm⟩ := Option.isSome_iff_exists.mp hs
+  unfold stepWorld
+  simp [hr, hm]
+
+/-- Only the system creates a tenant. -/
+theorem create_not_system_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx) (owner : PrincipalId)
+    (name : String) (hr : reservedRefused reserved c (.createTenant owner name) = false)
+    (hw : w c.tenant = none) (hp : c.principal ≠ .system) :
+    stepWorld reserved w c (.createTenant owner name) = .error .unauthorized := by
+  unfold stepWorld
+  simp [hr, hw, hp]
+
+/-- The genesis tenant has an owner and distinct team ids. -/
+theorem genesis_owner_and_nodup (o : PrincipalId) :
+    (genesisTenant o).hasOwner = true ∧ (genesisTenant o).TeamsNodup :=
+  ⟨genesis_hasOwner o, by simp [MTenant.TeamsNodup, genesisTenant]⟩
+
+
+/-! ## The world -/
+
+/-- An accepted creation makes the world the old one with the new genesis tenant at the context's id. -/
+theorem create_world_form (reserved : PrincipalId → Bool) (w w' : MWorld) (c : MCtx) (owner : PrincipalId)
+    (name : String) (h : stepWorld reserved w c (.createTenant owner name) = .ok w') :
+    w' = fun x => if x = c.tenant then some (genesisTenant owner) else w x := by
+  unfold stepWorld at h
+  cases hw : w c.tenant with
+  | some _ => simp only [hw] at h; repeat' split at h; all_goals cases h
+  | none =>
+    simp only [hw] at h
+    repeat' split at h
+    all_goals (try cases h)
+    all_goals rfl
+
+/-- An accepted intent in a tenant that exists changes that tenant by a membership step, and no other. -/
+theorem stepWorld_member_form (reserved : PrincipalId → Bool) (w w' : MWorld) (c : MCtx) (j : MemberIntent)
+    (h : stepWorld reserved w c (.member j) = .ok w') :
+    ∃ mt m', w c.tenant = some mt ∧ stepMember mt c j = .ok m' ∧
+      w' = fun x => if x = c.tenant then some m' else w x := by
+  unfold stepWorld at h
+  cases hw : w c.tenant with
+  | none => simp only [hw] at h; repeat' split at h; all_goals cases h
+  | some mt =>
+    simp only [hw] at h
+    cases hs : stepMember mt c j with
+    | error e => simp only [hs] at h; repeat' split at h; all_goals cases h
+    | ok m' =>
+      simp only [hs] at h
+      repeat' split at h
+      all_goals (try cases h)
+      all_goals exact ⟨mt, m', rfl, hs, rfl⟩
+
+/-- An accepted step keeps an owner in every tenant that had one, whichever tenant it addresses. -/
+theorem owner_kept_world (reserved : PrincipalId → Bool) (w w' : MWorld) (c : MCtx) (i : MIntent)
+    (hn : ∀ x m, w x = some m → m.TeamsNodup) (h : stepWorld reserved w c i = .ok w') :
+    ∀ x m, w x = some m → m.hasOwner = true → ∃ m', w' x = some m' ∧ m'.hasOwner = true := by
+  cases i with
+  | createTenant owner name =>
+    have hwf := create_world_form reserved w w' c owner name h
+    obtain ⟨hnone, _, _⟩ := create_genesis reserved w w' c owner name h
+    intro x m hx ho
+    have hne : x ≠ c.tenant := fun hxc => by subst hxc; rw [hnone] at hx; cases hx
+    refine ⟨m, ?_, ho⟩
+    rw [hwf]
+    simp [hne, hx]
+  | member j =>
+    obtain ⟨mt, m', hmt, hs, hwf⟩ := stepWorld_member_form reserved w w' c j h
+    intro x m hx ho
+    by_cases hxc : x = c.tenant
+    · subst hxc
+      have hmm : mt = m := Option.some.inj (by rw [← hmt, hx])
+      subst hmm
+      refine ⟨m', ?_, stepMember_owner_kept mt m' c j (hn _ _ hmt) hs ho⟩
+      rw [hwf]
+      simp
+    · refine ⟨m, ?_, ho⟩
+      rw [hwf]
+      simp [hxc, hx]
+
+/-- An accepted step keeps team ids distinct in every tenant. -/
+theorem stepWorld_nodup (reserved : PrincipalId → Bool) (w w' : MWorld) (c : MCtx) (i : MIntent)
+    (hn : ∀ x m, w x = some m → m.TeamsNodup) (h : stepWorld reserved w c i = .ok w') :
+    ∀ x m, w' x = some m → m.TeamsNodup := by
+  cases i with
+  | createTenant owner name =>
+    have hwf := create_world_form reserved w w' c owner name h
+    intro x m hx
+    rw [hwf] at hx
+    by_cases hxc : x = c.tenant
+    · subst hxc
+      simp only [if_true] at hx
+      cases hx
+      exact (genesis_owner_and_nodup owner).2
+    · simp only [hxc, if_false] at hx
+      exact hn x m hx
+  | member j =>
+    obtain ⟨mt, m', hmt, hs, hwf⟩ := stepWorld_member_form reserved w w' c j h
+    intro x m hx
+    rw [hwf] at hx
+    by_cases hxc : x = c.tenant
+    · subst hxc
+      simp only [if_true] at hx
+      cases hx
+      exact stepMember_teamsNodup mt m' c j (hn _ _ hmt) hs
+    · simp only [hxc, if_false] at hx
+      exact hn x m hx
+
 end Strata
