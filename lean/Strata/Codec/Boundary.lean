@@ -937,6 +937,7 @@ def encResource : Resource → Bytes
   | .object ty => tag 0 :: encNat ty
   | .anyObject => [tag 1]
   | .schema => [tag 2]
+  | .members => [tag 3]
 
 def decResource : Dec Resource := fun bs =>
   match bs with
@@ -948,6 +949,7 @@ def decResource : Dec Resource := fun bs =>
       | none => none
     | 1 => some (.anyObject, r)
     | 2 => some (.schema, r)
+    | 3 => some (.members, r)
     | _ => none
 
 theorem lawful_resource : Lawful encResource decResource := by
@@ -957,12 +959,13 @@ theorem lawful_resource : Lawful encResource decResource := by
     | object ty => simp [encResource, decResource, tag, lawful_nat.1 ty rest]
     | anyObject => simp [encResource, decResource, tag]
     | schema => simp [encResource, decResource, tag]
+    | members => simp [encResource, decResource, tag]
   · intro bs x rest h
     cases bs with
     | nil => simp [decResource] at h
     | cons b r =>
-      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ 3 ≤ b.toNat by omega)
-        with hk | hk | hk | hk
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ 4 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk
       · simp only [decResource, hk] at h
         cases hn : decNat r with
         | none => simp [hn] at h
@@ -978,6 +981,9 @@ theorem lawful_resource : Lawful encResource decResource := by
       · simp only [decResource, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encResource, byte_eq_tag b 2 hk]
+      · simp only [decResource, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encResource, byte_eq_tag b 3 hk]
       · simp only [decResource] at h
         repeat' split at h
         all_goals first | omega | simp at h

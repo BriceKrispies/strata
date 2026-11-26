@@ -1,4 +1,5 @@
 import Strata.Model
+import Strata.Members
 import Strata.References
 import Strata.Uniqueness
 import Strata.Proofs

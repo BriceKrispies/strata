@@ -161,6 +161,8 @@ inductive Resource where
   | object (ty : TypeId)
   | anyObject
   | schema
+  /-- The membership of the tenant: its members, teams and invitations (slice 7). -/
+  | members
   deriving DecidableEq, Repr
 
 /-- What a role grants: a capability, or an action on the records of an object type (the kernel's
@@ -772,7 +774,8 @@ def Tenant.clearBreaks (t : Tenant) (ty : TypeId) (id : RecordId) : Bool :=
       (constraintProblem (storedEnv (clearRef e.2.schema ty id q.2)) e.2.constraints).isSome))
 
 /-- The roles a principal holds (the kernel's `roles_of`): none for the system, `public` for an
-    anonymous caller, and for a user its direct roles and `public`. -/
+    anonymous caller, and for a user its direct roles and `public`. Teams are added in
+    `Strata/Members.lean`, which holds them beside the tenant. -/
 def Tenant.rolesOf (t : Tenant) : Principal → List RoleId
   | .system => []
   | .anonymous => [publicRole]
