@@ -227,7 +227,7 @@ fn minimise_disagreement(
 /// The accepted outcome kinds, one per intent kind of the scenario format: the intent's name
 /// followed by `ok`. `require` and `unique` are split by their mode, as the model's strict and lax
 /// schema outcomes differ.
-pub const ACCEPTED_KINDS: [&str; 22] = [
+pub const ACCEPTED_KINDS: [&str; 23] = [
     "create ok",
     "update ok",
     "patch ok",
@@ -237,6 +237,7 @@ pub const ACCEPTED_KINDS: [&str; 22] = [
     "unique-strict ok",
     "unique-lax ok",
     "composite ok",
+    "schema ok",
     "create-tenant ok",
     "assign ok",
     "revoke ok",
@@ -291,7 +292,7 @@ pub const READ_KINDS: [&str; 23] = [
 /// left out of the coverage requirement; anything else that never occurs is a coverage gap.
 pub const UNREACHABLE: [(&str, &str); 1] = [(
     "err evaluation",
-    "the kernel's expr::check refuses ill-typed constraints and defaults when they are defined, so      an accepted schema never fails to evaluate; reachable again once the model has schema validity      (slice 11 of WG-5373)",
+    "the kernel's expr::check refuses ill-typed constraints and defaults when they are defined, so      an accepted schema never fails to evaluate, and the generator never retypes or removes a field a constraint reads (the slice 11 review note says why); reachable again once the model has the kernel's type check of expressions",
 )];
 
 /// What a run found.
@@ -325,7 +326,7 @@ impl Totals {
 }
 
 /// The intent of an `op` line, as the coverage names it: `create`, `update`, `patch`, `delete`,
-/// `require-strict`, `require-lax`, `unique-strict`, `unique-lax`, `composite`, or one of the membership
+/// `require-strict`, `require-lax`, `unique-strict`, `unique-lax`, `composite`, `schema` (slice 11), or one of the membership
 /// intents of slice 7 (`create-tenant`, `assign`, `revoke`, `team`, `team-assign`, `team-revoke`,
 /// `team-add`, `team-remove`, `invite`, `invite-revoke`, `redeem`).
 fn intent_of(op: &str) -> &'static str {
@@ -352,6 +353,7 @@ fn intent_of(op: &str) -> &'static str {
         Some("unique") if tokens.get(5).copied() == Some("strict") => "unique-strict",
         Some("unique") => "unique-lax",
         Some("composite") => "composite",
+        Some("schema") => "schema",
         Some("create-tenant") => "create-tenant",
         Some("assign") => "assign",
         Some("revoke") => "revoke",

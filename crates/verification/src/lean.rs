@@ -15,14 +15,18 @@
 //! | fields 0 to 8, 10, 11, 12 of type 1 | `f0: list of ref item, restrict`, `f1: string, required`, `f2: int`, `f3: bool`, `f4: ref item, set-null`, `f5: ref item, restrict`, `f6: int, default 7`, `f7: list of string`, `f8: list of ref item, set-null`, `f10: string, unique`, `f11: ref part, restrict`, `f12: ref part, set-null` |
 //! | fields 1 to 4 of type 2 | `f1: ref item, restrict`, `f2: ref item, set-null`, `f3: list of ref item, set-null`, `f4: int` |
 //! | fields 1 to 3 of type 4 (the tickets, slice 8) | `f01: string, default open`, `f02: int`, `f03: string`; the workflow `ticket_flow` over `f01` (`open` to `closed` when `f02` is at least one and the note `f03` becomes `shipped`; `closed` to `open`; `open` to `archived` when `f02` is absent, setting `f02` to `0`; `closed` to `archived`; `open` to `escalated` setting `f02` to nine); an editor does everything to them, a writer reads and creates them and changes or deletes the ones it created whose `f02` is at most five |
-//! | `type <n>` before the intent | the object type of the intent; any number but `1` and `2` names a type the tenant does not have |
+//! | `type <n>` before the intent | the object type of the intent; any number but `1` and `2` names a type the tenant does not have unless a change defined it (the types `5` to `8` are the ones the generator defines, `type5` to `type8`, so that the kernel's order of the types by name is the model's by number) |
 //! | members, roles and policies | the `owner` role; an `editor` role with policies allowing every action on each object type; a `writer` role with policies allowing read and create, and update or delete where `record.$created_by == principal`; the `public` role with a policy allowing create of `part` when no user acts (`isNull(principal)`), so an anonymous caller may create a part; the system holds no role |
 //! | `create fs` | `CreateRecord` |
 //! | `update id [v=n] fs` | `UpdateRecord` naming fields `f0` to `f8` and `f10`, absent ones as `null` |
 //! | `patch id [v=n] fs` | `UpdateRecord` naming only the fields given, `n` removing one |
 //! | `delete id [v=n]` | `DeleteRecord` |
-//! | `setRequired f strict` | `ChangeSchema [DefineField f required]` with `Reject` or `Grandfather` |
-//! | `setUnique f strict` | `ChangeSchema [DefineField f unique]`, the field's other attributes kept, with `Reject` or `Grandfather` |
+//! | `setRequired f strict` | `ChangeSchema [DefineField f required]` with `Reject` or `Grandfather`; a field the type lacks is defined as an optional boolean field (the model's `plainField`) |
+//! | `setUnique f strict` | `ChangeSchema [DefineField f unique]`, the field's other attributes kept (an optional boolean field when the type lacks it), with `Reject` or `Grandfather` |
+//! | `schema [v=<n>] [strict\|lax] <change> ; <change> ..` (slice 11) | `ChangeSchema` with `expected_version` `<n>` and `Reject` (strict, the default) or `Grandfather`; the changes in order |
+//! | `define-field <type> <field> <ty> [required] [unique] [default=<v>]` | `DefineField` (a new field, or the redefinition of one); `<ty>` is `int`, `str`, `bool`, `ref:<type>:r` (restrict), `ref:<type>:s` (set-null) or `list:<ty>` |
+//! | `remove-field <type> <field>`, `define-type <type>`, `remove-type <type> [delete]` | `RemoveField`, `DefineObject` (label `type<n>`), `RemoveObject` with `delete_records` |
+//! | `Err.schemaConflict` | `SchemaConflict` |
 //! | `defineUnique fs` | `ChangeSchema [DefineUnique]`, a composite constraint named `u<fields>` |
 //! | `Err.danglingReference`, `Err.stillReferenced` | `DanglingReference`, `StillReferenced` |
 //! | `Err.invalid` | `TypeMismatch`, `MissingRequired`, `UnknownField` |
@@ -61,7 +65,8 @@
 //!                              one intent, as `create f=v ..`, `update <id> [v=n] f=v ..`,
 //!                              `patch <id> [v=n] f=v ..`, `delete <id> [v=n]`,
 //!                              `require <field> strict|lax`
-//!                              `unique <field> strict|lax`, `composite <field> ..`, or a membership intent
+//!                              `unique <field> strict|lax`, `composite <field> ..`,
+//!                              `schema [v=<n>] [strict|lax] <change> ; <change> ..` (slice 11), or a membership intent
 //!                              (slice 7): `create-tenant <owner> <name>`, `assign <user> <role>`,
 //!                              `revoke <user> <role>`, `team <team> <label>`, `team-assign <team> <role>`,
 //!                              `team-revoke <team> <role>`, `team-add <team> <user>`,
@@ -856,16 +861,132 @@ fn ticket_workflow() -> WorkflowDef {
     }
 }
 
-/// The definition a `require` or `unique` line falls back to when the tenant does not have the
-/// field yet, as `field_def`, `part_field_def` and `ticket_field_def` define the fixture's fields.
-fn fallback_field(object: &ObjectTypeId, n: u64) -> FieldDef {
-    if *object == part() {
-        part_field_def(n)
-    } else if *object == ticket() {
-        ticket_field_def(n)
-    } else {
-        field_def(n, false)
+/// The definition a `require` or `unique` line falls back to when the tenant does not have the field: an optional
+/// boolean field, which the line then makes required or unique. This is the model `plainField`, the definition
+/// `setRequired` and `setUnique` give a field their object type lacks.
+fn fallback_field(_object: &ObjectTypeId, n: u64) -> FieldDef {
+    FieldDef {
+        id: field_id(n),
+        label: format!("f{n}"),
+        ty: FieldType::Bool,
+        required: false,
+        unique: false,
+        default: None,
+        read: None,
+        personal: None,
+        normalise: None,
+        computed: None,
     }
+}
+
+/// A field type token of a `schema` line: `int`, `str`, `bool`, `ref:<type>:r` (a reference that restricts the delete
+/// of its target), `ref:<type>:s` (one cleared when its target is deleted) and `list:<type>` (the model `parseTy`).
+fn parse_field_type(token: &str) -> Option<FieldType> {
+    match token {
+        "int" => Some(FieldType::Int),
+        "str" => Some(FieldType::Str),
+        "bool" => Some(FieldType::Bool),
+        _ => {
+            if let Some(inner) = token.strip_prefix("list:") {
+                parse_field_type(inner).map(|t| FieldType::List(Box::new(t)))
+            } else if let Some(rest) = token.strip_prefix("ref:") {
+                let (target, mode) = rest.split_once(':')?;
+                let on_delete = match mode {
+                    "r" => OnDelete::Restrict,
+                    "s" => OnDelete::SetNull,
+                    _ => return None,
+                };
+                Some(FieldType::Ref {
+                    target: object_of(target.parse().ok()?),
+                    on_delete,
+                })
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// One change of a `schema` line, as the model `parseChange` reads it: `define-field <type> <field> <ty> [required]
+/// [unique] [default=<v>]`, `remove-field <type> <field>`, `define-type <type>`, `remove-type <type> [delete]`.
+fn parse_schema_change(tokens: &[&str]) -> Option<SchemaChange> {
+    match tokens {
+        ["define-field", object, field, ty, options @ ..] => {
+            let n: u64 = field.parse().ok()?;
+            let mut def = FieldDef {
+                id: field_id(n),
+                label: format!("f{n}"),
+                ty: parse_field_type(ty)?,
+                required: false,
+                unique: false,
+                default: None,
+                read: None,
+                personal: None,
+                normalise: None,
+                computed: None,
+            };
+            for option in options {
+                match *option {
+                    "required" => def.required = true,
+                    "unique" => def.unique = true,
+                    other => {
+                        let value = other.strip_prefix("default=")?;
+                        def.default = match parse_value(value) {
+                            Value::Null => None,
+                            v => Some(Expr::Lit(v)),
+                        };
+                    }
+                }
+            }
+            Some(SchemaChange::DefineField {
+                object: object_of(object.parse().ok()?),
+                field: def,
+            })
+        }
+        ["remove-field", object, field] => Some(SchemaChange::RemoveField {
+            object: object_of(object.parse().ok()?),
+            field: field_id(field.parse().ok()?),
+        }),
+        ["define-type", object] => {
+            let n: u64 = object.parse().ok()?;
+            Some(SchemaChange::DefineObject {
+                id: object_of(n),
+                label: format!("type{n}"),
+            })
+        }
+        ["remove-type", object] => Some(SchemaChange::RemoveObject {
+            id: object_of(object.parse().ok()?),
+            delete_records: false,
+        }),
+        ["remove-type", object, "delete"] => Some(SchemaChange::RemoveObject {
+            id: object_of(object.parse().ok()?),
+            delete_records: true,
+        }),
+        _ => None,
+    }
+}
+
+/// A `schema` line, as the model `parseSchemaOp` reads it: `schema [v=<n>] [strict|lax] <change> ; <change> ..`
+/// (strict unless it says `lax`), the changes separated by `;`.
+fn parse_schema_op(tokens: &[&str]) -> Option<Intent> {
+    let (expected, rest) = split_expected_version(tokens);
+    let (existing, rest) = match rest.split_first() {
+        Some((&"strict", more)) => (ExistingData::Reject, more),
+        Some((&"lax", more)) => (ExistingData::Grandfather, more),
+        _ => (ExistingData::Reject, rest),
+    };
+    let changes: Vec<SchemaChange> = if rest.is_empty() {
+        Vec::new()
+    } else {
+        rest.split(|token| *token == ";")
+            .map(parse_schema_change)
+            .collect::<Option<Vec<SchemaChange>>>()?
+    };
+    Some(Intent::ChangeSchema {
+        changes,
+        expected_version: expected.map(SchemaVersion),
+        existing,
+    })
 }
 
 /// The user numbers from this one up are the kernel's reserved principal ids (the model's
@@ -1544,6 +1665,26 @@ fn show_world(world: &World) -> Vec<String> {
                 );
             }
         }
+        // The object types a schema change defined (`type<n>`), by number, each with its header and its records, as
+        // the model prints every type but the item, the part and the ticket that way.
+        let mut defined: Vec<(u64, &ObjectTypeId)> = tenant
+            .schema
+            .objects
+            .keys()
+            .filter(|object| !["item", "part", "ticket"].contains(&object.as_str()))
+            .map(|object| (object_number(object), object))
+            .collect();
+        defined.sort_unstable_by_key(|(number, _)| *number);
+        for (number, object) in defined {
+            out.push(format!("type {number} required={}", required_text(object)));
+            for record in tenant.records_of(object) {
+                out.push(
+                    format!("type {number} record {} {}", record.id, record_text(record))
+                        .trim_end()
+                        .to_string(),
+                );
+            }
+        }
         // The membership, when it is not the one the fixture starts the tenant with.
         let lines = membership_lines(n, tenant);
         if n == 3 || lines != initial_membership()[n as usize - 1] {
@@ -1620,6 +1761,17 @@ fn schema_summary(changes: &[SchemaChange]) -> String {
                 object_number(object),
                 field_number(&field.id)
             )),
+            SchemaChange::RemoveField { object, field } => Some(format!(
+                "remove-field:{}.{}",
+                object_number(object),
+                field_number(field)
+            )),
+            SchemaChange::DefineObject { id, .. } => {
+                Some(format!("define-type:{}", object_number(id)))
+            }
+            SchemaChange::RemoveObject { id, .. } => {
+                Some(format!("remove-type:{}", object_number(id)))
+            }
             SchemaChange::DefineUnique { object, unique } => {
                 let fields: Vec<String> = unique
                     .fields
@@ -2057,6 +2209,13 @@ pub fn kernel_output(scenarios: &str) -> String {
                             expected_version,
                         }
                     }
+                    ["schema", rest @ ..] => match parse_schema_op(rest) {
+                        Some(intent) => intent,
+                        None => {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                    },
                     ["require", field, mode] => {
                         let n: u64 = field.parse().expect("field");
                         // A field the tenant does not have (or a tenant that does not exist) is

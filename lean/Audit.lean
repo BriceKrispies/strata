@@ -2480,7 +2480,7 @@ end Strata
 #print axioms Strata.take_take_le
 #print axioms Strata.types_sorted_strict
 
--- Slice 11, part a: the schema change in general (Strata/SchemaChange.lean, Strata/SchemaChangeProofs.lean).
+-- Slice 11: the schema change in general (Strata/SchemaChange.lean, Strata/SchemaChangeInv.lean, Strata/SchemaChangeProofs.lean, Strata/Impl/SchemaI.lean).
 #print axioms Strata.changeSchemaT_unauthorized
 #print axioms Strata.changeSchemaT_conflict
 #print axioms Strata.changeSchemaT_empty
@@ -2500,3 +2500,36 @@ end Strata
 #print axioms Strata.lookup_filter_removed
 #print axioms Strata.removeType_deleted_gone
 #print axioms Strata.changeSchemaT_removeField
+#print axioms Strata.changeSchemaT_parts
+#print axioms Strata.stepTenant_changeSchema_parts
+#print axioms Strata.chRel_applyChanges
+#print axioms Strata.changeSchema_ctx
+#print axioms Strata.changeSchema_distinct
+#print axioms Strata.changeSchema_idsBelow
+#print axioms Strata.changeSchema_states
+#print axioms Strata.changeSchema_satisfied
+#print axioms Strata.changeSchema_refs
+#print axioms Strata.changeSchema_table
+#print axioms Strata.changeSchemaT_types_congr
+#print axioms Strata.schemaRulesOk_entry
+#print axioms Strata.impactRefused_removed
+#print axioms Strata.schemaRulesOk_rewrite
+#print axioms Strata.stripRecord_get
+#print axioms Strata.stripRecord_declared
+#print axioms Strata.evalExpr_storedEnv_congr
+#print axioms Strata.constraintProblem_storedEnv_congr
+#print axioms Strata.defineType_existing
+#print axioms Strata.setRequired_schema_declared
+#print axioms Strata.setRequired_schema_absent
+#print axioms Strata.setUnique_schema_declared
+#print axioms Strata.setUnique_schema_absent
+#print axioms Strata.applyChange_defineField_putType
+#print axioms Strata.Impl.applyChangesI_abs
+#print axioms Strata.Impl.rewriteTypesI_abs
+#print axioms Strata.Impl.changeSchemaI_refines
+#print axioms Strata.Impl.changeSchemaI_inv
+#print axioms Strata.Impl.XTenant.rebuild_ok
+#print axioms Strata.Impl.changeSchema_good
+#print axioms Strata.Codec.lawful_change
+#print axioms Strata.Codec.fix_intent_changeSchema
+#print axioms Strata.Codec.fix_err_schemaConflict

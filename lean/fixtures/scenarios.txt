@@ -2388,3 +2388,133 @@ read 1 100 aggregate tickets_open max_note
 read 1 101 aggregate tickets_open max_note
 read 1 100 aggregate tickets_open max_note filter.2=i:2
 end
+scenario h-schema-define-types-and-fields
+op 1 100 schema strict define-type 5 ; define-field 5 1 str required unique ; define-field 5 2 int
+op 1 100 type 5 create 1=s:a 2=i:1
+op 1 100 type 5 create 1=s:a 2=i:2
+op 1 100 type 5 create 1=s:b
+op 1 100 schema strict define-field 1 13 int
+op 1 100 create 1=s:x 13=i:4
+op 1 100 create 1=s:y 13=s:no
+op 1 100 schema strict define-type 5
+op 1 100 schema strict define-field 5 3 list:ref:1:s ; define-field 5 4 bool default=b:1
+op 1 100 type 5 create 1=s:c 3=l:r:3 4=b:0
+op 1 100 type 5 create 1=s:d 3=l:r:99
+scenario h-schema-expected-version
+op 1 100 schema v=3 strict define-type 5
+op 1 100 schema v=3 strict define-type 6
+op 1 100 schema v=4 strict define-type 6
+op 1 100 schema v=9 lax define-type 7
+op 1 101 schema v=3 strict define-type 7
+op 2 200 schema v=3 lax define-field 1 13 bool
+scenario h-schema-refusals
+op 1 102 schema strict define-type 5
+op 1 system schema strict define-type 5
+op 1 anon schema strict define-type 5
+op 1 999 schema v=1 strict define-type 5
+op 1 100 schema strict
+op 1 100 schema lax
+op 1 100 schema strict define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5 ; define-type 5
+op 1 100 schema strict define-field 99 1 int
+op 1 100 schema strict define-field 1 13 ref:9:r
+op 1 100 schema strict define-field 1 13 list:int unique
+op 1 100 schema strict define-field 1 13 list:list:int
+op 1 100 schema strict remove-field 1 15
+op 1 100 schema strict remove-field 1 4 ; define-field 1 4 int
+op 1 100 schema strict remove-type 7
+op 1 100 schema strict remove-type 1
+op 3 300 schema strict define-type 5
+op 1 100 schema strict define-type 5 ; remove-field 5 1
+scenario h-schema-required-over-records
+op 1 100 create 1=s:a
+op 1 100 create 1=s:b 2=i:3
+op 1 100 schema strict define-field 1 13 int required
+op 1 100 schema lax define-field 1 13 int required
+op 1 100 patch 1 13=i:7
+op 1 100 schema strict define-field 1 13 int required unique
+op 1 100 schema strict define-field 1 13 str
+op 1 100 schema lax define-field 1 13 str
+op 1 100 schema strict define-field 1 13 str default=s:z
+op 1 100 create 1=s:c
+op 1 100 schema strict remove-field 1 13
+scenario h-schema-remove-field-strips-records
+op 1 100 create 1=s:a
+op 1 100 create 1=s:b 4=r:1 5=r:1 6=i:2
+op 2 200 create 1=s:z
+op 2 200 create 1=s:y 4=r:1
+op 1 100 schema strict remove-field 1 4 ; remove-field 1 6
+op 1 100 schema strict remove-field 1 4
+op 1 100 schema strict remove-field 1 5 ; define-field 1 5 int
+op 1 100 schema strict remove-field 1 5 ; define-field 1 5 ref:1:r
+op 1 100 create 1=s:c 4=r:1
+op 1 100 schema lax remove-field 2 3 ; remove-field 1 0 ; remove-field 1 8
+op 2 200 schema strict remove-field 1 4
+scenario h-schema-remove-type-with-records
+op 1 100 schema strict define-type 5 ; define-type 6 ; define-field 5 1 str ; define-field 6 1 int
+op 1 100 type 5 create 1=s:a
+op 1 100 type 5 create 1=s:b
+op 1 100 type 6 create 1=i:1
+op 1 100 schema strict remove-type 5
+op 1 100 schema strict remove-type 6 ; remove-type 5 delete
+op 1 100 schema lax remove-type 6 delete
+op 1 100 schema strict remove-type 6
+op 1 100 type 5 create 1=s:c
+scenario h-schema-composite-under-change
+op 1 100 schema strict define-field 1 13 int ; define-field 1 14 str
+op 1 100 composite 13 14
+op 1 100 schema strict define-field 1 13 str
+op 1 100 schema strict define-field 1 13 int required
+op 1 100 schema strict remove-field 1 14
+op 1 100 schema strict define-field 1 14 list:str
+op 1 100 schema strict remove-field 1 13 ; remove-field 1 14
+op 1 100 schema strict define-field 1 14 ref:1:r
+scenario h-schema-reference-to-type
+op 1 100 schema strict define-type 5 ; define-field 5 1 str ; define-field 1 13 ref:5:s
+op 1 100 type 5 create 1=s:a
+op 1 100 create 1=s:x 13=r:1
+op 1 100 create 1=s:y 13=r:7
+op 1 100 schema strict remove-type 5 delete
+op 1 100 schema strict remove-field 1 13 ; remove-type 5 delete
+op 1 100 schema strict define-field 1 13 ref:2:r
+op 1 100 schema strict define-field 1 14 ref:1:r
+op 1 100 schema lax define-field 1 13 ref:5:s
+scenario h-require-and-unique-define-absent-fields
+op 1 100 create 1=s:a
+op 1 100 require 13 strict
+op 1 100 unique 14 strict
+op 1 100 require 15 lax
+op 1 100 require 15 strict
+op 1 100 unique 16 lax
+op 1 100 type 2 require 17 lax
+op 1 100 type 2 unique 18 strict
+op 1 100 unique 13 strict
+op 1 101 require 20 lax
+op 1 100 type 9 require 21 lax
+op 1 100 create 1=s:b 13=b:1 15=b:0
+op 1 100 schema strict remove-field 1 13 ; remove-field 1 14
+scenario h-schema-unique-over-duplicates
+op 1 100 schema strict define-field 1 13 str
+op 1 100 create 1=s:a 13=s:dup
+op 1 100 create 1=s:b 13=s:dup
+op 1 100 schema strict define-field 1 13 str unique
+op 1 100 schema lax define-field 1 13 str unique
+op 1 100 create 1=s:c 13=s:dup
+op 1 100 create 1=s:c 13=s:new
+op 1 100 schema strict define-field 1 13 str required
+scenario h-schema-on-a-created-tenant
+op 3 300 schema strict define-type 5
+op 3 system create-tenant 300 s:acme
+op 3 300 schema strict define-type 5 ; define-field 5 1 str
+op 3 300 type 5 create 1=s:a
+op 3 300 schema v=2 strict define-type 6
+op 3 300 schema v=1 strict define-type 6
+op 3 300 schema strict remove-type 5 delete
+scenario h-schema-two-types-events-in-order
+op 1 100 schema strict define-type 5 ; define-type 6 ; define-field 5 1 str ; define-field 6 1 str
+op 1 100 type 6 create 1=s:a
+op 1 100 type 5 create 1=s:b
+op 1 100 type 5 create 1=s:c
+op 1 100 schema strict define-field 5 2 int ; define-field 6 2 int ; define-field 1 13 ref:6:s ; define-field 5 3 str
+op 1 100 type 5 patch 2 3=s:x
+op 1 100 type 6 patch 1 2=i:4
+op 1 100 schema strict remove-field 6 1 ; remove-field 5 3

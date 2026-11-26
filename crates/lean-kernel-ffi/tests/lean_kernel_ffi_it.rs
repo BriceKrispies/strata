@@ -6,9 +6,9 @@ use strata_lean_kernel_ffi::codec::{
     decode_record, decode_refusal, decode_step_result, decode_tenant, decode_ty, decode_val,
     encode_ctx, encode_field_def, encode_intent, encode_member_intent, encode_policy,
     encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
-    Action, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, InvitationDef, Limits, MemberIntent,
-    ObjType, OnDelete, Policy, Principal, Record, Refusal, Resource, Scope, StepResult, TeamDef,
-    Tenant, Ty, Val, WfTransition, Workflow, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
+    Action, Change, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, InvitationDef, Limits,
+    MemberIntent, ObjType, OnDelete, Policy, Principal, Record, Refusal, Resource, Scope,
+    StepResult, TeamDef, Tenant, Ty, Val, WfTransition, Workflow, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
 };
 use strata_lean_kernel_ffi::{step, step_reference};
 
@@ -255,6 +255,36 @@ fn codec_fixtures_match_the_lean_encoder() {
         })),
         vec![7, 9, 3, 172, 2, 0]
     );
+    // A schema change in general (slice 11; `fix_intent_changeSchema` and `fix_err_schemaConflict` in
+    // `Fixtures.lean`): the version 3 expected, lax, then four changes.
+    let schema_change = Intent::ChangeSchema {
+        expected: Some(3),
+        strict: false,
+        changes: vec![
+            Change::RemoveField { ty: 1, field: 13 },
+            Change::DefineType { ty: 5 },
+            Change::RemoveType {
+                ty: 5,
+                delete_records: true,
+            },
+            Change::DefineField {
+                ty: 1,
+                field: 2,
+                def: FieldDef {
+                    ty: Ty::Int,
+                    required: false,
+                    unique: true,
+                    default: Expr::Lit(Val::Int(-2)),
+                },
+            },
+        ],
+    };
+    let schema_change_bytes = vec![
+        8, 1, 3, 0, 4, 1, 1, 13, 2, 5, 3, 5, 1, 0, 1, 2, 0, 0, 1, 0, 1, 1, 1,
+    ];
+    assert_eq!(encode_intent(&schema_change), schema_change_bytes);
+    assert_eq!(decode_intent(&schema_change_bytes), Some(schema_change));
+    assert_eq!(encode_refusal(&Refusal::SchemaConflict), vec![19]);
     assert_eq!(encode_refusal(&Refusal::InvalidIntent), vec![14]);
     assert_eq!(encode_refusal(&Refusal::UnknownRole), vec![15]);
     assert_eq!(encode_refusal(&Refusal::LastOwner), vec![16]);
@@ -834,8 +864,40 @@ fn gen_member_intent(rng: &mut Rng) -> MemberIntent {
     }
 }
 
+fn gen_change(rng: &mut Rng) -> Change {
+    match rng.below(4) {
+        0 => Change::DefineField {
+            ty: gen_nat(rng),
+            field: gen_nat(rng),
+            def: gen_field_def(rng),
+        },
+        1 => Change::RemoveField {
+            ty: gen_nat(rng),
+            field: gen_nat(rng),
+        },
+        2 => Change::DefineType { ty: gen_nat(rng) },
+        _ => Change::RemoveType {
+            ty: gen_nat(rng),
+            delete_records: rng.coin(),
+        },
+    }
+}
+
 fn gen_intent(rng: &mut Rng) -> Intent {
-    match rng.below(8) {
+    match rng.below(9) {
+        8 => {
+            let expected = gen_opt(rng);
+            let strict = rng.coin();
+            let mut changes = Vec::new();
+            for _ in 0..rng.below(4) {
+                changes.push(gen_change(rng));
+            }
+            Intent::ChangeSchema {
+                expected,
+                strict,
+                changes,
+            }
+        }
         6 => Intent::CreateTenant {
             owner: gen_nat(rng),
             name: gen_string(rng),
@@ -886,7 +948,7 @@ fn gen_intent(rng: &mut Rng) -> Intent {
 }
 
 fn gen_refusal(rng: &mut Rng) -> Refusal {
-    match rng.below(19) {
+    match rng.below(20) {
         0 => Refusal::NoTenant,
         1 => Refusal::Unauthorized,
         2 => Refusal::NotFound,

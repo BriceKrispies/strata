@@ -293,4 +293,121 @@ theorem defineType_existing (types : List (TypeId × ObjType)) (ty : TypeId)
     (h : types.any (fun e => e.1 == ty) = true) : applyChange types (.defineType ty) = .ok types := by
   simp [applyChange, h]
 
+
+/-! ## The single-type intents are changes of the general form
+
+`setRequired` and `setUnique` write the schema that a `defineField` of the field's redefinition writes: the definition
+the field has, or the plain optional field when its type lacks it, with `required` or `unique` set. This is how the
+kernel's harness maps them (`ChangeSchema [DefineField ..]`). The two differ in what they check around the write:
+the single-type intents ask `schemaChangeRefused` over the type and the type its field names, the general change the
+schema rules, the impact rule, the rewrite of the records and the check of the references as well. -/
+
+theorem sc_lookup_eq_of_nodup (s : Schema) (hnd : (s.map Prod.fst).Nodup) (fd : FieldId × FieldDef) (h : fd ∈ s) :
+    s.lookup fd.1 = some fd.2 := by
+  induction s with
+  | nil => simp at h
+  | cons e es ih =>
+    obtain ⟨k, v⟩ := e
+    obtain ⟨hk, hrest⟩ := List.nodup_cons.mp hnd
+    rcases List.mem_cons.mp h with rfl | h'
+    · simp [List.lookup]
+    · have hne : fd.1 ≠ k := by
+        intro heq
+        apply hk
+        rw [← heq]
+        exact List.mem_map.mpr ⟨fd, h', rfl⟩
+      have hb : (fd.1 == k) = false := by simpa using hne
+      simp only [List.lookup, hb]
+      exact ih hrest h'
+
+theorem sc_lookup_none_not_key (s : Schema) (f : FieldId) (h : s.lookup f = none) :
+    ∀ fd ∈ s, (fd.1 == f) = false := by
+  induction s with
+  | nil => intro fd hfd; simp at hfd
+  | cons e es ih =>
+    obtain ⟨k, v⟩ := e
+    by_cases hkf : f = k
+    · subst hkf; simp [List.lookup] at h
+    · have hb : (f == k) = false := by simpa using hkf
+      simp only [List.lookup, hb] at h
+      intro fd hfd
+      rcases List.mem_cons.mp hfd with rfl | hfd'
+      · have : k ≠ f := fun e => hkf e.symm
+        simpa using this
+      · exact ih h fd hfd'
+
+theorem sc_absent_not_any (s : Schema) (f : FieldId) (hd : s.lookup f = none) :
+    ¬ s.any (fun fd => fd.1 == f) = true := by
+  intro h
+  obtain ⟨fd, hfd, hk⟩ := List.any_eq_true.mp h
+  have := sc_lookup_none_not_key s f hd fd hfd
+  rw [this] at hk
+  cases hk
+
+/-- A field its type declares: `setRequired` writes the schema of a `defineField` of its definition made required. -/
+theorem setRequired_schema_declared (s : Schema) (f : FieldId) (d : FieldDef) (hnd : (s.map Prod.fst).Nodup)
+    (hd : s.lookup f = some d) : makeRequired (ensureField s f) f = setField s f { d with required := true } := by
+  rw [ensureField_eq_of_lookup s f d hd]
+  have hany : s.any (fun fd => fd.1 == f) = true := sc_declared_of_lookup s f d hd
+  unfold setField makeRequired
+  rw [if_pos hany]
+  apply List.map_congr_left
+  intro fd hfd
+  by_cases hb : (fd.1 == f) = true
+  · have hk : fd.1 = f := by simpa using hb
+    have hl := sc_lookup_eq_of_nodup s hnd fd hfd
+    rw [hk, hd] at hl
+    have hdd : d = fd.2 := by simpa using hl
+    simp only [hb, if_true]
+    rw [← hk, ← hdd]
+  · simp [hb]
+
+/-- A field its type lacks: `setRequired` writes the schema of a `defineField` of the plain field made required. -/
+theorem setRequired_schema_absent (s : Schema) (f : FieldId) (hd : s.lookup f = none) :
+    makeRequired (ensureField s f) f = setField s f { plainField with required := true } := by
+  have hany := sc_absent_not_any s f hd
+  have hnot := sc_lookup_none_not_key s f hd
+  unfold ensureField setField makeRequired
+  rw [if_neg hany, if_neg hany, List.map_append]
+  have h1 : s.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with required := true }) else fd) = s.map id :=
+    List.map_congr_left (fun fd hfd => by simp [hnot fd hfd])
+  rw [h1, List.map_id]
+  simp
+
+/-- A field its type declares: `setUnique` writes the schema of a `defineField` of its definition made unique. -/
+theorem setUnique_schema_declared (s : Schema) (f : FieldId) (d : FieldDef) (hnd : (s.map Prod.fst).Nodup)
+    (hd : s.lookup f = some d) : makeUnique (ensureField s f) f = setField s f { d with unique := true } := by
+  rw [ensureField_eq_of_lookup s f d hd]
+  have hany : s.any (fun fd => fd.1 == f) = true := sc_declared_of_lookup s f d hd
+  unfold setField makeUnique
+  rw [if_pos hany]
+  apply List.map_congr_left
+  intro fd hfd
+  by_cases hb : (fd.1 == f) = true
+  · have hk : fd.1 = f := by simpa using hb
+    have hl := sc_lookup_eq_of_nodup s hnd fd hfd
+    rw [hk, hd] at hl
+    have hdd : d = fd.2 := by simpa using hl
+    simp only [hb, if_true]
+    rw [← hk, ← hdd]
+  · simp [hb]
+
+/-- A field its type lacks: `setUnique` writes the schema of a `defineField` of the plain field made unique. -/
+theorem setUnique_schema_absent (s : Schema) (f : FieldId) (hd : s.lookup f = none) :
+    makeUnique (ensureField s f) f = setField s f { plainField with unique := true } := by
+  have hany := sc_absent_not_any s f hd
+  have hnot := sc_lookup_none_not_key s f hd
+  unfold ensureField setField makeUnique
+  rw [if_neg hany, if_neg hany, List.map_append]
+  have h1 : s.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with unique := true }) else fd) = s.map id :=
+    List.map_congr_left (fun fd hfd => by simp [hnot fd hfd])
+  rw [h1, List.map_id]
+  simp
+
+/-- The single-type intents write one object type, as the change writes it: with the schema of the redefinition. -/
+theorem applyChange_defineField_putType (types : List (TypeId × ObjType)) (ty : TypeId) (f : FieldId)
+    (d : FieldDef) (o : ObjType) (ho : types.lookup ty = some o) :
+    applyChange types (.defineField ty f d) = .ok (putTypeList types ty { o with schema := setField o.schema f d }) := by
+  simp [applyChange, ho]
+
 end Strata

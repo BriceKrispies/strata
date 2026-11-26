@@ -30,7 +30,7 @@ use crate::lean::{build_model, kernel_output, op_outcomes, read_shapes, run_mode
 use std::path::Path;
 
 /// The intent kinds the generator produces; each is the word after the principal in an `op` line.
-pub const GENERATED_INTENTS: [&str; 18] = [
+pub const GENERATED_INTENTS: [&str; 19] = [
     "create",
     "update",
     "patch",
@@ -49,6 +49,7 @@ pub const GENERATED_INTENTS: [&str; 18] = [
     "invite",
     "invite-revoke",
     "redeem",
+    "schema",
 ];
 
 /// Known differences between the model and the kernel that are intended, each with its reason.
@@ -128,6 +129,10 @@ pub enum OpKind {
     InviteRevoke(u64),
     /// Redeem an invitation at a time, with a verified address token if the caller has one.
     Redeem(u64, u64, Option<String>),
+    /// A schema change in general (slice 11): the expected version, whether the change is strict (`lax` otherwise),
+    /// and its changes, each as the tokens of one change (`define-field <type> <field> <ty> [required] [unique]
+    /// [default=<v>]`, `remove-field <type> <field>`, `define-type <type>`, `remove-type <type> [delete]`).
+    Schema(Option<u64>, bool, Vec<String>),
     /// Read records (slice 10): the object type is the op's `object`, and the ids are tokens, `n` or `a-b`.
     ReadRecords(Vec<String>),
     /// Read a named query: its name and its arguments (`k=v`, `page=<n>`, `cursor=<c>`).
@@ -188,6 +193,16 @@ impl Op {
             OpKind::Composite(fs) => format!(
                 "{head} composite{}",
                 fs.iter().map(|f| format!(" {f}")).collect::<String>()
+            ),
+            OpKind::Schema(expected, strict, changes) => format!(
+                "{head} schema{} {}{}",
+                expected_text(*expected),
+                if *strict { "strict" } else { "lax" },
+                if changes.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", changes.join(" ; "))
+                }
             ),
             OpKind::CreateTenant(owner, name) => format!("{head} create-tenant {owner} {name}"),
             OpKind::Assign(user, role) => format!("{head} assign {user} {role}"),
@@ -429,9 +444,10 @@ fn patch_fields(rng: &mut Lcg) -> Vec<(u64, String)> {
 /// The field of a `unique`: a scalar, sometimes a list (refused), sometimes a field whose
 /// default makes every record without a value agree.
 fn unique_field(rng: &mut Lcg) -> u64 {
-    match rng.below(8) {
+    match rng.below(10) {
         0 => rng.pick(&[0u64, 7]),
         1..=3 => rng.pick(&[1u64, 2, 3]),
+        4 => UNDECLARED_FIELD + rng.below(4),
         _ => rng.pick(&[10u64, 4, 6]),
     }
 }
@@ -451,11 +467,13 @@ fn composite_fields(rng: &mut Lcg) -> Vec<u64> {
     }
 }
 
-/// The field of a `require`: half the time one of the reference fields, sometimes a list.
+/// The field of a `require`: half the time one of the reference fields, sometimes a list, sometimes a field the type
+/// does not declare (the change then defines it, as the kernel does).
 fn require_field(rng: &mut Lcg) -> u64 {
-    match rng.below(8) {
+    match rng.below(10) {
         0..=3 => 4 + rng.below(2),
         4 => rng.pick(&[0u64, 7, 8]),
+        5 => UNDECLARED_FIELD + rng.below(4),
         _ => 1 + rng.below(3),
     }
 }
@@ -1243,12 +1261,16 @@ pub fn generate(seed: u64) -> Scenario {
             1..=3 => 2,
             _ => 1,
         };
-        // A `require` or `unique` names a field the object type declares. The kernel defines a
-        // field the type lacks when a change names it, and the model's intents name a field the
-        // type has (see the slice 4 review note); `part` declares fields 1 to 4 only.
+        // A `require` or `unique` names any field: one the object type declares, or one it lacks, which the change
+        // defines as an optional boolean field, in the model (`ensureField`) as in the kernel (slice 11). Half the
+        // time a `require` or `unique` on a part names one of its own fields (1 to 4), as before.
         let kind = match (object, kind) {
-            (2, OpKind::Require(f, strict)) => OpKind::Require(1 + f % 4, strict),
-            (2, OpKind::Unique(f, strict)) => OpKind::Unique(1 + f % 4, strict),
+            (2, OpKind::Require(f, strict)) if rng.below(2) == 0 => {
+                OpKind::Require(1 + f % 4, strict)
+            }
+            (2, OpKind::Unique(f, strict)) if rng.below(2) == 0 => {
+                OpKind::Unique(1 + f % 4, strict)
+            }
             (_, kind) => kind,
         };
         // One operation in twenty-four is the system's, one in twelve an anonymous caller's, so the
@@ -1265,7 +1287,432 @@ pub fn generate(seed: u64) -> Scenario {
             kind,
         });
     }
-    with_reads(seed, ops)
+    with_reads(seed, with_schema(seed, ops))
+}
+
+// ---------------------------------------------------------------------------------------------
+// The schema change in general (slice 11)
+// ---------------------------------------------------------------------------------------------
+
+/// The object types a schema change defines and removes. They are single digits so that the kernel's order of the
+/// types (by name, `type5` to `type8`, after `item`, `part` and `ticket`) is the model's (by number). The fixture's
+/// own types are never removed: a policy, a role permission and the fixture's queries name them.
+const NEW_TYPES: [u64; 4] = [5, 6, 7, 8];
+
+/// The fields the fixture's item declares that no constraint, workflow, policy, query, field read rule or search
+/// reads. The kernel refuses a change that removes or retypes a field one of these dependents reads
+/// (`dependencies::impact`, and the schema check), and the model holds the dependents that live in the tenant
+/// (constraints, workflows, composite unique constraints, policies) but not the queries, read rules and search
+/// declarations of the fixture, which the model keeps beside the tenant (`ReadSpec`). A generated change removes or
+/// redefines with another type only fields no such dependent reads, so that the two agree on every change the
+/// generator makes. Reachable again when the model holds the read declarations (see the slice 11 review note).
+const FREE_ITEM_FIELDS: [u64; 7] = [0, 4, 5, 6, 8, 11, 12];
+
+/// The part's field that no dependent reads (the part's constraint reads fields 1, 2, 4 and 5, its query field 4).
+const FREE_PART_FIELD: u64 = 3;
+
+/// Fields a schema change adds to a type (the fixture declares none of them), and may later redefine or remove.
+const ADDED_FIELDS: [u64; 4] = [13, 14, 15, 16];
+
+/// A field type token of a `schema` line (the model's `parseTy`): mostly a scalar, a reference to an item, a part or
+/// one of the types a change defines, or a list of one.
+fn type_token(rng: &mut Lcg, scalar_only: bool) -> String {
+    let span = if scalar_only { 8 } else { 10 };
+    match rng.below(span) {
+        0 | 1 => "int".to_string(),
+        2 | 3 => "str".to_string(),
+        4 => "bool".to_string(),
+        5 | 6 => format!(
+            "ref:{}:{}",
+            rng.pick(&[1u64, 1, 2, 5, 6, 9]),
+            rng.pick(&["r", "s"])
+        ),
+        7 => "ref:1:s".to_string(),
+        8 => format!("list:{}", type_token(rng, true)),
+        _ => "list:int".to_string(),
+    }
+}
+
+/// A default of a field of type `ty` as a value token: usually one of its type, sometimes of another.
+fn default_token(rng: &mut Lcg, ty: &str) -> String {
+    if rng.below(6) == 0 {
+        return "s:oak".to_string();
+    }
+    if ty == "int" {
+        format!("i:{}", rng.below(9))
+    } else if ty == "str" {
+        format!("s:{}", word(rng))
+    } else if ty == "bool" {
+        format!("b:{}", rng.below(2))
+    } else if ty.starts_with("ref:") {
+        format!("r:{}", 1 + rng.below(3))
+    } else {
+        "l:".to_string()
+    }
+}
+
+/// The options after a field's type: `required`, `unique`, `default=<v>`, each now and then.
+fn field_options(rng: &mut Lcg, ty: &str) -> String {
+    let mut out = String::new();
+    if rng.below(4) == 0 {
+        out.push_str(" required");
+    }
+    if rng.below(4) == 0 {
+        out.push_str(" unique");
+    }
+    if rng.below(4) == 0 {
+        out.push_str(&format!(" default={}", default_token(rng, ty)));
+    }
+    out
+}
+
+/// A type and a field a generated change may define or remove: a field the change adds, a free field of the fixture
+/// (see [`FREE_ITEM_FIELDS`]), or a field of a type a change defines.
+fn change_target(rng: &mut Lcg) -> (u64, u64) {
+    match rng.below(10) {
+        0..=2 => (1, rng.pick(&ADDED_FIELDS)),
+        3 => (1, rng.pick(&FREE_ITEM_FIELDS)),
+        4 => (2, rng.pick(&ADDED_FIELDS)),
+        5 => (2, FREE_PART_FIELD),
+        6 => (4, rng.pick(&ADDED_FIELDS)),
+        _ => (rng.pick(&NEW_TYPES), 1 + rng.below(4)),
+    }
+}
+
+/// A list of changes for one `schema` line, one to three of them. A type the list removes is the only type it names
+/// in that change and no other change of the list names it: the kernel rewrites and deletes the records of a type the
+/// tenant has when it is removed, and defined again or changed in the same list the two disagree on the events (the
+/// model holds that a type removed and defined again is refused only when a field of a type names it).
+fn change_list(rng: &mut Lcg) -> Vec<String> {
+    let mut changes: Vec<String> = Vec::new();
+    let mut removed: Vec<u64> = Vec::new();
+    let mut mentioned: Vec<u64> = Vec::new();
+    for _ in 0..(1 + rng.below(3)) {
+        let (change, named, is_removal) = match rng.below(10) {
+            0..=4 => {
+                let (ty, field) = change_target(rng);
+                let ty_text = type_token(rng, false);
+                let options = field_options(rng, &ty_text);
+                (
+                    format!("define-field {ty} {field} {ty_text}{options}"),
+                    ty,
+                    false,
+                )
+            }
+            5..=6 => {
+                let (ty, field) = change_target(rng);
+                (format!("remove-field {ty} {field}"), ty, false)
+            }
+            7 => {
+                let ty = rng.pick(&NEW_TYPES);
+                (format!("define-type {ty}"), ty, false)
+            }
+            _ => {
+                let ty = rng.pick(&NEW_TYPES);
+                let delete = if rng.below(2) == 0 { " delete" } else { "" };
+                (format!("remove-type {ty}{delete}"), ty, true)
+            }
+        };
+        if removed.contains(&named) || (is_removal && mentioned.contains(&named)) {
+            continue;
+        }
+        if is_removal {
+            removed.push(named);
+        }
+        mentioned.push(named);
+        changes.push(change);
+    }
+    changes
+}
+
+/// A schema change op of `tenant`.
+fn schema_op(
+    tenant: u64,
+    principal: Caller,
+    expected: Option<u64>,
+    strict: bool,
+    changes: Vec<String>,
+) -> Op {
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::Schema(expected, strict, changes),
+    }
+}
+
+/// How many schema-changing operations the owner of `tenant` made in `before`, so that a guess of the schema version
+/// is often right (a refused operation still counts, so it is only a guess).
+fn schema_guess(before: &[Op], tenant: u64) -> u64 {
+    let owner = Caller::User(home_of(tenant));
+    let made = before
+        .iter()
+        .filter(|op| {
+            op.tenant == tenant
+                && op.principal == owner
+                && matches!(
+                    op.kind,
+                    OpKind::Require(..)
+                        | OpKind::Unique(..)
+                        | OpKind::Composite(..)
+                        | OpKind::Schema(..)
+                )
+        })
+        .count() as u64;
+    if tenant == 3 {
+        1 + made
+    } else {
+        3 + made
+    }
+}
+
+/// One random schema change of slice 11: mostly the owner's, in one of the tenants, with an expected version now and
+/// then, strict or lax, and a short list of changes.
+fn random_schema_op(rng: &mut Lcg, before: &[Op]) -> Op {
+    let tenant = match rng.below(10) {
+        0 | 1 => 3,
+        2 | 3 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(12) {
+        0 => Caller::System,
+        1 => Caller::Anonymous,
+        2 => Caller::User(home + 2),
+        3 => Caller::User(home + 1),
+        4 => Caller::User(999),
+        _ => Caller::User(home),
+    };
+    let expected = match rng.below(8) {
+        0 => Some(schema_guess(before, tenant)),
+        1 => Some(1 + rng.below(8)),
+        _ => None,
+    };
+    let strict = rng.below(5) < 3;
+    let changes = match rng.below(40) {
+        0 => Vec::new(),
+        1 => vec!["define-type 5".to_string(); 201],
+        _ => change_list(rng),
+    };
+    schema_op(tenant, principal, expected, strict, changes)
+}
+
+/// A short scripted sequence by the owner of a tenant that reaches the decisions a single random change seldom does:
+/// the records of a type a change removes or rewrites, a required or unique field defined over records, a field
+/// retyped under a composite constraint, the expected version, a reference to a type a change removes, the refusals
+/// of a list that is empty, over the limit, not the owner's or not valid.
+fn schema_script(rng: &mut Lcg) -> Vec<Op> {
+    let tenant = if rng.below(4) == 0 { 2 } else { 1 };
+    let owner = Caller::User(home_of(tenant));
+    let ty = rng.pick(&NEW_TYPES);
+    let on = |changes: Vec<String>, strict: bool| schema_op(tenant, owner, None, strict, changes);
+    let create_in = |object: u64, fields: Vec<(u64, String)>| Op {
+        tenant,
+        principal: owner,
+        object,
+        kind: OpKind::Create(fields),
+    };
+    let item = |fields: Vec<(u64, String)>| create_in(1, fields);
+    let patch_item = |id: u64, fields: Vec<(u64, String)>| Op {
+        tenant,
+        principal: owner,
+        object: 1,
+        kind: OpKind::Patch(id, None, fields),
+    };
+    match rng.below(7) {
+        // A type with records, then a change that rewrites or removes them.
+        0 => {
+            let unique = if rng.below(2) == 0 { " unique" } else { "" };
+            let mut ops = vec![on(
+                vec![
+                    format!("define-type {ty}"),
+                    format!("define-field {ty} 1 str required{unique}"),
+                    format!("define-field {ty} 2 int"),
+                ],
+                true,
+            )];
+            for _ in 0..(1 + rng.below(3)) {
+                ops.push(create_in(
+                    ty,
+                    vec![
+                        (1, format!("s:{}", word(rng))),
+                        (2, format!("i:{}", rng.below(5))),
+                    ],
+                ));
+            }
+            match rng.below(5) {
+                0 => ops.push(on(vec![format!("remove-field {ty} 2")], rng.below(2) == 0)),
+                1 => {
+                    ops.push(on(vec![format!("remove-type {ty}")], rng.below(2) == 0));
+                    ops.push(on(vec![format!("remove-type {ty} delete")], true));
+                }
+                2 => ops.push(on(
+                    vec![format!("remove-type {ty} delete")],
+                    rng.below(2) == 0,
+                )),
+                3 => {
+                    ops.push(on(vec![format!("define-field {ty} 3 int required")], true));
+                    ops.push(on(vec![format!("define-field {ty} 3 int required")], false));
+                }
+                _ => ops.push(on(
+                    vec![
+                        format!("define-field {ty} 2 str"),
+                        format!("remove-field {ty} 1"),
+                    ],
+                    rng.below(2) == 0,
+                )),
+            }
+            ops
+        }
+        // A required field, then a retyped one, over the item's records.
+        1 => {
+            let mut ops = vec![item(vec![(1, format!("s:{}", word(rng)))])];
+            if rng.below(2) == 0 {
+                ops.push(item(vec![(1, format!("s:{}", word(rng)))]));
+            }
+            ops.push(on(vec!["define-field 1 13 int required".to_string()], true));
+            ops.push(on(
+                vec!["define-field 1 13 int required".to_string()],
+                false,
+            ));
+            ops.push(patch_item(1, vec![(13, "i:3".to_string())]));
+            ops.push(on(vec!["define-field 1 13 str".to_string()], true));
+            ops.push(on(vec!["define-field 1 13 str".to_string()], false));
+            ops.push(on(vec!["remove-field 1 13".to_string()], rng.below(2) == 0));
+            ops
+        }
+        // A composite constraint over added fields, then a change that retypes or removes one of them.
+        2 => vec![
+            on(
+                vec![
+                    "define-field 1 13 int".to_string(),
+                    "define-field 1 14 str".to_string(),
+                ],
+                true,
+            ),
+            Op {
+                tenant,
+                principal: owner,
+                object: 1,
+                kind: OpKind::Composite(vec![13, 14]),
+            },
+            on(vec!["define-field 1 13 str".to_string()], rng.below(2) == 0),
+            on(vec!["remove-field 1 14".to_string()], rng.below(2) == 0),
+            on(vec!["define-field 1 13 int required".to_string()], true),
+            on(
+                vec![
+                    "remove-field 1 13".to_string(),
+                    "remove-field 1 14".to_string(),
+                ],
+                true,
+            ),
+        ],
+        // The expected version: the schema of a fixture tenant starts at version 3.
+        3 => {
+            let expect = |v: u64, name: String| {
+                schema_op(
+                    tenant,
+                    owner,
+                    Some(v),
+                    true,
+                    vec![format!("define-type {name}")],
+                )
+            };
+            vec![
+                expect(3, "5".to_string()),
+                expect(3, "6".to_string()),
+                expect(4, "6".to_string()),
+                expect(9, "7".to_string()),
+            ]
+        }
+        // A reference to a type, then the removal of the type.
+        4 => vec![
+            on(
+                vec![
+                    format!("define-type {ty}"),
+                    format!("define-field {ty} 1 str"),
+                    format!("define-field 1 13 ref:{ty}:s"),
+                ],
+                true,
+            ),
+            on(vec![format!("remove-type {ty}")], true),
+            on(
+                vec![format!("remove-field 1 13"), format!("remove-type {ty}")],
+                rng.below(2) == 0,
+            ),
+        ],
+        // Duplicates, then a unique field.
+        5 => vec![
+            on(vec!["define-field 1 13 str".to_string()], true),
+            item(vec![(1, "s:a".to_string()), (13, "s:dup".to_string())]),
+            item(vec![(1, "s:b".to_string()), (13, "s:dup".to_string())]),
+            on(vec!["define-field 1 13 str unique".to_string()], true),
+            on(vec!["define-field 1 13 str unique".to_string()], false),
+            on(
+                vec!["define-field 1 13 str unique required".to_string()],
+                true,
+            ),
+        ],
+        // The refusals of a list.
+        _ => {
+            let who = match rng.below(4) {
+                0 => Caller::System,
+                1 => Caller::Anonymous,
+                2 => Caller::User(home_of(tenant) + 2),
+                _ => Caller::User(999),
+            };
+            let invalid = match rng.below(6) {
+                0 => vec!["define-field 1 13 ref:9:r".to_string()],
+                1 => vec!["define-field 1 13 list:int unique".to_string()],
+                2 => vec!["define-field 1 13 list:list:int".to_string()],
+                3 => vec!["remove-field 1 15".to_string()],
+                4 => vec!["define-field 99 1 int".to_string()],
+                _ => vec!["remove-type 7".to_string()],
+            };
+            vec![
+                schema_op(tenant, who, None, true, vec![format!("define-type {ty}")]),
+                on(Vec::new(), true),
+                on(vec!["define-type 5".to_string(); 201], true),
+                on(invalid, rng.below(2) == 0),
+                schema_op(
+                    tenant,
+                    owner,
+                    Some(1 + rng.below(2)),
+                    true,
+                    vec!["define-type 5".to_string()],
+                ),
+            ]
+        }
+    }
+}
+
+/// The scenario with schema changes of slice 11 placed among its operations: a random one now and then, and the
+/// scripted sequences of [`schema_script`], from a stream of their own so the operations the rest of the generator
+/// draws are the same with or without them.
+fn with_schema(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7363_6865_6d61_3131);
+    for _ in 0..4 {
+        rng.below(2);
+    }
+    let rounds = match rng.below(6) {
+        0 | 1 => 0,
+        2 | 3 => 1,
+        4 => 2,
+        _ => 3,
+    };
+    for _ in 0..rounds {
+        let from = ops.len() / 4;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let batch = if rng.below(3) == 0 {
+            vec![random_schema_op(&mut rng, &ops[..at])]
+        } else {
+            schema_script(&mut rng)
+        };
+        for (k, op) in batch.into_iter().enumerate() {
+            ops.insert(at + k, op);
+        }
+    }
+    ops
 }
 
 /// A read of slice 10, drawn from the stream `rng`. The reads of a scenario come from a stream of their
@@ -1590,6 +2037,7 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::Unique(_, true) => "unique-strict",
         OpKind::Unique(_, false) => "unique-lax",
         OpKind::Composite(_) => "composite",
+        OpKind::Schema(..) => "schema",
         OpKind::CreateTenant(..) => "create-tenant",
         OpKind::Assign(..) => "assign",
         OpKind::Revoke(..) => "revoke",
@@ -1677,6 +2125,7 @@ fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
         | OpKind::Require(..)
         | OpKind::Unique(..)
         | OpKind::Composite(..)
+        | OpKind::Schema(..)
         | OpKind::CreateTenant(..)
         | OpKind::Assign(..)
         | OpKind::Revoke(..)
@@ -1713,6 +2162,22 @@ fn reductions(ops: &Scenario) -> Vec<Scenario> {
                 f.remove(j);
             }
             out.push(smaller);
+        }
+        if let OpKind::Schema(_, _, changes) = &ops[i].kind {
+            if changes.len() > 1 {
+                for j in 0..changes.len() {
+                    let mut smaller = ops.clone();
+                    if let OpKind::Schema(_, _, c) = &mut smaller[i].kind {
+                        c.remove(j);
+                    }
+                    out.push(smaller);
+                }
+            }
+            if let OpKind::Schema(Some(_), strict, changes) = &ops[i].kind {
+                let mut unversioned = ops.clone();
+                unversioned[i].kind = OpKind::Schema(None, *strict, changes.clone());
+                out.push(unversioned);
+            }
         }
         let versioned = match &ops[i].kind {
             OpKind::Update(_, v, _) | OpKind::Patch(_, v, _) | OpKind::Delete(_, v) => v.is_some(),
@@ -1803,6 +2268,14 @@ pub const REQUIRED_PER_INTENT: &[&str] = &[
     "update err not_found",
     "require-strict err migration_rejected",
     "require-strict err unauthorized",
+    "schema ok",
+    "schema err unauthorized",
+    "schema err schema_conflict",
+    "schema err invalid_intent",
+    "schema err limit_exceeded",
+    "schema err invalid_schema",
+    "schema err migration_rejected",
+    "schema err no_tenant",
     "delete err unauthorized",
     "create-tenant ok",
     "create-tenant err unauthorized",
@@ -1947,6 +2420,34 @@ mod tests {
             }
         }
         assert!(records > 100 && queries > 100, "{records} {queries}");
+    }
+
+    /// The generator places schema changes of slice 11 among the operations, and the kernel's harness reads every one
+    /// of them (no `unparsed` line), without the lake: the changes the generator writes are changes the kernel runs.
+    #[test]
+    fn the_generator_places_schema_changes_the_kernel_reads() {
+        let mut changes = 0;
+        let scenarios: Vec<Scenario> = (0..200)
+            .map(|i| generate(case_seed(20_261_125, i)))
+            .collect();
+        for ops in &scenarios {
+            for op in ops {
+                if matches!(op.kind, OpKind::Schema(..)) {
+                    changes += 1;
+                    assert!(op.render().contains(" schema "), "{}", op.render());
+                }
+            }
+        }
+        assert!(changes > 100, "{changes}");
+        let out = kernel_output(&render("k", &scenarios));
+        assert!(
+            !out.lines().any(|l| l.starts_with("unparsed")),
+            "{}",
+            out.lines()
+                .find(|l| l.starts_with("unparsed"))
+                .unwrap_or("")
+        );
+        assert!(out.contains("schema-changed"));
     }
 
     /// The full generator builds the chain the refused delete needs, without the lake: within 2000

@@ -194,6 +194,22 @@ theorem fix_intent_update :
     encNat_big, tag, List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil,
     List.cons_append, List.nil_append, String.toUTF8_eq_toByteArray, String.size_toByteArray]
 
+/-- A schema change in general (slice 11): tag `8`, the expected version, strictness, then the changes, each with
+    its tag (`0` define a field, `1` remove one, `2` define a type, `3` remove one). -/
+theorem fix_intent_changeSchema :
+    encIntent (.changeSchema (some 3) false
+      [.removeField 1 13, .defineType 5, .removeType 5 true,
+        .defineField 1 2 ⟨.int, false, true, .lit (.int (-2))⟩]) =
+    [8, 1, 3, 0, 4, 1, 1, 13, 2, 5, 3, 5, 1, 0, 1, 2, 0, 0, 1, 0, 1, 1, 1] := by
+  simp +decide only [encIntent, encChange, encOpt, encList, encPair, encFieldDef, encIso, encTy, encBool,
+    encExpr, encVal, encInt, encNat_small, encNat_big, tag, Int.reduceNeg, Int.reduceSub,
+    Int.reduceToNat, Int.reduceLE, ite_true, ite_false, List.length_cons, List.length_nil,
+    List.flatMap_cons, List.flatMap_nil, List.cons_append, List.nil_append, Nat.reduceMod,
+    Nat.reduceAdd, Nat.reduceDiv, Nat.reduceLT]
+
+theorem fix_err_schemaConflict : encErr .schemaConflict = [19] := by
+  simp +decide only [encErr, tag]
+
 theorem fix_intent_create : encIntent (.create 1 []) = [0, 1, 0] := by
   simp +decide only [encIntent, encList, encNat_small, tag, List.length_nil, List.flatMap_nil,
     List.nil_append, List.cons_append]
@@ -263,7 +279,9 @@ theorem boundary_codecs :
     (∀ x, decodeBytes decResult (encodeBytes encResult x) = some x) ∧
     (∀ b x, decodeBytes decResult b = some x → encodeBytes encResult x = b) ∧
     (∀ x, decodeBytes decOnDelete (encodeBytes encOnDelete x) = some x) ∧
-    (∀ b x, decodeBytes decOnDelete b = some x → encodeBytes encOnDelete x = b) :=
+    (∀ b x, decodeBytes decOnDelete b = some x → encodeBytes encOnDelete x = b) ∧
+    (∀ x, decodeBytes decChange (encodeBytes encChange x) = some x) ∧
+    (∀ b x, decodeBytes decChange b = some x → encodeBytes encChange x = b) :=
   ⟨fun x => decodeBytes_encodeBytes lawful_tenant x,
     fun b x h => encodeBytes_of_decodeBytes lawful_tenant b x h,
     fun x => decodeBytes_encodeBytes lawful_val x,
@@ -293,6 +311,8 @@ theorem boundary_codecs :
     fun x => decodeBytes_encodeBytes lawful_result x,
     fun b x h => encodeBytes_of_decodeBytes lawful_result b x h,
     fun x => decodeBytes_encodeBytes lawful_onDelete x,
-    fun b x h => encodeBytes_of_decodeBytes lawful_onDelete b x h⟩
+    fun b x h => encodeBytes_of_decodeBytes lawful_onDelete b x h,
+    fun x => decodeBytes_encodeBytes lawful_change x,
+    fun b x h => encodeBytes_of_decodeBytes lawful_change b x h⟩
 
 end Strata.Codec

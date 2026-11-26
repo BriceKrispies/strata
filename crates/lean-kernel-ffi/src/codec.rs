@@ -379,6 +379,17 @@ pub enum MemberIntent {
     },
 }
 
+/// One change of a schema change in general (slice 11; the Lean `Change`): define a field of an object type (a new
+/// one, or the redefinition of one it has), remove a field, define an object type, or remove one (deleting its
+/// records or not).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Change {
+    DefineField { ty: u64, field: u64, def: FieldDef },
+    RemoveField { ty: u64, field: u64 },
+    DefineType { ty: u64 },
+    RemoveType { ty: u64, delete_records: bool },
+}
+
 /// What a caller asks the kernel to do. Each intent names the object type it acts on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Intent {
@@ -418,6 +429,13 @@ pub enum Intent {
     },
     /// A membership intent of an existing tenant (slice 7).
     Member(MemberIntent),
+    /// A schema change in general (slice 11): the schema version the caller expects, whether a record that no
+    /// longer conforms refuses the change (`strict`), and the changes, applied in order.
+    ChangeSchema {
+        expected: Option<u64>,
+        strict: bool,
+        changes: Vec<Change>,
+    },
 }
 
 /// The result of a step: the refusal, or the tenant after the change (Lean's `Except Err Tenant`).
@@ -912,6 +930,33 @@ fn put_member_intent(out: &mut Vec<u8>, j: &MemberIntent) {
     }
 }
 
+/// A change of a schema change in general: tag `0` defines a field, `1` removes one, `2` defines an object type, `3`
+/// removes one (`encChange`).
+fn put_change(out: &mut Vec<u8>, c: &Change) {
+    match c {
+        Change::DefineField { ty, field, def } => {
+            out.push(0);
+            put_nat(out, *ty);
+            put_nat(out, *field);
+            put_field_def(out, def);
+        }
+        Change::RemoveField { ty, field } => {
+            out.push(1);
+            put_nat(out, *ty);
+            put_nat(out, *field);
+        }
+        Change::DefineType { ty } => {
+            out.push(2);
+            put_nat(out, *ty);
+        }
+        Change::RemoveType { ty, delete_records } => {
+            out.push(3);
+            put_nat(out, *ty);
+            put_bool(out, *delete_records);
+        }
+    }
+}
+
 fn put_ctx(out: &mut Vec<u8>, c: &Ctx) {
     put_nat(out, c.tenant);
     put_principal(out, &c.principal);
@@ -967,6 +1012,16 @@ fn put_intent(out: &mut Vec<u8>, i: &Intent) {
         Intent::Member(j) => {
             out.push(7);
             put_member_intent(out, j);
+        }
+        Intent::ChangeSchema {
+            expected,
+            strict,
+            changes,
+        } => {
+            out.push(8);
+            put_opt_nat(out, *expected);
+            put_bool(out, *strict);
+            put_list(out, changes.as_slice(), put_change);
         }
     }
 }
@@ -1649,6 +1704,29 @@ fn get_member_intent(r: &mut Reader<'_>) -> Option<MemberIntent> {
     }
 }
 
+fn get_change(r: &mut Reader<'_>) -> Option<Change> {
+    match r.byte()? {
+        0 => {
+            let ty = get_nat(r)?;
+            let field = get_nat(r)?;
+            let def = get_field_def(r)?;
+            Some(Change::DefineField { ty, field, def })
+        }
+        1 => {
+            let ty = get_nat(r)?;
+            let field = get_nat(r)?;
+            Some(Change::RemoveField { ty, field })
+        }
+        2 => Some(Change::DefineType { ty: get_nat(r)? }),
+        3 => {
+            let ty = get_nat(r)?;
+            let delete_records = get_bool(r)?;
+            Some(Change::RemoveType { ty, delete_records })
+        }
+        _ => None,
+    }
+}
+
 fn get_ctx(r: &mut Reader<'_>) -> Option<Ctx> {
     let tenant = get_nat(r)?;
     let principal = get_principal(r)?;
@@ -1703,6 +1781,16 @@ fn get_intent(r: &mut Reader<'_>) -> Option<Intent> {
             Some(Intent::CreateTenant { owner, name })
         }
         7 => Some(Intent::Member(get_member_intent(r)?)),
+        8 => {
+            let expected = get_opt_nat(r)?;
+            let strict = get_bool(r)?;
+            let changes = get_list(r, get_change)?;
+            Some(Intent::ChangeSchema {
+                expected,
+                strict,
+                changes,
+            })
+        }
         _ => None,
     }
 }
