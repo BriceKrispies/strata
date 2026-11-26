@@ -15,7 +15,8 @@
 use crate::lean::{
     build_model, compare_outputs, kernel_output, read_shapes, run_model, Generator, ScenarioStream,
 };
-use crate::lean_diff::{lean_error_names, op_groups, setting_shapes};
+use crate::lean::op_outcomes;
+use crate::lean_diff::{lean_error_names, setting_shapes};
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -406,7 +407,7 @@ fn count_outcomes(
 ) {
     for (case, part) in cases.iter().zip(lean_parts) {
         // Line 0 is `scenario <name>`; then the lines of each operation, the first of which is its outcome.
-        for (op, group) in case.ops.iter().zip(op_groups(part)) {
+        for (op, group) in case.ops.iter().zip(op_outcomes(part)) {
             let line = &group[0];
             let intent = intent_of(op);
             let kind = if *line == "ok" {

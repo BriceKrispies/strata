@@ -392,11 +392,12 @@ def overrideKey (id : Nat) (o : SettingOverride) : String :=
   s!"{o.name}/{showLevel o.subject.level}/{subj}"
 
 /-- The settings of a tenant that hold an override or a revision, in key order (slice 12). They are printed
-    only when there are some, so a tenant with no setting write prints as before. -/
+    only when there are some. A setting's revision is one when it is defined (the kernel gives every definition the
+    revision one), so a revision line shows only a revision above one: a setting that has been written. -/
 def settingLines (id : Nat) (t : Tenant) : List String :=
   (t.overrides.mergeSort (fun a b => decide (overrideKey id a ≤ overrideKey id b))).map
     (fun o => s!"setting-override {id} {o.name} level={showLevel o.subject.level} subject={showSubject o.subject} value={showVal o.value} rev={o.revision}") ++
-  ((t.settingRevs.mergeSort (fun a b => decide (a.1 ≤ b.1))).filter (fun e => e.2 > 0)).map
+  ((t.settingRevs.mergeSort (fun a b => decide (a.1 ≤ b.1))).filter (fun e => e.2 > 1)).map
     (fun e => s!"setting-revision {id} {e.1} {e.2}")
 
 /-- The tenant: its counter and the default type's required fields and records, then each other

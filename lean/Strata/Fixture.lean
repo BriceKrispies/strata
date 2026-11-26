@@ -154,8 +154,11 @@ def initialTenant (n : Nat) : Tenant :=
     limits := Limits.kernel,
     roles := [ownerRole, publicRole, editorRole, writerRole],
     -- The kernel's fixture installs the tenant by six accepted steps: its creation, two schema changes
-    -- (one event each, the schema version raised by each), and three role assignments (one event each).
-    revision := 6, eventSeq := 6, schemaVersion := 3, settingDefs := fixtureSettings }
+    -- (one event each, the schema version raised by each), and three role assignments (one event each). The first
+    -- schema change also defines the five settings, whose definitions emit one setting event each and set each
+    -- setting's revision to one (the kernel's schema_change_effects), so the event sequence is 6 + 5 = 11.
+    revision := 6, eventSeq := 11, schemaVersion := 3, settingDefs := fixtureSettings,
+    settingRevs := fixtureSettings.map (fun d => (d.name, 1)) }
 
 /-- The fields an `update` line names for each object type: the item's fields, or the part's.
     A line that does not name one of them gives it `null`, so it replaces the record (`patch`

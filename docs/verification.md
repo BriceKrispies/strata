@@ -1539,10 +1539,14 @@ section of `lean/Audit.lean`.
   fixtures `fix_tenant`, `fix_tenant_members`, `fix_result_ok` have three more zero bytes (three empty lists). The
   Rust mirror is `crates/lean-kernel-ffi/src/codec.rs`.
 - **Harness.** `op <t> <p> setting <name> <level> [team=<n>] [v=<rev>] <value|remove>` and
-  `read <t> <p> setting <name>`. The state prints each override (`setting-override`) and each non-zero revision
-  (`setting-revision`) after the membership; a tenant with none prints as before. The read prints its source, its
-  team, its value and the tenant's revision. The kernel's fixture installs the five definitions in the schema batch
-  that installs the rest, so the revision and schema version are unchanged.
+  `read <t> <p> setting <name>`. The state prints each override (`setting-override`) after the membership, and each
+  setting revision above one (`setting-revision`). A defined setting has revision one, as the kernel gives every
+  definition, so a line appears only for a setting that has been written; a tenant with none prints as before. The
+  read prints its source, its team, its value and the tenant's revision. The kernel's fixture installs the five
+  definitions in the schema batch that installs the rest, so the revision and schema version are unchanged. The
+  batch's five definitions also emit one setting event each, so the fixture's event sequence is 6 + 5 = 11 (both
+  sides). The value tokens of a setting write are those of the model's `parseVal` (scalars, references, repeated
+  text and lists); the Rust parser returns no value for anything the model rejects.
 - **Generator and scenarios.** `lean_diff::generate_reads` adds setting writes and reads to the generated
   operations; `generate()` (the fixture scenarios) is unchanged. Sixteen `h-setting-*` scenarios cover each refusal,
   each source of resolution and the team order.

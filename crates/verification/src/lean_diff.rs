@@ -2287,7 +2287,7 @@ fn count_outcomes(scenarios: &[Scenario], lean: &[Vec<String>]) -> Outcomes {
     let mut counts = Outcomes::new();
     for (ops, out) in scenarios.iter().zip(lean) {
         // Line 0 is `scenario <name>`; then the lines of each operation, the first of which is its outcome.
-        for (op, group) in ops.iter().zip(op_groups(out)) {
+        for (op, group) in ops.iter().zip(crate::lean::op_outcomes(out)) {
             let line = &group[0];
             *counts.entry(line.clone()).or_default() += 1;
             *counts
@@ -2304,51 +2304,6 @@ fn count_outcomes(scenarios: &[Scenario], lean: &[Vec<String>]) -> Outcomes {
         }
     }
     counts
-}
-
-/// The outcome groups of an operation's output, cut as `lean::op_outcomes` cuts them, and in addition with
-/// the lines of a setting read (`source`, `team`, `value` and `tenant-rev`, slice 12) in the group of their
-/// read. `op_outcomes` does not know those lines, so it would start a group at each of them and the groups
-/// would fall out of step with the operations. Its continuation prefixes are repeated here for that reason.
-pub fn op_groups<S: AsRef<str>>(output: &[S]) -> Vec<&[S]> {
-    const CONTINUATION: [&str; 14] = [
-        "revision ",
-        "event ",
-        "effect ",
-        "next ",
-        "row ",
-        "examined ",
-        "hit ",
-        "scanned ",
-        "group ",
-        "top ",
-        "source ",
-        "team ",
-        "value ",
-        "tenant-rev ",
-    ];
-    let end = output
-        .iter()
-        .position(|line| line.as_ref() == "state")
-        .unwrap_or(output.len());
-    let mut groups: Vec<&[S]> = Vec::new();
-    let mut start: Option<usize> = None;
-    for (at, line) in output.iter().enumerate().take(end).skip(1) {
-        if CONTINUATION
-            .iter()
-            .any(|prefix| line.as_ref().starts_with(prefix))
-        {
-            continue;
-        }
-        if let Some(first) = start {
-            groups.push(&output[first..at]);
-        }
-        start = Some(at);
-    }
-    if let Some(first) = start {
-        groups.push(&output[first..end]);
-    }
-    groups
 }
 
 /// The shapes of a setting read's answer as the coverage counts them (slice 12): for an accepted read, the

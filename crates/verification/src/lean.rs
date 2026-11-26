@@ -1243,23 +1243,52 @@ fn parse_setting_level(token: &str) -> Option<SettingLevel> {
     }
 }
 
-/// A setting value token (slice 12): `i:<int>`, `s:<text>` (no `_` for a space, as the model reads it), `b:0`,
-/// `b:1`, or `n` for null. The model's other forms (lists, references, repeated text) are not written here.
-fn parse_setting_value(token: &str) -> Option<Value> {
+/// A scalar or reference token, as the model's `parseElem` reads it: `n`, `i:<int>`, `s:<text>`,
+/// `s*<count>:<text>` (the text repeated), `b:1`, `b:0`, `r:<id>`. Anything else is not a value, and the
+/// write is then not parsed (an `unparsed` line, as the model prints it).
+fn setting_elem(token: &str) -> Option<Value> {
     if token == "n" {
         return Some(Value::Null);
     }
     if let Some(n) = token.strip_prefix("i:") {
         return Some(Value::Int(n.parse().ok()?));
     }
+    if let Some(rest) = token.strip_prefix("s*") {
+        let (count, text) = rest.split_once(':')?;
+        let count: usize = count.parse().ok()?;
+        return Some(Value::Str(text.repeat(count)));
+    }
     if let Some(text) = token.strip_prefix("s:") {
         return Some(Value::Str(text.to_string()));
     }
     match token {
-        "b:0" => Some(Value::Bool(false)),
-        "b:1" => Some(Value::Bool(true)),
-        _ => None,
+        "b:1" => return Some(Value::Bool(true)),
+        "b:0" => return Some(Value::Bool(false)),
+        _ => {}
     }
+    if let Some(id) = token.strip_prefix("r:") {
+        return Some(Value::Ref(RecordId(id.parse().ok()?)));
+    }
+    None
+}
+
+/// A setting value token, as the model's `parseVal` reads it: a scalar or reference (`setting_elem`), a list `l:`
+/// of such elements separated by commas (`l:` alone is the empty list), or `l*<count>:<element>` (the element
+/// repeated).
+fn parse_setting_value(token: &str) -> Option<Value> {
+    if let Some(rest) = token.strip_prefix("l*") {
+        let (count, element) = rest.split_once(':')?;
+        let count: usize = count.parse().ok()?;
+        return Some(Value::List(vec![setting_elem(element)?; count]));
+    }
+    if let Some(body) = token.strip_prefix("l:") {
+        if body.is_empty() {
+            return Some(Value::List(Vec::new()));
+        }
+        let items: Option<Vec<Value>> = body.split(',').map(setting_elem).collect();
+        return items.map(Value::List);
+    }
+    setting_elem(token)
 }
 
 /// A setting write (slice 12): `setting <name> <level> [team=<n>] [v=<rev>] <value|remove>`, from the token
@@ -1772,7 +1801,8 @@ fn subject_text(level: SettingLevel, subject: &str) -> String {
 }
 
 /// The settings of a tenant that hold an override or a revision (slice 12, the model's `settingLines`): one line
-/// per override in key order, then one per setting whose revision is above zero, by name. An override's key is its
+/// per override in key order, then one per setting whose revision is above one, by name (a defined setting has revision
+/// one, so a revision line shows a setting that has been written). An override's key is its
 /// setting, its level and its subject, where the tenant's subject is the tenant's number `n`. Nothing when there are
 /// none, so a tenant without a setting write prints as before.
 fn setting_lines(n: u64, tenant: &TenantState) -> Vec<String> {
@@ -1811,7 +1841,7 @@ fn setting_lines(n: u64, tenant: &TenantState) -> Vec<String> {
         values
             .revisions
             .iter()
-            .filter(|(_, revision)| **revision > 0)
+            .filter(|(_, revision)| **revision > 1)
             .map(|(setting, revision)| {
                 format!("setting-revision {n} {} {revision}", setting.as_str())
             }),
