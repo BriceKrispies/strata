@@ -72,8 +72,14 @@ jobs:
           key: exegra-formal-wasm-${{ runner.os }}-${{ hashFiles('exegra/formal/lean-toolchain', 'exegra/formal/lake-manifest.json', 'exegra/tools/build-formal-wasm.js', 'exegra/formal/wasm/**') }}
           restore-keys: exegra-formal-wasm-${{ runner.os }}-
 
+      # The engine is Rust compiled to wasm32 and bound with wasm-bindgen-cli at the exact version
+      # the engine crate pins. exegra/ sits inside this checkout, so it builds with this
+      # repository's rust-toolchain.toml, which gets the target here.
       - name: Build Exegra's engine and Lean core
         run: |
+          rustup target add wasm32-unknown-unknown
+          bindgen=$(grep -oP '^wasm-bindgen\s*=\s*"=\K[0-9.]+' exegra/engine/exegra-engine-wasm/Cargo.toml)
+          cargo install wasm-bindgen-cli --version "$bindgen" --locked
           npm run build:engine --prefix exegra
           npm run build:formal-wasm --prefix exegra
 
