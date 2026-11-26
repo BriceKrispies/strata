@@ -174,6 +174,16 @@ theorem fix_err_lastOwner : encErr .lastOwner = [16] := by
 theorem fix_err_tenantExists : encErr .tenantExists = [17] := by
   simp +decide only [encErr, tag]
 
+theorem fix_err_workflowViolation : encErr .workflowViolation = [18] := by
+  simp +decide only [encErr, tag]
+
+/-- A workflow over field `1`, starting in `open`, with no transitions (slice 8): its field, its one
+    initial state as a string, then the empty list of transitions. -/
+theorem fix_workflow_open : encWorkflow ⟨1, ["open"], []⟩ = [1, 1, 4, 111, 112, 101, 110, 0] := by
+  simp +decide only [encWorkflow, encIso, encPair, encList, encStr, encNat_small, encNat_big, tag,
+    List.length_cons, List.length_nil, List.flatMap_cons, List.flatMap_nil, List.cons_append,
+    List.nil_append, Nat.reduceMod, Nat.reduceAdd, Nat.reduceDiv, Nat.reduceLT]
+
 theorem fix_intent_setRequired : encIntent (.setRequired 1 2 false) = [3, 1, 2, 0] := by
   simp +decide only [encIntent, encNat_small, encBool, tag, List.cons_append, List.nil_append]
 

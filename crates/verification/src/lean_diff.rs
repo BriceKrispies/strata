@@ -907,6 +907,79 @@ fn member_ops(rng: &mut Lcg, ms: &mut Members) -> Vec<Op> {
 }
 
 /// One sequence, deterministic in `seed`.
+/// One ticket operation (slice 8, the model's type `4`): a create, a patch of the state or the votes, a
+/// replacement, or a delete, by an owner, an editor or a writer of tenant 1 or 2. The states are the
+/// workflow's (`open`, `closed`, `archived`, `escalated`), with a state no transition names, a state
+/// spelt in capitals, and `null`; the votes are small numbers, `0`, `null` and absent.
+fn ticket_op(rng: &mut Lcg) -> Op {
+    let tenant = if rng.below(4) == 0 { 2 } else { 1 };
+    let home = home_of(tenant);
+    let principal = match rng.below(16) {
+        0..=7 => home,
+        8..=10 => home + 1,
+        11..=13 => home + 2,
+        14 => home + 3,
+        _ => 999,
+    };
+    let state = |rng: &mut Lcg| -> String {
+        match rng.below(10) {
+            0..=2 => "s:open".to_string(),
+            3 | 4 => "s:closed".to_string(),
+            5 => "s:archived".to_string(),
+            6 => "s:escalated".to_string(),
+            7 => "s:bogus".to_string(),
+            8 => "s:OPEN".to_string(),
+            _ => "n".to_string(),
+        }
+    };
+    let votes = |rng: &mut Lcg| -> String {
+        match rng.below(8) {
+            0 => "n".to_string(),
+            1 => "i:0".to_string(),
+            2 => "i:3".to_string(),
+            3 => "i:7".to_string(),
+            _ => format!("i:{}", rng.below(3) + 1),
+        }
+    };
+    let kind = match rng.below(10) {
+        0..=2 => {
+            let mut fields = Vec::new();
+            if rng.below(8) != 0 {
+                fields.push((1, state(rng)));
+            }
+            if rng.below(2) == 0 {
+                fields.push((2, votes(rng)));
+            }
+            if rng.below(5) == 0 {
+                fields.push((3, "s:note".to_string()));
+            }
+            OpKind::Create(fields)
+        }
+        3..=6 => {
+            let mut fields = Vec::new();
+            if rng.below(3) != 0 {
+                fields.push((1, state(rng)));
+            }
+            if rng.below(2) == 0 || fields.is_empty() {
+                fields.push((2, votes(rng)));
+            }
+            OpKind::Patch(1 + rng.below(3), expected_version(rng, 1), fields)
+        }
+        7 => OpKind::Update(
+            1 + rng.below(3),
+            expected_version(rng, 1),
+            vec![(1, state(rng)), (2, votes(rng))],
+        ),
+        _ => OpKind::Delete(1 + rng.below(3), expected_version(rng, 1)),
+    };
+    Op {
+        tenant,
+        principal: Caller::User(principal),
+        object: 4,
+        kind,
+    }
+}
+
 pub fn generate(seed: u64) -> Scenario {
     let mut rng = Lcg(seed ^ 0x9e37_79b9_7f4a_7c15);
     // Warm the generator: nearby seeds would otherwise start alike.
@@ -929,6 +1002,11 @@ pub fn generate(seed: u64) -> Scenario {
         // one random operation.
         if rng.below(4) == 0 {
             ops.extend(member_ops(&mut rng, &mut members));
+            continue;
+        }
+        // One iteration in six is a ticket operation (slice 8): the tickets' workflow decides it.
+        if rng.below(6) == 0 {
+            ops.push(ticket_op(&mut rng));
             continue;
         }
         let tenant = match rng.below(12) {

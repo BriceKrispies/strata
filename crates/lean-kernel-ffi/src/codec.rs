@@ -222,14 +222,34 @@ pub struct Record {
     pub fields: Vec<(u64, Val)>,
 }
 
-/// An object type of a tenant: its schema, its composite unique constraints, its records, and its
-/// constraints (slice 5), in the kernel's order.
+/// A transition of a workflow (slice 8): its source and target states, its guard (`None` when it always
+/// holds), and the fields it assigns with the expressions that give their values. Lean's `WfTransition`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WfTransition {
+    pub source: String,
+    pub target: String,
+    pub guard: Option<Expr>,
+    pub set: Vec<(u64, Expr)>,
+}
+
+/// A workflow over one field of an object type (slice 8): its field, its initial states and its
+/// transitions. Lean's `Workflow`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Workflow {
+    pub field: u64,
+    pub initial: Vec<String>,
+    pub transitions: Vec<WfTransition>,
+}
+
+/// An object type of a tenant: its schema, its composite unique constraints, its records, its
+/// constraints (slice 5) and its workflows (slice 8), in the kernel's order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjType {
     pub schema: Vec<(u64, FieldDef)>,
     pub uniques: Vec<Vec<u64>>,
     pub records: Vec<(u64, Record)>,
     pub constraints: Vec<Expr>,
+    pub workflows: Vec<Workflow>,
 }
 
 /// A team (slice 7): its label, its members and the roles those members hold through it. Lean's
@@ -298,6 +318,7 @@ pub enum Refusal {
     UnknownRole,
     LastOwner,
     TenantExists,
+    WorkflowViolation,
 }
 
 /// A membership intent (slice 7). Lean's `MemberIntent`.
@@ -711,6 +732,45 @@ fn put_obj_type(out: &mut Vec<u8>, o: &ObjType) {
     put_list(out, o.uniques.as_slice(), put_u64_list);
     put_list(out, o.records.as_slice(), put_record_entry);
     put_list(out, o.constraints.as_slice(), put_expr_root);
+    put_list(out, o.workflows.as_slice(), put_workflow);
+}
+
+/// A string as a list element (`encList encStr`).
+fn put_string(out: &mut Vec<u8>, s: &String) {
+    put_str(out, s);
+}
+
+/// An optional expression (`encOpt encExpr`): a tag, then the expression when there is one.
+fn put_opt_expr(out: &mut Vec<u8>, e: &Option<Expr>) {
+    match e {
+        None => out.push(0),
+        Some(e) => {
+            out.push(1);
+            put_expr(out, e);
+        }
+    }
+}
+
+/// An assignment of a transition: the field id, then the expression that gives its value
+/// (`encFieldExpr`).
+fn put_field_expr(out: &mut Vec<u8>, fe: &(u64, Expr)) {
+    put_nat(out, fe.0);
+    put_expr(out, &fe.1);
+}
+
+/// A transition of a workflow: its source, its target, its guard, then its assignments.
+fn put_wf_transition(out: &mut Vec<u8>, t: &WfTransition) {
+    put_str(out, &t.source);
+    put_str(out, &t.target);
+    put_opt_expr(out, &t.guard);
+    put_list(out, t.set.as_slice(), put_field_expr);
+}
+
+/// A workflow: its field, its initial states, then its transitions.
+fn put_workflow(out: &mut Vec<u8>, w: &Workflow) {
+    put_nat(out, w.field);
+    put_list(out, w.initial.as_slice(), put_string);
+    put_list(out, w.transitions.as_slice(), put_wf_transition);
 }
 
 /// An expression as a list element: the encoder of a constraint in a list (`encList encExpr`).
@@ -915,6 +975,7 @@ fn put_refusal(out: &mut Vec<u8>, e: &Refusal) {
         Refusal::UnknownRole => 15,
         Refusal::LastOwner => 16,
         Refusal::TenantExists => 17,
+        Refusal::WorkflowViolation => 18,
     });
 }
 
@@ -1374,11 +1435,52 @@ fn get_obj_type(r: &mut Reader<'_>) -> Option<ObjType> {
     let uniques = get_list(r, get_u64_list)?;
     let records = get_list(r, get_record_entry)?;
     let constraints = get_list(r, get_expr_root)?;
+    let workflows = get_list(r, get_workflow)?;
     Some(ObjType {
         schema,
         uniques,
         records,
         constraints,
+        workflows,
+    })
+}
+
+/// An optional expression: a tag (`0` none, `1` some), then the expression.
+fn get_opt_expr(r: &mut Reader<'_>) -> Option<Option<Expr>> {
+    match r.byte()? {
+        0 => Some(None),
+        1 => Some(Some(get_expr_root(r)?)),
+        _ => None,
+    }
+}
+
+fn get_field_expr(r: &mut Reader<'_>) -> Option<(u64, Expr)> {
+    let f = get_nat(r)?;
+    let e = get_expr_root(r)?;
+    Some((f, e))
+}
+
+fn get_wf_transition(r: &mut Reader<'_>) -> Option<WfTransition> {
+    let source = get_str(r)?;
+    let target = get_str(r)?;
+    let guard = get_opt_expr(r)?;
+    let set = get_list(r, get_field_expr)?;
+    Some(WfTransition {
+        source,
+        target,
+        guard,
+        set,
+    })
+}
+
+fn get_workflow(r: &mut Reader<'_>) -> Option<Workflow> {
+    let field = get_nat(r)?;
+    let initial = get_list(r, get_str)?;
+    let transitions = get_list(r, get_wf_transition)?;
+    Some(Workflow {
+        field,
+        initial,
+        transitions,
     })
 }
 
@@ -1598,6 +1700,7 @@ fn get_refusal(r: &mut Reader<'_>) -> Option<Refusal> {
         15 => Some(Refusal::UnknownRole),
         16 => Some(Refusal::LastOwner),
         17 => Some(Refusal::TenantExists),
+        18 => Some(Refusal::WorkflowViolation),
         _ => None,
     }
 }

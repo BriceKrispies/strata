@@ -278,6 +278,7 @@ fn object_of(ty: u64) -> ObjectTypeId {
     match ty {
         1 => item(),
         2 => part(),
+        4 => ticket(),
         n => id(format!("type{n}")),
     }
 }
@@ -288,6 +289,8 @@ fn fixture_fields(object: &ObjectTypeId) -> Vec<u64> {
         vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     } else if *object == part() {
         vec![1, 2, 3, 4, 5]
+    } else if *object == ticket() {
+        vec![1, 2, 3]
     } else {
         Vec::new()
     }
@@ -457,11 +460,110 @@ fn part_field_def(n: u64) -> FieldDef {
     }
 }
 
+/// The object type of the tickets, the model's type `4` (slice 8): a state (`1`), a vote count (`2`)
+/// and a note (`3`), with the workflow of `ticket_workflow`.
+fn ticket() -> ObjectTypeId {
+    id("ticket".to_string())
+}
+
+/// The type of a ticket's field: the vote count is an integer, the state and the note are strings.
+fn ticket_field_type(n: u64) -> FieldType {
+    if n == 2 {
+        FieldType::Int
+    } else {
+        FieldType::Str
+    }
+}
+
+/// The default of a ticket's field: a new ticket starts `open` (field `1`).
+fn ticket_default(n: u64) -> Option<Expr> {
+    (n == 1).then(|| Expr::Lit(Value::Str("open".into())))
+}
+
+fn ticket_field_def(n: u64) -> FieldDef {
+    FieldDef {
+        id: field_id(n),
+        label: format!("f{n}"),
+        ty: ticket_field_type(n),
+        required: false,
+        unique: false,
+        default: ticket_default(n),
+        read: None,
+        personal: None,
+        normalise: None,
+        computed: None,
+    }
+}
+
+/// The workflow of the tickets (the model's `ticketWorkflow`, slice 8), over the state field `1`: a
+/// ticket with a vote ships (`closed`, note `shipped`); a closed one reopens; an open one without votes
+/// is archived with its votes set to `0`; a closed one is archived, its assignment failing to evaluate;
+/// an open one is escalated to nine votes.
+fn ticket_workflow() -> WorkflowDef {
+    let votes = |scope: Scope| Box::new(Expr::Var(scope, "f02".to_string()));
+    WorkflowDef {
+        id: id("ticket_flow".to_string()),
+        object: ticket(),
+        field: field_id(1),
+        initial: BTreeSet::from(["open".to_string()]),
+        transitions: vec![
+            WorkflowTransition {
+                name: "ship".into(),
+                from: "open".into(),
+                to: "closed".into(),
+                guard: Some(Expr::Cmp(
+                    CmpOp::Ge,
+                    votes(Scope::New),
+                    Box::new(Expr::Lit(Value::Int(1))),
+                )),
+                set: BTreeMap::from([(field_id(3), Expr::Lit(Value::Str("shipped".into())))]),
+            },
+            WorkflowTransition {
+                name: "reopen".into(),
+                from: "closed".into(),
+                to: "open".into(),
+                guard: None,
+                set: BTreeMap::new(),
+            },
+            WorkflowTransition {
+                name: "archive".into(),
+                from: "open".into(),
+                to: "archived".into(),
+                guard: Some(Expr::IsNull(votes(Scope::Old))),
+                set: BTreeMap::from([(field_id(2), Expr::Lit(Value::Int(0)))]),
+            },
+            WorkflowTransition {
+                name: "archive_closed".into(),
+                from: "closed".into(),
+                to: "archived".into(),
+                guard: None,
+                set: BTreeMap::from([(
+                    field_id(3),
+                    Expr::Cmp(
+                        CmpOp::Lt,
+                        Box::new(Expr::Principal),
+                        Box::new(Expr::Lit(Value::Int(0))),
+                    ),
+                )]),
+            },
+            WorkflowTransition {
+                name: "escalate".into(),
+                from: "open".into(),
+                to: "escalated".into(),
+                guard: None,
+                set: BTreeMap::from([(field_id(2), Expr::Lit(Value::Int(9)))]),
+            },
+        ],
+    }
+}
+
 /// The definition a `require` or `unique` line falls back to when the tenant does not have the
-/// field yet, as `field_def` and `part_field_def` define the fixture's fields.
+/// field yet, as `field_def`, `part_field_def` and `ticket_field_def` define the fixture's fields.
 fn fallback_field(object: &ObjectTypeId, n: u64) -> FieldDef {
     if *object == part() {
         part_field_def(n)
+    } else if *object == ticket() {
+        ticket_field_def(n)
     } else {
         field_def(n, false)
     }
@@ -724,6 +826,16 @@ fn initial_world() -> World {
         // The constraints read fields, so they follow the fields of both types.
         changes.extend(item_constraints());
         changes.extend(part_constraints());
+        // The tickets (the model's type `4`, slice 8): their fields, then their workflow, which reads them.
+        changes.push(SchemaChange::DefineObject {
+            id: ticket(),
+            label: "Ticket".into(),
+        });
+        changes.extend([1u64, 2, 3].map(|n| SchemaChange::DefineField {
+            object: ticket(),
+            field: ticket_field_def(n),
+        }));
+        changes.push(SchemaChange::DefineWorkflow(ticket_workflow()));
         changes.extend([
             policy(
                 item(),
@@ -745,6 +857,37 @@ fn initial_world() -> World {
                 "writer",
                 &[Action::Update, Action::Delete],
                 Some(own.clone()),
+            ),
+            // The tickets: an editor does everything; a writer reads and creates them, and changes or
+            // deletes the ones it created whose votes are at most five (the model's `ticketWorkflow`
+            // and `fixturePolicies`).
+            policy(
+                ticket(),
+                "tickets_editors_all",
+                "editor",
+                &[Action::Read, Action::Create, Action::Update, Action::Delete],
+                None,
+            ),
+            policy(
+                ticket(),
+                "tickets_writers_create",
+                "writer",
+                &[Action::Read, Action::Create],
+                None,
+            ),
+            policy(
+                ticket(),
+                "tickets_writers_own",
+                "writer",
+                &[Action::Update, Action::Delete],
+                Some(Expr::And(vec![
+                    own.clone(),
+                    Expr::Cmp(
+                        CmpOp::Le,
+                        Box::new(Expr::Var(Scope::New, "f02".into())),
+                        Box::new(Expr::Lit(Value::Int(5))),
+                    ),
+                ])),
             ),
             policy(
                 part(),
@@ -938,6 +1081,7 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::UnknownRole => "unknown_role",
         ErrorKind::LastOwner => "last_owner",
         ErrorKind::TenantExists => "tenant_exists",
+        ErrorKind::WorkflowViolation => "workflow_violation",
         _ => "unmodelled",
     }
 }
@@ -1068,12 +1212,16 @@ fn show_world(world: &World) -> Vec<String> {
             required_text(&item())
         ));
         // The item's records, then the part type's (the model's type `2`), with its own header.
-        for (object, pre) in [(item(), ""), (part(), "type 2 ")] {
+        for (object, pre) in [(item(), ""), (part(), "type 2 "), (ticket(), "type 4 ")] {
             if !pre.is_empty() {
                 if !tenant.schema.objects.contains_key(&object) {
                     continue;
                 }
-                out.push(format!("type 2 required={}", required_text(&object)));
+                // The tickets print only while they hold a record, as the model's `showTenant` does.
+                if pre == "type 4 " && tenant.records_of(&object).next().is_none() {
+                    continue;
+                }
+                out.push(format!("{pre}required={}", required_text(&object)));
             }
             for record in tenant.records_of(&object) {
                 // The creator as the model prints it: its user id, or `-` when no user created the record.

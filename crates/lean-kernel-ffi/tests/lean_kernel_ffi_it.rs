@@ -8,7 +8,7 @@ use strata_lean_kernel_ffi::codec::{
     encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
     Action, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, InvitationDef, Limits, MemberIntent,
     ObjType, OnDelete, Policy, Principal, Record, Refusal, Resource, Scope, StepResult, TeamDef,
-    Tenant, Ty, Val, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
+    Tenant, Ty, Val, WfTransition, Workflow, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
 };
 use strata_lean_kernel_ffi::{step, step_reference};
 
@@ -67,6 +67,7 @@ fn fixture_tenant() -> Tenant {
                 uniques: vec![],
                 records: vec![],
                 constraints: vec![],
+                workflows: vec![],
             },
         )],
         members: vec![(7, vec![0])],
@@ -81,7 +82,7 @@ fn fixture_tenant() -> Tenant {
 }
 
 const FIXTURE_TENANT: &[u8] = &[
-    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128,
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128,
     16, 2, 0, 1, 0, 0,
 ];
 
@@ -115,7 +116,7 @@ fn fixture_tenant_members() -> Tenant {
 }
 
 const FIXTURE_TENANT_MEMBERS: &[u8] = &[
-    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128,
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128,
     16, 3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1, 7,
 ];
 
@@ -217,6 +218,7 @@ fn codec_fixtures_match_the_lean_encoder() {
     assert_eq!(encode_refusal(&Refusal::UnknownRole), vec![15]);
     assert_eq!(encode_refusal(&Refusal::LastOwner), vec![16]);
     assert_eq!(encode_refusal(&Refusal::TenantExists), vec![17]);
+    assert_eq!(encode_refusal(&Refusal::WorkflowViolation), vec![18]);
     assert_eq!(
         decode_tenant(FIXTURE_TENANT_MEMBERS),
         Some(fixture_tenant_members())
@@ -542,11 +544,51 @@ fn gen_obj_type(rng: &mut Rng) -> ObjType {
     for _ in 0..rng.below(3) {
         constraints.push(gen_expr(rng, 0));
     }
+    let mut workflows = Vec::new();
+    for _ in 0..rng.below(3) {
+        workflows.push(gen_workflow(rng));
+    }
     ObjType {
         schema,
         uniques,
         records,
         constraints,
+        workflows,
+    }
+}
+
+/// A workflow of the boundary generator (slice 8): a field, initial states and transitions with
+/// optional guards and assignments.
+fn gen_workflow(rng: &mut Rng) -> Workflow {
+    let field = gen_nat(rng);
+    let mut initial = Vec::new();
+    for _ in 0..rng.below(3) {
+        initial.push(gen_string(rng));
+    }
+    let mut transitions = Vec::new();
+    for _ in 0..rng.below(3) {
+        let source = gen_string(rng);
+        let target = gen_string(rng);
+        let guard = if rng.below(2) == 0 {
+            None
+        } else {
+            Some(gen_expr(rng, 0))
+        };
+        let mut set = Vec::new();
+        for _ in 0..rng.below(3) {
+            set.push((gen_nat(rng), gen_expr(rng, 0)));
+        }
+        transitions.push(WfTransition {
+            source,
+            target,
+            guard,
+            set,
+        });
+    }
+    Workflow {
+        field,
+        initial,
+        transitions,
     }
 }
 
@@ -788,7 +830,7 @@ fn gen_intent(rng: &mut Rng) -> Intent {
 }
 
 fn gen_refusal(rng: &mut Rng) -> Refusal {
-    match rng.below(18) {
+    match rng.below(19) {
         0 => Refusal::NoTenant,
         1 => Refusal::Unauthorized,
         2 => Refusal::NotFound,
@@ -806,7 +848,8 @@ fn gen_refusal(rng: &mut Rng) -> Refusal {
         14 => Refusal::InvalidIntent,
         15 => Refusal::UnknownRole,
         16 => Refusal::LastOwner,
-        _ => Refusal::TenantExists,
+        17 => Refusal::TenantExists,
+        _ => Refusal::WorkflowViolation,
     }
 }
 
