@@ -291,6 +291,14 @@ each run them and print every outcome and the final state of both tenants. The o
 identical, line for line. The scenario file and the expected output are committed, so the Rust
 side runs everywhere; the Lean side runs wherever `lake` is installed.
 
+Slice 9 changes the printed form of an accepted step (the change is in `lean/Main.lean` and
+`crates/verification/src/lean.rs`). An accepted step prints `ok`, then `revision <n>` (the addressed tenant's
+revision after it), then one `event <seq> rev=<rev> by=<principal> <body>` line per domain event, then one
+`effect publish <seq>` line per event. A refusal still prints `err <kind>`, and the state is printed as before.
+The outcome lines (every line not beginning with `revision `, `event ` or `effect `) are the lines of
+`expected.txt`; the event lines are compared model to kernel by `the_lean_model_agrees_with_the_kernel`. The
+Rust side prints only the `Publish` effects, since the model does not model the other effect kinds.
+
 This is evidence that the kernel behaves like the model on the modelled fragment. It is not a
 proof, and a passing run says nothing about the parts of the kernel the model leaves out.
 
