@@ -1031,4 +1031,4 @@ import Strata
 #print axioms Strata.Impl.transitionI_refines
 #print axioms Strata.Impl.absX_commitWorldX
 #print axioms Strata.Impl.transitionX_refines
-#print axioms Strata.commitI_abs
+#print axioms Strata.Impl.commitI_abs
