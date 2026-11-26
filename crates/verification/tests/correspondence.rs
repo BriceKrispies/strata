@@ -10,8 +10,8 @@ use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 use strata_verification::drt;
 use strata_verification::lean::{
-    compare_outputs, hand_written, kernel_output, model_output, parse_audit, scenarios, verify,
-    Generator, FIXTURE_COUNT, FIXTURE_SEED,
+    compare_outputs, hand_written, kernel_output, model_output, outcome_lines, parse_audit,
+    scenarios, verify, Generator, FIXTURE_COUNT, FIXTURE_SEED,
 };
 use strata_verification::lean_diff;
 use strata_verification::obligations;
@@ -68,7 +68,9 @@ fn committed_fixtures_match_the_generator_and_the_kernel() {
         &committed_scenarios[generated.len()..],
         "everything after the generated scenarios must be hand-written scenarios named h-..."
     );
-    let expected = kernel_output(&committed_scenarios);
+    // expected.txt holds the outcome lines only. The revision, event and effect lines of an accepted step
+    // are compared model-to-kernel by `the_lean_model_agrees_with_the_kernel`.
+    let expected = outcome_lines(&kernel_output(&committed_scenarios));
     let committed = read("expected.txt");
     let difference = compare_outputs(&committed_scenarios, &committed, &expected).first_difference;
     assert_eq!(

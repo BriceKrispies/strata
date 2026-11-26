@@ -71,9 +71,11 @@
 //! A value is `n`, `i:<int>`, `s:<text>`, `s*<count>:<text>` (the text repeated), `b:1`, `b:0`,
 //! `r:<id>`, or a list: `l:<element>,<element>,..` (`l:` is empty) or `l*<count>:<element>`.
 //!
-//! Output: `scenario <name>`, then `ok` or `err <kind>` per op (`unparsed <line>` for a line it
-//! cannot read), then `state`, the state lines and `end`. A tenant's state lines end with its
-//! membership (`roles`, `member`, `team` and `invitation` lines, sorted) when that is not the one the
+//! Output: `scenario <name>`, then per op either `err <kind>` or an accepted step: `ok`, `revision <n>`
+//! (the tenant's revision after it), one `event <seq> rev=<rev> by=<principal> <body>` line per event,
+//! then one `effect publish <seq>` per event (`unparsed <line>` for a line it cannot read), then
+//! `state`, the state lines and `end`. `outcome_lines` drops the revision, event and effect lines.
+//! A tenant's state lines end with its membership (`roles`, `member`, `team` and `invitation` lines, sorted) when that is not the one the
 //! fixture starts it with, and always for tenant 3, which is printed only when it exists. A new intent is a new `op` arm in
 //! `parseOp`; `crate::lean_diff` generates every such intent (and a test fails if one is missing).
 //! The differential harness is `crate::lean_diff`.
@@ -1218,30 +1220,10 @@ fn show_world(world: &World) -> Vec<String> {
                 out.push(format!("{pre}required={}", required_text(&object)));
             }
             for record in tenant.records_of(&object) {
-                // The creator as the model prints it: its user id, or `-` when no user created the record.
-                let owner = record
-                    .created_by
-                    .as_ref()
-                    .map_or_else(|| "-".to_string(), |p| p.as_str()[1..].to_string());
-                let mut numbered: Vec<(u64, &Value)> = record
-                    .fields
-                    .iter()
-                    .map(|(field, value)| (field_number(field), value))
-                    .collect();
-                numbered.sort_by_key(|(n, _)| *n);
-                let fields: Vec<String> = numbered
-                    .iter()
-                    .map(|(n, value)| format!("{n}={}", show_value(value)))
-                    .collect();
                 out.push(
-                    format!(
-                        "{pre}record {} owner={owner} v={} {}",
-                        record.id,
-                        record.version,
-                        fields.join(" ")
-                    )
-                    .trim_end()
-                    .to_string(),
+                    format!("{pre}record {} {}", record.id, record_text(record))
+                        .trim_end()
+                        .to_string(),
                 );
             }
         }
@@ -1252,6 +1234,180 @@ fn show_world(world: &World) -> Vec<String> {
         }
     }
     out
+}
+
+/// The object type as the scenario format numbers it: `item` is `1`, `part` is `2`, `ticket` is `4`,
+/// and `type<n>` is `n`.
+fn object_number(object: &ObjectTypeId) -> u64 {
+    match object.as_str() {
+        "item" => 1,
+        "part" => 2,
+        "ticket" => 4,
+        other => other
+            .strip_prefix("type")
+            .and_then(|n| n.parse().ok())
+            .expect("fixture object types are item, part, ticket or type<number>"),
+    }
+}
+
+/// A record as the model's `recordBody` prints it: its creator (a user number, or `-`), its version and
+/// its fields by number, with the values of `show_value`. Used by the state lines and by the events.
+fn record_text(record: &Record) -> String {
+    // The creator as the model prints it: its user id, or `-` when no user created the record.
+    let owner = record
+        .created_by
+        .as_ref()
+        .map_or_else(|| "-".to_string(), |p| p.as_str()[1..].to_string());
+    let mut numbered: Vec<(u64, &Value)> = record
+        .fields
+        .iter()
+        .map(|(field, value)| (field_number(field), value))
+        .collect();
+    numbered.sort_by_key(|(n, _)| *n);
+    let fields: Vec<String> = numbered
+        .iter()
+        .map(|(n, value)| format!("{n}={}", show_value(value)))
+        .collect();
+    format!("owner={owner} v={} {}", record.version, fields.join(" "))
+        .trim_end()
+        .to_string()
+}
+
+/// A principal as the event lines print it: a user's number, `system` or `anon`.
+fn principal_text(principal: &Principal) -> String {
+    match principal {
+        Principal::User(user) => user_number(user).to_string(),
+        Principal::System => "system".to_string(),
+        Principal::Anonymous => "anon".to_string(),
+    }
+}
+
+/// The member of a `member-changed` event: a user's number, or `team:<team number>` for the change of a
+/// team's own roles (the kernel names a team's principal `team:<team id>`, and its id is `team<n>`).
+fn member_text(principal: &PrincipalId) -> String {
+    match principal.as_str().strip_prefix("team:team") {
+        Some(number) => format!("team:{number}"),
+        None => user_number(principal).to_string(),
+    }
+}
+
+/// The summary of a `schema-changed` line, from the change list of the intent: each field definition as
+/// `field:<object>.<field>` and each composite unique as `unique:<object>:<fields>`, in list order; `-` for
+/// none. Other kinds of change are not in the model and are left out.
+fn schema_summary(changes: &[SchemaChange]) -> String {
+    let items: Vec<String> = changes
+        .iter()
+        .filter_map(|change| match change {
+            SchemaChange::DefineField { object, field } => Some(format!(
+                "field:{}.{}",
+                object_number(object),
+                field_number(&field.id)
+            )),
+            SchemaChange::DefineUnique { object, unique } => {
+                let fields: Vec<String> = unique
+                    .fields
+                    .iter()
+                    .map(|field| field_number(field).to_string())
+                    .collect();
+                Some(format!(
+                    "unique:{}:{}",
+                    object_number(object),
+                    fields.join(",")
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    if items.is_empty() {
+        "-".to_string()
+    } else {
+        items.join(";")
+    }
+}
+
+/// The workflow transitions an update fired, sorted by workflow id, as `<workflow>:<transition>` entries
+/// joined by commas; `-` for none.
+fn fired_text(fired: Option<&BTreeMap<WorkflowId, String>>) -> String {
+    match fired {
+        Some(map) if !map.is_empty() => map
+            .iter()
+            .map(|(workflow, transition)| format!("{workflow}:{transition}"))
+            .collect::<Vec<String>>()
+            .join(","),
+        _ => "-".to_string(),
+    }
+}
+
+/// One domain event as the model's `showEvent` prints it: the sequence number, the revision, the
+/// principal and the body. `changes` is the change list of the intent that emitted the event (empty for
+/// any other intent); a `schema-changed` line takes its summary from it.
+fn event_text(event: &DomainEvent, changes: &[SchemaChange]) -> String {
+    let body = match &event.body {
+        EventBody::TenantCreated { name } => format!("tenant-created name={name}"),
+        EventBody::SchemaChanged {
+            version,
+            grandfathered,
+            ..
+        } => format!(
+            "schema-changed version={} grandfathered={grandfathered} summary={}",
+            version.0,
+            schema_summary(changes)
+        ),
+        EventBody::RecordCreated { record } => format!(
+            "record-created type={} id={} {}",
+            object_number(&record.object),
+            record.id,
+            record_text(record)
+        ),
+        EventBody::RecordUpdated {
+            before,
+            after,
+            transitions,
+        } => format!(
+            "record-updated type={} id={} before=[{}] after=[{}] fired={}",
+            object_number(&before.object),
+            before.id,
+            record_text(before),
+            record_text(after),
+            fired_text(transitions.as_ref())
+        ),
+        EventBody::RecordDeleted { before } => format!(
+            "record-deleted type={} id={} before=[{}]",
+            object_number(&before.object),
+            before.id,
+            record_text(before)
+        ),
+        EventBody::MemberChanged { principal, roles } => format!(
+            "member-changed who={} roles={}",
+            member_text(principal),
+            show_numbers(roles.iter().map(role_number).collect())
+        ),
+        // The model has no such event. The line does not start with `event `, so a kernel that emits one
+        // makes the comparison fail instead of being hidden by the filter of `outcome_lines`.
+        _ => format!("unmodelled event seq={}", event.seq),
+    };
+    format!(
+        "event {} rev={} by={} {body}",
+        event.seq,
+        event.revision.0,
+        principal_text(&event.principal)
+    )
+}
+
+/// The lines of an output that are not the revision, event and effect lines of an accepted step. The
+/// committed `expected.txt` holds only these outcome lines.
+pub fn outcome_lines(output: &str) -> String {
+    let kept: Vec<&str> = output
+        .lines()
+        .filter(|line| {
+            !(line.starts_with("revision ")
+                || line.starts_with("event ")
+                || line.starts_with("effect "))
+        })
+        .collect();
+    let mut text = kept.join("\n");
+    text.push('\n');
+    text
 }
 
 /// The definition of field `n` as the tenant's schema holds it now. The kernel's `DefineField`
@@ -1423,9 +1579,28 @@ pub fn kernel_output(scenarios: &str) -> String {
                     },
                 };
                 match world.step(&intent, &ctx) {
-                    Ok((next, _)) => {
+                    Ok((next, transition)) => {
                         world = next;
+                        // As the model prints an accepted step: `ok`, the tenant's revision after it, each
+                        // event, then one `effect publish` per event. The kernel's other effects are not
+                        // modelled and are not printed.
                         out.push("ok".to_string());
+                        let revision = world.tenants.get(&ctx.tenant).map_or(0, |t| t.revision.0);
+                        out.push(format!("revision {revision}"));
+                        let changes: Vec<SchemaChange> = match &intent {
+                            Intent::ChangeSchema { changes, .. } => changes.clone(),
+                            _ => Vec::new(),
+                        };
+                        out.extend(
+                            transition
+                                .events
+                                .iter()
+                                .map(|event| event_text(event, &changes)),
+                        );
+                        out.extend(transition.effects.iter().filter_map(|effect| match effect {
+                            Effect::Publish { seq } => Some(format!("effect publish {seq}")),
+                            _ => None,
+                        }));
                     }
                     Err(error) => out.push(format!("err {}", show_error(error.kind))),
                 }
