@@ -5139,3 +5139,117 @@ ledger-entry 1 owner=101 unit=2 scope=- seq=1 amount=7 key=v:1 reason=- by=100 a
 tenant 2 next=1 required=1
 type 2 required=
 end
+scenario h-invoke-accepted-create
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:hello 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-not-signed-in-refused
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-roles-refused
+err unauthorized
+err unauthorized
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-unknown-operation-refused
+err invalid_intent
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-key-refused
+err invalid_intent
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:hello 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-inputs-refused
+err invalid
+err invalid
+err invalid
+err limit_exceeded
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-subject-refused
+err not_found
+err invalid
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-condition-refused
+err constraint_violated
+err constraint_violated
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=101 v=1 1=s:a 2=i:0 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-posting-atomic
+err constraint_violated
+ok
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:y 6=i:7 9=s:p100
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=55 seq=2 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=5 key=op:note_grant:p100:k2:p reason=grant by=100 at=5001 corrects=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=2 amount=50 key=op:grant:p100:k3:p reason=grant by=100 at=5002 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-posting-replay
+ok
+ok
+err version_conflict
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=101 unit=1 scope=- balance=50 seq=1 buckets=-
+ledger-entry 1 owner=101 unit=1 scope=- seq=1 amount=50 key=op:grant:p101:k1:p reason=grant by=101 at=5000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-invoke-delete-still-referenced
+ok
+ok
+err still_referenced
+state
+tenant 1 next=3 required=1
+record 1 owner=101 v=1 1=s:target 6=i:7 9=s:p101
+record 2 owner=101 v=1 1=s:holder 5=r:1 6=i:7 9=s:p101
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
