@@ -2888,7 +2888,10 @@ fn trigger_script(rng: &mut Lcg, tenant: u64, first: u64) -> Vec<Op> {
                 home + 1,
                 1,
                 None,
-                OpKind::Create(vec![(1, format!("s:{}", word(rng))), (3, "b:1".to_string())]),
+                OpKind::Create(vec![
+                    (1, format!("s:{}", word(rng))),
+                    (3, "b:1".to_string()),
+                ]),
             );
             let patched = op(
                 home + 1,

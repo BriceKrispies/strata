@@ -117,6 +117,7 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use strata_kernel::search::{SearchRequest, SearchResult};
+use strata_kernel::triggers::{AutomationDecline, AutomationStart};
 use strata_kernel::types::{PageCursor, QueryId};
 use strata_kernel::*;
 
@@ -1918,10 +1919,7 @@ fn fixture_trigger_changes(owner: u64) -> Vec<SchemaChange> {
         Box::new(Expr::Param("hop".into())),
         Box::new(Expr::Lit(Value::Int(0))),
     );
-    let third_null = Expr::IsNull(Box::new(Expr::Var(
-        Scope::New,
-        field_id(3).as_str().into(),
-    )));
+    let third_null = Expr::IsNull(Box::new(Expr::Var(Scope::New, field_id(3).as_str().into())));
     vec![
         SchemaChange::DefineTrigger(fixture_trigger(
             1,
