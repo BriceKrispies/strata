@@ -2127,3 +2127,171 @@ op 1 100 team-assign 1 3
 op 1 100 team-add 1 150
 op 1 100 team-remove 1 150
 end
+scenario h-read-records-visible-missing-and-invisible
+op 1 100 create 1=s:oak 2=i:5 3=b:1 10=s:secret
+op 1 101 create 1=s:ash 2=i:9 3=b:0 10=s:hidden
+op 1 102 create 1=s:elm 2=i:7
+op 1 103 create 1=s:fir 3=b:1 10=s:shown
+op 1 100 type 2 create 1=r:1 4=i:3
+read 1 100 records 1 1 2 3 4
+read 1 102 records 1 4 99 1 1
+read 1 101 records 1 5 6 7
+read 1 100 records 2 5 1
+read 1 999 records 1 1 2
+read 1 201 records 1 1 2
+read 1 system records 1 1 2 3 4
+read 1 anon records 1 1 2 3 4
+read 2 200 records 1 1 2
+read 2 100 records 1 1 2
+read 1 100 records 1
+end
+scenario h-read-records-refusals
+op 1 100 create 1=s:oak
+read 1 100 records 9 1
+read 1 100 records 3 1
+read 1 100 records 1 1-200
+read 1 100 records 1 1-201
+read 1 100 records 9 1-201
+read 1 system records 1 1-201
+read 3 100 records 1 1
+read 3 100 records 1 1-201
+op 3 system create-tenant 100 s:acme
+read 3 100 records 1 1
+read 3 100 records 1 1-201
+read 3 system records 2 1
+end
+scenario h-read-redaction-by-record-and-by-principal
+op 1 100 create 1=s:oak 3=b:1 10=s:shown
+op 1 100 create 1=s:ash 3=b:0 10=s:hidden
+op 1 100 create 1=s:elm 10=s:nothing
+op 1 100 create 1=s:fir 3=b:1
+op 1 100 type 2 create 4=i:3
+op 1 101 type 2 create 4=i:1
+op 1 100 type 4 create 2=i:3 3=s:note
+op 1 100 type 4 create 2=i:0 3=s:hid
+op 1 100 type 4 create 3=s:none
+read 1 100 records 1 1 2 3 4
+read 1 103 records 1 1 2 3 4
+read 1 100 records 2 5 6
+read 1 101 records 2 5 6
+read 1 102 records 2 5 6
+read 1 100 records 4 7 8 9
+read 1 101 records 4 7 8 9
+read 1 anon records 2 5 6
+read 1 system records 2 5 6
+end
+scenario h-read-query-orders-by-keys-then-id
+op 1 100 create 1=s:oak 2=i:5 3=b:1
+op 1 101 create 1=s:ash 2=i:9 3=b:0
+op 1 102 create 1=s:elm 2=i:7
+op 1 103 create 1=s:fir 3=b:1
+op 1 100 create 1=s:yew 2=i:5 3=b:0
+op 1 100 create 1=s:oak 2=i:5 3=b:1
+read 1 100 query items_by_rank
+read 1 102 query items_by_rank
+read 1 100 query items_not_elm page=10
+read 1 100 query items_not_elm
+read 1 system query items_by_rank
+read 1 anon query items_by_rank
+read 2 200 query items_by_rank
+end
+scenario h-read-query-pages-and-cursors
+op 1 100 create 1=s:a 2=i:1
+op 1 100 create 1=s:b 2=i:2
+op 1 100 create 1=s:c 2=i:3
+op 1 100 create 1=s:d 2=i:4
+op 1 100 create 1=s:e 2=i:5
+read 1 100 query items_by_rank page=2
+read 1 100 query items_by_rank page=2 cursor=o2
+read 1 100 query items_by_rank page=2 cursor=o4
+read 1 100 query items_by_rank page=2 cursor=o5
+read 1 100 query items_by_rank page=2 cursor=o50
+read 1 100 query items_by_rank page=5
+read 1 100 query items_by_rank page=4 cursor=o1
+read 1 100 query items_by_rank page=2 cursor=a1
+read 1 100 query items_by_rank cursor=a3
+read 1 100 query items_not_elm
+read 1 100 query items_not_elm cursor=o3
+read 1 100 query items_not_elm page=1
+read 1 100 query items_not_elm page=200
+op 1 100 delete 5
+read 1 100 query items_by_rank page=2 cursor=o4
+end
+scenario h-read-query-refusals-in-the-kernels-order
+op 1 100 create 1=s:oak 2=i:5
+read 1 100 query nope
+read 1 100 query nope page=0
+read 1 100 query nope bogus=i:1
+read 1 100 query items_not_elm bogus=i:1 page=0
+read 1 100 query items_not_elm bogus=i:1 page=201
+read 1 100 query items_not_elm page=0 cursor=a1
+read 1 100 query items_not_elm page=201 cursor=a1
+read 1 100 query items_not_elm page=201
+read 1 100 query items_not_elm page=0
+read 1 100 query items_not_elm page=1 cursor=a1
+read 1 100 query items_by_rank tag=s:x
+read 1 100 query items_not_elm tag=s:x
+read 1 100 query items_not_elm tag=s:x page=1
+read 1 100 query items_not_elm tag=l:s:a,s:b
+read 1 100 query parts_ranked tag=n
+read 1 system query nope
+read 1 anon query items_by_rank page=0
+read 3 100 query items_by_rank
+op 3 system create-tenant 100 s:acme
+read 3 100 query items_by_rank
+read 3 system query nope
+end
+scenario h-read-query-filter-and-hidden-order-keys
+op 1 100 create 1=s:elm 2=i:7
+op 1 100 create 1=s:oak 2=i:3
+op 1 100 type 2 create 4=i:9
+op 1 101 type 2 create 4=i:2
+op 1 100 type 2 create 4=i:5
+op 1 100 type 4 create 2=i:2 3=s:b
+op 1 100 type 4 create 2=i:2 3=s:a
+op 1 100 type 4 create 1=s:shut 2=i:1
+op 1 100 type 4 create 2=i:0 3=s:z
+read 1 100 query items_not_elm
+read 1 100 query parts_ranked
+read 1 101 query parts_ranked
+read 1 102 query parts_ranked
+read 1 100 query tickets_open
+read 1 100 query tickets_open page=1 cursor=o1
+read 1 102 query tickets_open
+end
+scenario h-read-follows-writes-and-schema-changes
+op 1 100 create 1=s:oak 2=i:5 3=b:1 10=s:secret
+op 1 100 create 1=s:ash 2=i:9 3=b:0 10=s:hidden
+op 1 100 create 1=s:elm 2=i:7 3=b:1 10=s:more
+read 1 100 records 1 1 2 3
+read 1 100 query items_by_rank
+op 1 100 patch 1 3=b:0
+read 1 100 records 1 1 2 3
+op 1 100 unique 10 strict
+read 1 100 records 1 1 2 3
+read 1 100 query items_by_rank
+op 1 100 require 2 lax
+read 1 100 records 1 1 2 3
+op 1 100 delete 2
+read 1 100 records 1 1 2 3
+read 1 100 query items_by_rank
+op 1 100 patch 3 3=n
+read 1 100 records 1 1 2 3
+op 1 100 type 2 create 4=i:3
+op 1 100 type 2 require 4 lax
+read 1 100 records 2 4
+op 1 100 type 4 create 2=i:3 3=s:n
+op 1 100 type 4 unique 3 lax
+read 1 100 records 4 5
+end
+scenario h-read-another-tenant-and-unknown-principal
+op 2 200 create 1=s:oak 2=i:5
+op 2 201 create 1=s:ash 2=i:6
+read 2 200 records 1 1 2
+read 2 100 records 1 1 2
+read 2 999 records 1 1 2
+read 2 202 query items_by_rank
+read 2 999 query items_by_rank
+read 1 200 query items_by_rank
+read 1 200 records 1 1
+end

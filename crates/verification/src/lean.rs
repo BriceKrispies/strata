@@ -43,6 +43,11 @@
 //! | `redeem <inv> @<now> [verified=<address>]` | `RedeemInvitation`, in a context whose `now` is `<now>` and whose `verified_address` is the address |
 //! | `Err.invalidIntent`, `unknownRole`, `lastOwner`, `tenantExists`, `workflowViolation` | `InvalidIntent`, `UnknownRole`, `LastOwner`, `TenantExists`, `WorkflowViolation` |
 //! | the editor role's `manage` power | the policy `editors_manage_members` (`manage` on `Resource::Members`, no condition) |
+//! | `fixtureReadRules` (slice 10) | the field read rules of `t1` and `t2`: `f10` of an item is shown when `f03 == true`; `f04` of a part only to `p100`; the note `f03` of a ticket when `f02 >= 1` |
+//! | `fixtureQueries` | the named queries `items_by_rank`, `items_not_elm` (a declared parameter `tag` its filter does not read), `parts_ranked` and `tickets_open`, each planned by the kernel as a scan; tenant `3` declares none |
+//! | `read <t> <p> records <type> <ids..>` | `ReadRequest::Records`, the ids `n` or `a-b` |
+//! | `read <t> <p> query <name> [k=v ..] [page=<n>] [cursor=<c>]` | `ReadRequest::Named`; a cursor is `o<n>` (`PageCursor::Offset`) or `a<id>` (`After`) |
+//! | `Err.unknownQuery` (read only) | `UnknownQuery` |
 //!
 //! # The Main.lean protocol
 //!
@@ -75,6 +80,11 @@
 //! (the tenant's revision after it), one `event <seq> rev=<rev> by=<principal> <body>` line per event,
 //! then one `effect publish <seq>` per event (`unparsed <line>` for a line it cannot read), then
 //! `state`, the state lines and `end`. `outcome_lines` drops the revision, event and effect lines.
+//! A read line (`read <tenant> <principal> records <type> <ids..>` or
+//! `read <tenant> <principal> query <name> [k=v ..] [page=<n>] [cursor=<c>]`; an id is `n` or `a-b`) changes
+//! nothing and prints `err <kind>` (`no_tenant`, `unknown_object`, `unknown_query`, `invalid_intent`,
+//! `limit_exceeded`), or `ok`, `next <cursor>` (`-` for none) and one `row <id> <record>` line per row, in order.
+//! `op_outcomes` cuts an output into the lines of each operation, so that the coverage counts one outcome each.
 //! A tenant's state lines end with its membership (`roles`, `member`, `team` and `invitation` lines, sorted) when that is not the one the
 //! fixture starts it with, and always for tenant 3, which is printed only when it exists. A new intent is a new `op` arm in
 //! `parseOp`; `crate::lean_diff` generates every such intent (and a test fails if one is missing).
@@ -89,6 +99,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
+use strata_kernel::types::{PageCursor, QueryId};
 use strata_kernel::*;
 
 /// A linear congruential generator: enough to make varied scenarios, and trivially repeatable.
@@ -389,11 +400,7 @@ fn item_constraints() -> Vec<SchemaChange> {
 fn part_constraints() -> Vec<SchemaChange> {
     let field = |n: u64| Box::new(Expr::Var(Scope::Record, format!("f{n:02}")));
     let named = |n: u64| Expr::Not(Box::new(Expr::IsNull(field(n))));
-    let made_by_p100 = Expr::Cmp(
-        CmpOp::Eq,
-        field(5),
-        Box::new(Expr::Lit(Value::Bool(true))),
-    );
+    let made_by_p100 = Expr::Cmp(CmpOp::Eq, field(5), Box::new(Expr::Lit(Value::Bool(true))));
     vec![SchemaChange::DefineConstraint {
         object: part(),
         constraint: ConstraintDef {
@@ -413,7 +420,7 @@ fn field_def(n: u64, required: bool) -> FieldDef {
         // Field 10 is unique: no two records hold the same value in it.
         unique: n == 10,
         default: item_default(n),
-        read: None,
+        read: item_read(n),
         personal: None,
         normalise: None,
         computed: None,
@@ -456,11 +463,115 @@ fn part_field_def(n: u64) -> FieldDef {
         required: false,
         unique: false,
         default: part_default(n),
-        read: None,
+        read: part_read(n),
         personal: None,
         normalise: None,
         computed: None,
     }
+}
+
+/// The read rule of field `n` of an item (the model's `fixtureReadRules`): field `10` is shown only
+/// when the boolean field `3` is `true`.
+fn item_read(n: u64) -> Option<Expr> {
+    (n == 10).then(|| {
+        Expr::Cmp(
+            CmpOp::Eq,
+            Box::new(Expr::Var(Scope::Record, "f03".into())),
+            Box::new(Expr::Lit(Value::Bool(true))),
+        )
+    })
+}
+
+/// The read rule of field `n` of a part: field `4` is shown only to `p100`.
+fn part_read(n: u64) -> Option<Expr> {
+    (n == 4).then(|| {
+        Expr::Cmp(
+            CmpOp::Eq,
+            Box::new(Expr::Principal),
+            Box::new(Expr::Lit(Value::Str("p100".into()))),
+        )
+    })
+}
+
+/// The read rule of field `n` of a ticket: the note (field `3`) is shown only once the ticket has a
+/// vote (field `2` at least one).
+fn ticket_read(n: u64) -> Option<Expr> {
+    (n == 3).then(|| {
+        Expr::Cmp(
+            CmpOp::Ge,
+            Box::new(Expr::Var(Scope::Record, "f02".into())),
+            Box::new(Expr::Lit(Value::Int(1))),
+        )
+    })
+}
+
+/// The named queries of the fixture (the model's `fixtureQueries`), declared in tenants `t1` and `t2`.
+/// Each is one the kernel plans as a scan: it orders, and either has no filter or orders by more than
+/// one key. `items_not_elm` declares a parameter `tag` that its filter does not read.
+fn fixture_queries() -> Vec<SchemaChange> {
+    let key = |field: &str, descending: bool| OrderKey {
+        field: field.to_string(),
+        descending,
+    };
+    let text = |op: CmpOp, field: &str, value: &str| {
+        Expr::Cmp(
+            op,
+            Box::new(Expr::Var(Scope::Record, field.into())),
+            Box::new(Expr::Lit(Value::Str(value.into()))),
+        )
+    };
+    let query = |name: &str,
+                 object: ObjectTypeId,
+                 filter: Option<Expr>,
+                 params: &[&str],
+                 order: Vec<OrderKey>,
+                 limit: Option<u32>| {
+        SchemaChange::DefineQuery(QueryDef {
+            id: id::<QueryId>(name.to_string()),
+            object,
+            filter,
+            params: params.iter().map(|p| p.to_string()).collect(),
+            order,
+            limit,
+            aggregates: None,
+            declared_fields: None,
+            tree: None,
+        })
+    };
+    vec![
+        query(
+            "items_by_rank",
+            item(),
+            None,
+            &[],
+            vec![key("f02", true)],
+            None,
+        ),
+        query(
+            "items_not_elm",
+            item(),
+            Some(text(CmpOp::Ne, "f01", "elm")),
+            &["tag"],
+            vec![key("f03", false), key("f02", true)],
+            Some(3),
+        ),
+        query(
+            "parts_ranked",
+            part(),
+            None,
+            &[],
+            vec![key("f04", false)],
+            None,
+        ),
+        query(
+            "tickets_open",
+            ticket(),
+            Some(text(CmpOp::Eq, "f01", "open")),
+            &[],
+            vec![key("f02", false), key("f03", false)],
+            Some(2),
+        ),
+    ]
 }
 
 /// The object type of the tickets, the model's type `4` (slice 8): a state (`1`), a vote count (`2`)
@@ -491,7 +602,7 @@ fn ticket_field_def(n: u64) -> FieldDef {
         required: false,
         unique: false,
         default: ticket_default(n),
-        read: None,
+        read: ticket_read(n),
         personal: None,
         normalise: None,
         computed: None,
@@ -924,6 +1035,8 @@ fn initial_world() -> World {
                 condition: None,
             }),
         ]);
+        // The named queries read the fields above and the policies decide who may read them.
+        changes.extend(fixture_queries());
         world = run(
             &world,
             principal(owner),
@@ -1078,6 +1191,7 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::LastOwner => "last_owner",
         ErrorKind::TenantExists => "tenant_exists",
         ErrorKind::WorkflowViolation => "workflow_violation",
+        ErrorKind::UnknownQuery => "unknown_query",
         _ => "unmodelled",
     }
 }
@@ -1428,6 +1542,89 @@ fn current_field(
         .cloned()
 }
 
+/// A token of record ids: `n`, or `a-b` for every id from `a` to `b` (the model's `parseIds`).
+fn parse_ids(token: &str) -> Option<Vec<RecordId>> {
+    match token.split_once('-') {
+        None => Some(vec![RecordId(token.parse().ok()?)]),
+        Some((first, last)) => {
+            let (first, last): (u64, u64) = (first.parse().ok()?, last.parse().ok()?);
+            Some((first..=last).map(RecordId).collect())
+        }
+    }
+}
+
+/// A cursor token: `o<n>` is an offset, `a<id>` a position after a record (the model's `parseCursor`).
+fn parse_cursor(token: &str) -> Option<PageCursor> {
+    if let Some(offset) = token.strip_prefix('o') {
+        Some(PageCursor::Offset(offset.parse().ok()?))
+    } else {
+        let after = token.strip_prefix('a')?;
+        Some(PageCursor::After(RecordId(after.parse().ok()?)))
+    }
+}
+
+/// The request a read line asks, after its tenant and principal: `records <type> <ids..>` or
+/// `query <name> [k=v ..] [page=<n>] [cursor=<c>]` (the model's `parseRead`).
+fn parse_read(tokens: &[&str]) -> Option<ReadRequest> {
+    match tokens {
+        ["records", ty, ids @ ..] => {
+            let mut all = Vec::new();
+            for token in ids {
+                all.extend(parse_ids(token)?);
+            }
+            Some(ReadRequest::Records {
+                object: object_of(ty.parse().ok()?),
+                ids: all,
+            })
+        }
+        ["query", name, args @ ..] => {
+            let mut params = BTreeMap::new();
+            let mut page_size = None;
+            let mut cursor = None;
+            for arg in args {
+                let (key, value) = arg.split_once('=')?;
+                match key {
+                    "page" => page_size = Some(value.parse().ok()?),
+                    "cursor" => cursor = Some(parse_cursor(value)?),
+                    _ => {
+                        params.insert(key.to_string(), parse_value(value));
+                    }
+                }
+            }
+            Some(ReadRequest::Named {
+                query: id::<QueryId>(name.to_string()),
+                params,
+                page_size,
+                cursor,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The lines a read prints (the model's `showRead`): `err <kind>`, or `ok`, `next <cursor>` (`-` for
+/// none) and one `row <id> <record>` line per row.
+fn read_lines(result: &Result<ReadResult, DomainError>) -> Vec<String> {
+    match result {
+        Err(error) => vec![format!("err {}", show_error(error.kind))],
+        Ok(read) => {
+            let next = match &read.next {
+                None => "-".to_string(),
+                Some(PageCursor::Offset(n)) => format!("o{n}"),
+                Some(PageCursor::After(after)) => format!("a{}", after.0),
+                Some(PageCursor::At(_)) => "at".to_string(),
+            };
+            let mut lines = vec!["ok".to_string(), format!("next {next}")];
+            lines.extend(
+                read.rows
+                    .iter()
+                    .map(|row| format!("row {} {}", row.id.0, record_text(row))),
+            );
+            lines
+        }
+    }
+}
+
 /// Run a scenario file through the Rust kernel and print what the Lean program prints.
 pub fn kernel_output(scenarios: &str) -> String {
     let initial = initial_world();
@@ -1605,6 +1802,25 @@ pub fn kernel_output(scenarios: &str) -> String {
                     Err(error) => out.push(format!("err {}", show_error(error.kind))),
                 }
             }
+            ["read", tenant, who, rest @ ..] => {
+                at += 1;
+                let ctx = Context {
+                    tenant: id(format!("t{tenant}")),
+                    principal: parse_principal(who),
+                    session: None,
+                    now: Timestamp(at),
+                    correlation: "fixture".into(),
+                    verified_address: None,
+                    idempotency_key: None,
+                    language: None,
+                    hop: None,
+                    agent: None,
+                };
+                match parse_read(rest) {
+                    Some(request) => out.extend(read_lines(&world.read(&request, &ctx))),
+                    None => out.push(format!("unparsed {line}")),
+                }
+            }
             _ => out.push(format!("unparsed {line}")),
         }
     }
@@ -1742,6 +1958,73 @@ pub fn parse_audit(output: &str) -> Vec<Checked> {
         .collect()
 }
 
+/// The lines of each operation in one scenario's output (from its `scenario` line, as `chunks` and
+/// `outputs_by_scenario` cut it). An operation prints a first line, `ok`, `err <kind>` or `unparsed ..`,
+/// and an accepted one may go on with `revision`, `event`, `effect`, `next` and `row` lines. A group is
+/// a first line with the lines that follow it up to the next first line; the state lines at the end
+/// are not an operation's. The `k`th group is the outcome of the `k`th operation.
+pub fn op_outcomes<S: AsRef<str>>(output: &[S]) -> Vec<&[S]> {
+    const CONTINUATION: [&str; 5] = ["revision ", "event ", "effect ", "next ", "row "];
+    let end = output
+        .iter()
+        .position(|line| line.as_ref() == "state")
+        .unwrap_or(output.len());
+    let mut groups: Vec<&[S]> = Vec::new();
+    let mut start: Option<usize> = None;
+    for (at, line) in output.iter().enumerate().take(end).skip(1) {
+        if CONTINUATION
+            .iter()
+            .any(|prefix| line.as_ref().starts_with(prefix))
+        {
+            continue;
+        }
+        if let Some(first) = start {
+            groups.push(&output[first..at]);
+        }
+        start = Some(at);
+    }
+    if let Some(first) = start {
+        groups.push(&output[first..end]);
+    }
+    groups
+}
+
+/// The kind of an operation's outcome as the coverage counts it: its first line, and for a read the
+/// shape of an answer as well. `rendered` is the operation's own line, `group` its outcome lines.
+/// A read is `read-records` or `read-query` (by its fourth word); an answer is counted with rows or
+/// without, with a next cursor, and with a cursor asked for.
+pub fn read_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String> {
+    let mut words = rendered.split_whitespace();
+    if words.next() != Some("read") {
+        return Vec::new();
+    }
+    let name = match words.nth(2) {
+        Some("records") => "read-records",
+        Some("query") => "read-query",
+        _ => return Vec::new(),
+    };
+    let first = group.first().map_or("", |line| line.as_ref());
+    let mut shapes = vec![format!("{name} {first}")];
+    if first == "ok" {
+        let has = |prefix: &str, except: &str| {
+            group
+                .iter()
+                .any(|line| line.as_ref().starts_with(prefix) && line.as_ref() != except)
+        };
+        shapes.push(format!(
+            "{name} ok rows{}",
+            if has("row ", "") { ">0" } else { "=0" }
+        ));
+        if has("next ", "next -") {
+            shapes.push(format!("{name} ok next"));
+        }
+        if rendered.contains(" cursor=") {
+            shapes.push(format!("{name} ok cursor"));
+        }
+    }
+    shapes
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Correspondence {
     pub scenarios: usize,
@@ -1768,7 +2051,10 @@ pub fn compare_outputs(scenarios: &str, lean: &str, rust: &str) -> Correspondenc
             .lines()
             .filter(|l| l.starts_with("scenario"))
             .count(),
-        operations: scenarios.lines().filter(|l| l.starts_with("op ")).count(),
+        operations: scenarios
+            .lines()
+            .filter(|l| l.starts_with("op ") || l.starts_with("read "))
+            .count(),
         agree: first_difference.is_none(),
         first_difference,
     }

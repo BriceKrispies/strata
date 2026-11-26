@@ -26,7 +26,7 @@
 //! bound is only ever built so that the model's size and the kernel's encoding agree on which
 //! side of it it falls (see `straddle`).
 
-use crate::lean::{build_model, kernel_output, run_model};
+use crate::lean::{build_model, kernel_output, op_outcomes, read_shapes, run_model};
 use std::path::Path;
 
 /// The intent kinds the generator produces; each is the word after the principal in an `op` line.
@@ -128,6 +128,10 @@ pub enum OpKind {
     InviteRevoke(u64),
     /// Redeem an invitation at a time, with a verified address token if the caller has one.
     Redeem(u64, u64, Option<String>),
+    /// Read records (slice 10): the object type is the op's `object`, and the ids are tokens, `n` or `a-b`.
+    ReadRecords(Vec<String>),
+    /// Read a named query: its name and its arguments (`k=v`, `page=<n>`, `cursor=<c>`).
+    ReadQuery(String, Vec<String>),
 }
 
 pub type Scenario = Vec<Op>;
@@ -206,6 +210,19 @@ impl Op {
                 verified
                     .as_ref()
                     .map_or(String::new(), |v| format!(" verified={v}"))
+            ),
+            OpKind::ReadRecords(ids) => format!(
+                "read {} {} records {}{}",
+                self.tenant,
+                self.principal.token(),
+                self.object,
+                ids.iter().map(|id| format!(" {id}")).collect::<String>()
+            ),
+            OpKind::ReadQuery(name, args) => format!(
+                "read {} {} query {name}{}",
+                self.tenant,
+                self.principal.token(),
+                args.iter().map(|arg| format!(" {arg}")).collect::<String>()
             ),
         }
     }
@@ -1227,6 +1244,101 @@ pub fn generate(seed: u64) -> Scenario {
             kind,
         });
     }
+    with_reads(seed, ops)
+}
+
+/// A read of slice 10, drawn from the stream `rng`. The reads of a scenario come from a stream of their
+/// own, so the operations the rest of the generator draws are the same with or without them. Mostly the
+/// tenants and principals of the fixture, sometimes tenant `3` (which may not exist yet), the system and an
+/// anonymous caller. A records read names a few ids (missing, invisible and visible ones occur together:
+/// the ids of other types and of records a principal may not read are among them), now and then 200
+/// ids (the bound) or 201 (over it), and now and then a type the tenant lacks. A query read names one of
+/// the fixture's queries, or one it lacks, with a parameter it declares or one it does not, a page size
+/// (none, 1 to 3, 0, 201) and a cursor (none, an offset, a position after a record).
+fn read_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(12) {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0 => Caller::System,
+        1 | 2 => Caller::Anonymous,
+        3 => Caller::User(999),
+        4 => Caller::User(if home == 100 { 201 } else { 101 }),
+        5..=7 => Caller::User(home),
+        8..=10 => Caller::User(home + 1),
+        11..=15 => Caller::User(home + 2),
+        _ => Caller::User(home + 3),
+    };
+    if rng.below(5) < 2 {
+        let object = match rng.below(10) {
+            0 => 9,
+            1..=4 => 1,
+            5 | 6 => 2,
+            _ => 4,
+        };
+        let ids = match rng.below(14) {
+            0 => vec!["1-201".to_string()],
+            1 => vec!["1-200".to_string()],
+            _ => (0..1 + rng.below(5))
+                .map(|_| (1 + rng.below(12)).to_string())
+                .collect(),
+        };
+        return Op {
+            tenant,
+            principal,
+            object,
+            kind: OpKind::ReadRecords(ids),
+        };
+    }
+    let name = match rng.below(14) {
+        0 => "nope",
+        1..=4 => "items_by_rank",
+        5..=8 => "items_not_elm",
+        9 | 10 => "parts_ranked",
+        _ => "tickets_open",
+    };
+    let mut args: Vec<String> = Vec::new();
+    // `tag` is declared by `items_not_elm` only; any other name is refused.
+    match rng.below(8) {
+        0 => args.push("tag=s:x".to_string()),
+        1 => args.push("bogus=i:1".to_string()),
+        _ => {}
+    }
+    match rng.below(10) {
+        0 => args.push("page=0".to_string()),
+        1 => args.push("page=201".to_string()),
+        2..=5 => args.push(format!("page={}", 1 + rng.below(3))),
+        _ => {}
+    }
+    match rng.below(10) {
+        0..=2 => args.push(format!("cursor=o{}", rng.below(5))),
+        3 => args.push(format!("cursor=a{}", 1 + rng.below(6))),
+        _ => {}
+    }
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::ReadQuery(name.to_string(), args),
+    }
+}
+
+/// The operations with a few reads placed among them, mostly in the later part of the sequence where
+/// there are records to read.
+fn with_reads(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7265_6164_735f_3130);
+    for _ in 0..4 {
+        rng.below(2);
+    }
+    for _ in 0..rng.below(7) {
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let read = read_op(&mut rng);
+        ops.insert(at, read);
+    }
     ops
 }
 
@@ -1347,18 +1459,27 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::Invite(..) => "invite",
         OpKind::InviteRevoke(..) => "invite-revoke",
         OpKind::Redeem(..) => "redeem",
+        OpKind::ReadRecords(_) => "read-records",
+        OpKind::ReadQuery(..) => "read-query",
     }
 }
 
 fn count_outcomes(scenarios: &[Scenario], lean: &[Vec<String>]) -> Outcomes {
     let mut counts = Outcomes::new();
     for (ops, out) in scenarios.iter().zip(lean) {
-        // Line 0 is `scenario <name>`; then one line per operation.
-        for (op, line) in ops.iter().zip(out.iter().skip(1)) {
+        // Line 0 is `scenario <name>`; then the lines of each operation, the first of which is its outcome.
+        for (op, group) in ops.iter().zip(op_outcomes(out)) {
+            let line = &group[0];
             *counts.entry(line.clone()).or_default() += 1;
             *counts
                 .entry(format!("{} {line}", intent_name(op)))
                 .or_default() += 1;
+            // The shapes of a read's answer, besides its outcome.
+            for shape in read_shapes(&op.render(), group) {
+                if !shape.ends_with(" ok") {
+                    *counts.entry(shape).or_default() += 1;
+                }
+            }
         }
     }
     counts
@@ -1422,7 +1543,9 @@ fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
         | OpKind::TeamRemove(..)
         | OpKind::Invite(..)
         | OpKind::InviteRevoke(..)
-        | OpKind::Redeem(..) => None,
+        | OpKind::Redeem(..)
+        | OpKind::ReadRecords(_)
+        | OpKind::ReadQuery(..) => None,
     }
 }
 
@@ -1564,6 +1687,19 @@ pub const REQUIRED_PER_INTENT: &[&str] = &[
     "redeem ok",
     "redeem err unauthorized",
     "redeem err invalid_intent",
+    "read-records ok",
+    "read-records ok rows>0",
+    "read-records ok rows=0",
+    "read-records err limit_exceeded",
+    "read-records err unknown_object",
+    "read-query ok",
+    "read-query ok rows>0",
+    "read-query ok rows=0",
+    "read-query ok next",
+    "read-query ok cursor",
+    "read-query err unknown_query",
+    "read-query err invalid_intent",
+    "read-query err limit_exceeded",
 ];
 
 /// Fail when the batch did not reach every outcome kind often enough: `ok`, every error the model
@@ -1640,6 +1776,32 @@ pub fn run(lean_dir: &Path, base_seed: u64, cases: usize) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The generator places reads of both forms among the operations of a scenario, and a rendered read
+    /// is a line `Main.lean` and the kernel harness both read (`read <tenant> <principal> records|query ..`).
+    #[test]
+    fn the_generator_places_reads_of_both_forms() {
+        let (mut records, mut queries) = (0, 0);
+        for i in 0..300 {
+            for op in generate(case_seed(20_261_121, i)) {
+                match &op.kind {
+                    OpKind::ReadRecords(_) => {
+                        records += 1;
+                        assert!(op.render().contains(" records "), "{}", op.render());
+                    }
+                    OpKind::ReadQuery(..) => {
+                        queries += 1;
+                        assert!(op.render().contains(" query "), "{}", op.render());
+                    }
+                    _ => {}
+                }
+                if matches!(op.kind, OpKind::ReadRecords(_) | OpKind::ReadQuery(..)) {
+                    assert!(op.render().starts_with("read "), "{}", op.render());
+                }
+            }
+        }
+        assert!(records > 100 && queries > 100, "{records} {queries}");
+    }
 
     /// The full generator builds the chain the refused delete needs, without the lake: within 2000
     /// scenarios, one makes a record as the first thing done to its tenant, then a record that refers to

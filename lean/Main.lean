@@ -14,6 +14,7 @@ The Rust kernel is run on the same scenarios and must print the same text. See
 
 import Strata.Impl.World
 import Strata.Impl.Transition
+import Strata.Impl.Read
 import Strata.Bench
 
 open Strata
@@ -335,6 +336,69 @@ def showEvent (e : DomainEvent) : String :=
       s!"member-changed who={name} roles={showNats roles}"
   s!"event {e.seq} rev={e.revision} by={showPrincipal e.principal} {body}"
 
+
+/-! ## Reads
+
+A read line is `read <tenant> <principal> records <type> <ids..>` (an id is `n`, or `a-b` for every id
+from `a` to `b`) or `read <tenant> <principal> query <name> [k=v ..] [page=<n>] [cursor=<c>]` (a cursor is
+`o<n>`, an offset, or `a<id>`, a position after a record). It prints `err <kind>`, or `ok`, `next <cursor>`
+(`-` for none) and one `row <id> <record>` line per row, in order. -/
+
+/-- A token of record ids: `n`, or `a-b` for the ids from `a` to `b`. -/
+def parseIds (s : String) : Option (List Nat) :=
+  match s.splitOn "-" with
+  | [a] => a.toNat?.map (fun n => [n])
+  | [a, b] => do
+    let a ← a.toNat?
+    let b ← b.toNat?
+    pure (List.range' a (b + 1 - a))
+  | _ => none
+
+/-- A cursor token: `o<n>` or `a<id>`. -/
+def parseCursor (s : String) : Option Cursor :=
+  if s.startsWith "o" then (dropChars s 1).toNat?.map Cursor.offset
+  else if s.startsWith "a" then (dropChars s 1).toNat?.map Cursor.after
+  else none
+
+/-- The arguments of a named query read: parameters `k=v`, `page=<n>` and `cursor=<c>`. -/
+def parseQueryArgs : List String → Option (List (String × Val) × Option Nat × Option Cursor)
+  | [] => some ([], none, none)
+  | tok :: rest => do
+    let (ps, pg, cu) ← parseQueryArgs rest
+    match tok.splitOn "=" with
+    | k :: v =>
+      let v := "=".intercalate v
+      if k = "page" then pure (ps, some (← v.toNat?), cu)
+      else if k = "cursor" then pure (ps, pg, some (← parseCursor v))
+      else pure ((k, ← parseVal v) :: ps, pg, cu)
+    | [] => none
+
+/-- A read line: the tenant, the principal and the request. -/
+def parseRead : List String → Option (TenantId × Principal × ReadReq)
+  | "read" :: t :: p :: "records" :: ty :: ids => do
+    let idss ← ids.mapM parseIds
+    pure (← t.toNat?, ← parsePrincipal p, .records (← ty.toNat?) idss.flatten)
+  | "read" :: t :: p :: "query" :: name :: rest => do
+    let (ps, pg, cu) ← parseQueryArgs rest
+    pure (← t.toNat?, ← parsePrincipal p, .named name ps pg cu)
+  | _ => none
+
+def showReadErr : ReadErr → String
+  | .unknownObject => "unknown_object"
+  | .unknownQuery => "unknown_query"
+  | .invalidIntent => "invalid_intent"
+  | .limitExceeded => "limit_exceeded"
+
+def showCursor : Option Cursor → String
+  | none => "-"
+  | some (.offset n) => s!"o{n}"
+  | some (.after id) => s!"a{id}"
+
+/-- The lines a read prints. -/
+def showRead : Except ReadErr ReadResult → List String
+  | .error e => [s!"err {showReadErr e}"]
+  | .ok r => ["ok", s!"next {showCursor r.next}"] ++ r.rows.map (fun row => s!"row {row.1} {recordBody row.2}")
+
 /-- One kernel the scenario runner drives: its start state, its transition (the world after an accepted step,
     with the events it emits), the revision of a tenant, and how it prints its state. -/
 structure Kernel (W : Type) where
@@ -342,23 +406,28 @@ structure Kernel (W : Type) where
   step : W → Intent → Ctx → Except Err (W × List DomainEvent)
   revision : W → TenantId → Option Nat
   render : W → List String
+  /-- A read on a tenant for a principal: none when the tenant does not exist. -/
+  read : W → TenantId → Principal → ReadReq → Option (Except ReadErr ReadResult)
 
 /-- The spec's kernel: the model as written, with its transition. -/
 def specKernel : Kernel World :=
   { init := initialWorld,
     step := fun w i c => (transition w i c).map (fun tr => (tr.world, tr.events)),
     revision := fun w x => (w x).map (fun t => t.revision),
-    render := showWorld }
+    render := showWorld,
+    read := fun w x p req => (w x).map (fun t => read t (readSpecOf x) p req) }
 
 /-- The executable kernel: the slots, printed through the abstraction. -/
 def implKernel : Kernel IWorld :=
   { init := implInitial, step := fun w i c => transitionI w i c,
-    revision := fun w x => (w x).map (fun t => t.revision), render := fun w => showWorld (absW w) }
+    revision := fun w x => (w x).map (fun t => t.revision), render := fun w => showWorld (absW w),
+    read := fun w x p req => (w x).map (fun t => readI t (readSpecOf x) p req) }
 
 /-- The indexed kernel: slots and indexes, printed through the abstraction. -/
 def xKernel : Kernel XWorld :=
   { init := xInitial, step := fun w i c => transitionX w i c,
-    revision := fun w x => (w x).map (fun t => t.core.revision), render := fun w => showWorld (absX w) }
+    revision := fun w x => (w x).map (fun t => t.core.revision), render := fun w => showWorld (absX w),
+    read := fun w x p req => (w x).map (fun t => readX t (readSpecOf x) p req) }
 
 partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (out : Array String) :
     Array String :=
@@ -370,6 +439,14 @@ partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (ou
     | [] => runLines K rest w out
     | "scenario" :: name => runLines K rest K.init (out.push s!"scenario {" ".intercalate name}")
     | ["end"] => runLines K rest K.init ((out.push "state" ++ (K.render w).toArray).push "end")
+    | "read" :: _ =>
+      match parseRead tokens with
+      | none => runLines K rest w (out.push s!"unparsed {line}")
+      | some (x, p, req) =>
+        let lines := match K.read w x p req with
+          | none => ["err no_tenant"]
+          | some r => showRead r
+        runLines K rest w (lines.foldl (fun a l => a.push l) out)
     | _ =>
       match parseOp tokens with
       | none => runLines K rest w (out.push s!"unparsed {line}")

@@ -1456,3 +1456,20 @@ end Strata
 #print axioms Strata.query_pages_nodup
 #print axioms Strata.readRecords_hide
 #print axioms Strata.queryPage_system_rows
+
+/-! ## Slice 10: the order on values as the kernel's, and the executable read -/
+#print axioms Strata.Elem.leb_total
+#print axioms Strata.Elem.leb_trans
+#print axioms Strata.lexLe_total
+#print axioms Strata.lexLe_trans
+#print axioms Strata.Impl.slotRows_eq
+#print axioms Strata.Impl.ITenant.recordsOf_abs
+#print axioms Strata.Impl.ITenant.canRead_abs
+#print axioms Strata.Impl.ITenant.rowOfI_abs
+#print axioms Strata.Impl.readRecordsI_abs
+#print axioms Strata.Impl.ITenant.scanRowsI_abs
+#print axioms Strata.Impl.ITenant.queryAllI_abs
+#print axioms Strata.Impl.ITenant.countI_abs
+#print axioms Strata.Impl.queryPageI_abs
+#print axioms Strata.Impl.readI_refines
+#print axioms Strata.Impl.readX_refines

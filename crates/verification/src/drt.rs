@@ -13,7 +13,8 @@
 //! Lean process, and that happens only once there is a disagreement to shrink.
 
 use crate::lean::{
-    build_model, compare_outputs, kernel_output, run_model, Generator, ScenarioStream,
+    build_model, compare_outputs, kernel_output, op_outcomes, read_shapes, run_model, Generator,
+    ScenarioStream,
 };
 use crate::lean_diff::lean_error_names;
 use std::collections::BTreeMap;
@@ -27,7 +28,7 @@ pub struct Case {
     pub ops: Vec<String>,
 }
 
-/// The scenarios of a scenario file. Only `scenario` and `op` lines are read: the `end` lines are
+/// The scenarios of a scenario file. Only `scenario`, `op` and `read` lines are read: the `end` lines are
 /// implied by the next `scenario` line or the end of the file, and anything else is dropped.
 pub fn parse_cases(text: &str) -> Vec<Case> {
     let mut cases: Vec<Case> = Vec::new();
@@ -37,7 +38,7 @@ pub fn parse_cases(text: &str) -> Vec<Case> {
                 name: name.to_string(),
                 ops: Vec::new(),
             });
-        } else if line.starts_with("op ") {
+        } else if line.starts_with("op ") || line.starts_with("read ") {
             if let Some(case) = cases.last_mut() {
                 case.ops.push(line.to_string());
             }
@@ -226,7 +227,7 @@ fn minimise_disagreement(
 /// The accepted outcome kinds, one per intent kind of the scenario format: the intent's name
 /// followed by `ok`. `require` and `unique` are split by their mode, as the model's strict and lax
 /// schema outcomes differ.
-pub const ACCEPTED_KINDS: [&str; 20] = [
+pub const ACCEPTED_KINDS: [&str; 22] = [
     "create ok",
     "update ok",
     "patch ok",
@@ -247,6 +248,26 @@ pub const ACCEPTED_KINDS: [&str; 20] = [
     "invite ok",
     "invite-revoke ok",
     "redeem ok",
+    "read-records ok",
+    "read-query ok",
+];
+
+/// The outcome kinds of reads that a run must also reach: the shapes of an accepted read (with rows and
+/// without, a next cursor, a cursor asked for) and the refusals of each kind of read. Reading a record
+/// the principal may not read and reading one that is missing print alike, so they are one outcome. The
+/// scan bound of a query (10,000 records) is not reachable: no tenant of the fixture holds that many.
+pub const READ_KINDS: [&str; 11] = [
+    "read-records ok rows>0",
+    "read-records ok rows=0",
+    "read-records err limit_exceeded",
+    "read-records err unknown_object",
+    "read-query ok rows>0",
+    "read-query ok rows=0",
+    "read-query ok next",
+    "read-query ok cursor",
+    "read-query err unknown_query",
+    "read-query err invalid_intent",
+    "read-query err limit_exceeded",
 ];
 
 /// Outcome kinds the model can print that no scenario can reach, each with the reason. They are
@@ -292,6 +313,14 @@ impl Totals {
 /// `team-add`, `team-remove`, `invite`, `invite-revoke`, `redeem`).
 fn intent_of(op: &str) -> &'static str {
     let mut tokens: Vec<&str> = op.split_whitespace().collect();
+    // `read <tenant> <principal> records|query ..` is a read.
+    if tokens.first().copied() == Some("read") {
+        return match tokens.get(3).copied() {
+            Some("records") => "read-records",
+            Some("query") => "read-query",
+            _ => "unknown",
+        };
+    }
     // `op <tenant> <principal> type <n> <intent> ..` names an object type; the intent follows it.
     if tokens.get(3).copied() == Some("type") {
         tokens.drain(3..5.min(tokens.len()));
@@ -328,8 +357,9 @@ fn count_outcomes(
     lean_parts: &[Vec<&str>],
 ) {
     for (case, part) in cases.iter().zip(lean_parts) {
-        // Line 0 is `scenario <name>`; then one line per operation.
-        for (op, line) in case.ops.iter().zip(part.iter().skip(1)) {
+        // Line 0 is `scenario <name>`; then the lines of each operation, the first of which is its outcome.
+        for (op, group) in case.ops.iter().zip(op_outcomes(part)) {
+            let line = &group[0];
             let kind = if *line == "ok" {
                 format!("{} ok", intent_of(op))
             } else if let Some(error) = line.strip_prefix("err ") {
@@ -338,6 +368,12 @@ fn count_outcomes(
                 "unparsed".to_string()
             };
             *coverage.entry(kind).or_insert(0) += 1;
+            // The shapes of a read's answer, besides its outcome.
+            for shape in read_shapes(op, group) {
+                if !shape.ends_with(" ok") {
+                    *coverage.entry(shape).or_insert(0) += 1;
+                }
+            }
         }
     }
 }
@@ -366,6 +402,7 @@ pub fn run(
         .filter(|kind| !UNREACHABLE.iter().any(|(k, _)| k == kind))
         .collect();
     required.extend(ACCEPTED_KINDS.iter().map(|kind| kind.to_string()));
+    required.extend(READ_KINDS.iter().map(|kind| kind.to_string()));
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     // `lake exe` runs in `lean_dir`, so a relative batch path would be read from the wrong place.
