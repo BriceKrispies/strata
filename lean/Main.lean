@@ -233,6 +233,72 @@ def parseSettingOp (rest : List String) : Option Intent := do
   | [v] => pure (.writeSetting name level team (some (← parseVal v)) rev)
   | _ => none
 
+/-- The time of a ledger intent: `@<now>`, a whole number of milliseconds (slice 13). -/
+def parseNowInt (s : String) : Option Int :=
+  if s.startsWith "@" then (dropChars s 1).toInt? else none
+
+/-- The owner of a ledger account as a scenario token: a person's number, or `pool<n>` for a pool (slice 13). -/
+def parseOwner (s : String) : Option LedgerOwner :=
+  if s.startsWith "pool" then (dropChars s 4).toNat?.map LedgerOwner.pool
+  else s.toNat?.map LedgerOwner.person
+
+/-- The text of a ledger owner (the scenario token). -/
+def showOwner : LedgerOwner → String
+  | .person n => toString n
+  | .pool n => s!"pool{n}"
+
+/-- One posting of a `post` line: `<unit> <owner> <amount> key=<k> [reason=<r>] [corrects=<n>] [scope=<s>]`. -/
+def parsePosting (tokens : List String) : Option LedgerPosting := do
+  let unitTok :: ownerTok :: amountTok :: opts := tokens | failure
+  let unit ← unitTok.toNat?
+  let owner ← parseOwner ownerTok
+  let amount ← amountTok.toInt?
+  let mut key : Option String := none
+  let mut reason : String := ""
+  let mut corrects : Option Nat := none
+  let mut scope : String := ""
+  for o in opts do
+    if o.startsWith "key=" then key := some (dropChars o 4)
+    else if o.startsWith "reason=" then reason := dropChars o 7
+    else if o.startsWith "corrects=" then corrects := (dropChars o 9).toNat?
+    else if o.startsWith "scope=" then scope := dropChars o 6
+    else failure
+  let k ← key
+  pure { owner := owner, unit := unit, amount := amount, key := k, reason := reason,
+         corrects := corrects, scope := scope }
+
+/-- Splits the postings of a `post` line on the `;` token. -/
+def splitPostings : List String → List (List String)
+  | [] => [[]]
+  | ";" :: rest => [] :: splitPostings rest
+  | t :: rest =>
+    match splitPostings rest with
+    | [] => [[t]]
+    | g :: gs => (t :: g) :: gs
+
+/-- A ledger intent: `ledger post @<now> <posting> [; <posting>]*` or `ledger expire @<now> <unit> <cutoff>` (slice 13). -/
+def parseLedgerOp : List String → Option Intent
+  | "ledger" :: "post" :: nowTok :: rest => do
+    let now ← parseNowInt nowTok
+    let ps ← (splitPostings rest).mapM parsePosting
+    pure (.postLedger now ps)
+  | ["ledger", "expire", nowTok, unitTok, cutoffTok] => do
+    let now ← parseNowInt nowTok
+    pure (.expireLedger now (← unitTok.toNat?) (← cutoffTok.toInt?))
+  | _ => none
+
+/-- A ledger balance read: `read <t> <p> ledger <unit> <owner> [scope=<s>] [own]` (slice 13). -/
+def parseLedgerRead : List String → Option (TenantId × Principal × Nat × LedgerOwner × String × Bool)
+  | "read" :: t :: p :: "ledger" :: unitTok :: ownerTok :: opts => do
+    let mut scope : String := ""
+    let mut own : Bool := false
+    for o in opts do
+      if o.startsWith "scope=" then scope := dropChars o 6
+      else if o == "own" then own := true
+      else failure
+    pure (← t.toNat?, ← parsePrincipal p, ← unitTok.toNat?, ← parseOwner ownerTok, scope, own)
+  | _ => none
+
 def parseOp (tokens : List String) : Option (Ctx × Intent) :=
   match tokens with
   | "op" :: t :: p :: rest0 => do
@@ -252,6 +318,7 @@ def parseOp (tokens : List String) : Option (Ctx × Intent) :=
     | "redeem" :: _ => pure (c, ← parseMemberOp rest)
     | "schema" :: more => pure (c, ← parseSchemaOp more)
     | "setting" :: _ => pure (c, ← parseSettingOp rest)
+    | "ledger" :: _ => pure (c, ← parseLedgerOp rest)
     | "create" :: fields => pure (c, .create ty (← parseFields fields))
     | "update" :: id :: rest => do
       let (ev, fields) ← parseExpected rest
@@ -335,6 +402,41 @@ def showErr : Err → String
   | .tenantExists => "tenant_exists"
   | .workflowViolation => "workflow_violation"
   | .schemaConflict => "schema_conflict"
+  | .selfAction => "self_action"
+
+/-- The lines a ledger balance read prints: `err <kind>`, or `ok`, the balance and the sequence number. -/
+def showLedgerRead : Except Err (Int × Nat) → List String
+  | .error e => [s!"err {showErr e}"]
+  | .ok (b, n) => ["ok", s!"balance {b}", s!"seq {n}"]
+
+/-- The order of ledger accounts as the ledger's state prints them: a person before a pool, then by number, unit and
+    scope. -/
+def accountBefore (a b : LedgerAccount) : Bool :=
+  let rank : LedgerOwner → Nat × Nat
+    | .person n => (0, n)
+    | .pool n => (1, n)
+  let (ka, na) := rank a.owner
+  let (kb, nb) := rank b.owner
+  if ka != kb then ka < kb
+  else if na != nb then na < nb
+  else if a.unit != b.unit then a.unit < b.unit
+  else decide (a.scope < b.scope)
+
+def ledgerScopeText (s : String) : String := if s.isEmpty then "-" else s
+
+def ledgerBucketsText (bs : List LedgerBucket) : String :=
+  if bs.isEmpty then "-"
+  else ",".intercalate (bs.map (fun b => s!"{b.periodStart}:{b.remaining}"))
+
+/-- The ledger of a tenant (slice 13): each account's header in `accountBefore` order, then the entries of each account in
+    sequence order. Printed only when the tenant has an account, so the state of every scenario without a posting is
+    printed as before. -/
+def ledgerLines (id : Nat) (t : Tenant) : List String :=
+  let accts := t.ledger.accounts.mergeSort (fun a b => !accountBefore b a)
+  accts.flatMap (fun a =>
+    [s!"ledger-account {id} owner={showOwner a.owner} unit={a.unit} scope={ledgerScopeText a.scope} balance={a.balance} seq={a.lastSeq} buckets={ledgerBucketsText a.buckets}"]
+    ++ ((t.ledger.journal.filter (fun e => e.inAccount a.owner a.unit a.scope)).map (fun e =>
+        s!"ledger-entry {id} owner={showOwner e.owner} unit={e.unit} scope={ledgerScopeText e.scope} seq={e.sequence} amount={e.amount} key={e.key} reason={ledgerScopeText e.reason} by={match e.causedBy with | some u => toString u | none => "-"} at={e.time} corrects={match e.corrects with | some c => toString c | none => "-"}")))
 
 /-- Insertion sort on a key; the lists here are a handful of elements. -/
 def sortBy {α : Type} (key : α → Nat) : List α → List α
@@ -414,7 +516,7 @@ def showTenant (id : Nat) (t : Tenant) : List String :=
     (others.flatMap fun e => s!"type {e.1} required={requiredOf e.2}" :: recordLines s!"type {e.1} " e.2) ++
     (if id == 3 || membershipLines id t != membershipLines id (initialTenant id) then membershipLines id t
      else []) ++
-    settingLines id t
+    settingLines id t ++ ledgerLines id t
 
 def showWorld (w : World) : List String :=
   [1, 2].flatMap (fun id =>
@@ -466,6 +568,8 @@ def showEvent (e : DomainEvent) : String :=
       s!"member-changed who={name} roles={showNats roles}"
     | .settingChanged name subj =>
       s!"setting-changed setting={name} level={showLevel subj.level} subject={showSubject subj}"
+    | .ledgerEntryPosted e =>
+      s!"ledger-posted owner={showOwner e.owner} unit={e.unit} scope={ledgerScopeText e.scope} amount={e.amount} balance={e.balance} before={e.balanceBefore} seq={e.entrySequence} reason={ledgerScopeText e.reason}"
   s!"event {e.seq} rev={e.revision} by={showPrincipal e.principal} {body}"
 
 
@@ -639,6 +743,7 @@ structure Kernel (W : Type) where
   aggregate : W → TenantId → Principal → AggReq → Option (Except AggErr AggResult)
   /-- The resolution of a setting for a principal on a tenant (slice 12). -/
   setting : W → TenantId → Principal → String → Option (Except Err SettingResolution)
+  ledgerRead : W → TenantId → Principal → Nat → LedgerOwner → String → Bool → Option (Except Err (Int × Nat))
 
 /-- The spec's kernel: the model as written, with its transition. -/
 def specKernel : Kernel World :=
@@ -649,7 +754,8 @@ def specKernel : Kernel World :=
     read := fun w x p req => (w x).map (fun t => read t (readSpecOf x) p req),
     search := fun w x p req => (w x).map (fun t => search t (readSpecOf x) p req),
     aggregate := fun w x p req => (w x).map (fun t => aggregate t (readSpecOf x) p req),
-    setting := fun w x p n => (w x).map (fun t => resolve t p n) }
+    setting := fun w x p n => (w x).map (fun t => resolve t p n),
+    ledgerRead := fun w x p u o s own => (w x).map (fun t => readLedgerBalance t p o u s own t.ledger) }
 
 /-- The executable kernel: the slots, printed through the abstraction. -/
 def implKernel : Kernel IWorld :=
@@ -658,7 +764,8 @@ def implKernel : Kernel IWorld :=
     read := fun w x p req => (w x).map (fun t => readI t (readSpecOf x) p req),
     search := fun w x p req => (w x).map (fun t => searchI t (readSpecOf x) p req),
     aggregate := fun w x p req => (w x).map (fun t => aggregateI t (readSpecOf x) p req),
-    setting := fun w x p n => (w x).map (fun t => resolve t.abs p n) }
+    setting := fun w x p n => (w x).map (fun t => resolve t.abs p n),
+    ledgerRead := fun w x p u o s own => (w x).map (fun t => readLedgerBalance t.abs p o u s own t.abs.ledger) }
 
 /-- The indexed kernel: slots and indexes, printed through the abstraction. -/
 def xKernel : Kernel XWorld :=
@@ -667,7 +774,8 @@ def xKernel : Kernel XWorld :=
     read := fun w x p req => (w x).map (fun t => readX t (readSpecOf x) p req),
     search := fun w x p req => (w x).map (fun t => searchX t (readSpecOf x) p req),
     aggregate := fun w x p req => (w x).map (fun t => aggregateX t (readSpecOf x) p req),
-    setting := fun w x p n => (w x).map (fun t => resolve t.core.abs p n) }
+    setting := fun w x p n => (w x).map (fun t => resolve t.core.abs p n),
+    ledgerRead := fun w x p u o s own => (w x).map (fun t => readLedgerBalance t.core.abs p o u s own t.core.abs.ledger) }
 
 partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (out : Array String) :
     Array String :=
@@ -686,6 +794,10 @@ partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (ou
             match K.setting w x p n with
             | none => ["err no_tenant"]
             | some r => showSettingRead r)
+        | _ :: _ :: _ :: "ledger" :: _ => (parseLedgerRead tokens).map (fun (x, p, u, o, s, own) =>
+            match K.ledgerRead w x p u o s own with
+            | none => ["err no_tenant"]
+            | some r => showLedgerRead r)
         | _ :: _ :: _ :: "search" :: _ => (parseSearch tokens).map (fun (x, p, req) =>
             match K.search w x p req with
             | none => ["err no_tenant"]
