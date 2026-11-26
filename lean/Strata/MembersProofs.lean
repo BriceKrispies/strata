@@ -21,6 +21,7 @@ Every statement is about the decisions of `Strata/Members.lean`, with no hypothe
 -/
 
 import Strata.Model
+import Strata.SchemaChangeInv
 
 namespace Strata
 
@@ -1008,6 +1009,9 @@ theorem stepTenant_data_mt (t t' : Tenant) (p : Principal) (i : Intent)
   cases i with
   | createTenant owner name => exact absurd rfl (hc owner name)
   | member j => exact absurd rfl (hm j)
+  | changeSchema ev strict cs =>
+    obtain ⟨types1, -, -, ht', -, -⟩ := stepTenant_changeSchema_parts h
+    subst ht'; rfl
   | create ty fs =>
     simp only [stepTenant] at h
     repeat' split at h

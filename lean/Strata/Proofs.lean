@@ -185,6 +185,11 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
         cases hT : t.typ? ty with
         | none => simp [hT] at hs
         | some o => simp [authorized, hT, hp']
+    | changeSchema ev strict cs =>
+      by_cases hm : canManage t c.principal = true
+      · simp [authorized, hm]
+      · have hm' : canManage t c.principal = false := by simpa using hm
+        simp [stepTenant, changeSchemaT, hm', Except.map] at hs
   · rw [ht] at hnone; cases hnone
 
 /-- A principal who may not update a record cannot change it: the step is refused, so no new
@@ -300,6 +305,17 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : Principal) (i : Intent)
     (h : stepTenant t p i = .ok t') :
     t'.Conform ∧ t'.IdsBelow := by
   cases i with
+  | changeSchema ev strict cs =>
+    have hs : strict = true := by simpa [Intent.strict] using hstrict
+    subst hs
+    obtain ⟨hT, hU⟩ := changeSchema_table h
+    refine ⟨?_, changeSchema_idsBelow hids h⟩
+    intro T o2 hT2 q hq
+    by_cases hTt : T ∈ cs.flatMap Change.touched
+    · exact (tableViolated_false (hT T o2 hT2 hTt)).1 q hq
+    · rcases hU T o2 hT2 hTt with h0 | he
+      · exact hconf T o2 h0 q hq
+      · rw [he] at hq; cases hq
   | createTenant owner name => simp [stepTenant] at h
   | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact ⟨hconf, hids⟩
   | create ty fs =>
@@ -472,7 +488,7 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : Principal) (i : Intent)
     (hwf : t.WF) (hstrict : i.strict = true) (h : stepTenant t p i = .ok t') : t'.WF := by
   obtain ⟨hconf, hids, hrefs, hd, hu⟩ := hwf
   obtain ⟨hc, hi⟩ := stepTenant_conform_ids t t' p i hconf hids hstrict h
-  exact ⟨hc, hi, stepTenant_preserves_refs t t' p i hrefs h,
+  exact ⟨hc, hi, stepTenant_preserves_refs t t' p i hrefs (Intent.laxChange_false_of_strict hstrict) h,
     stepTenant_preserves_distinct t t' p i hd h,
     stepTenant_preserves_unique t t' p i ⟨hconf, hids, hrefs, hd, hu⟩ hstrict h⟩
 

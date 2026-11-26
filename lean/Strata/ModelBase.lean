@@ -1165,6 +1165,14 @@ def versionClash : Option Nat → Record → Bool
   | some v, r => v != r.version
   | none, _ => false
 
+/-- The definition a `setRequired` or `setUnique` gives a field its type does not declare: an optional boolean field, which
+    the intent then makes required or unique (the kernel's harness defines the field afresh, `DefineField`). -/
+def plainField : FieldDef := { ty := .bool, required := false }
+
+/-- The schema with field `f` declared: as it is when it is, otherwise with the plain definition last. -/
+def ensureField (schema : Schema) (f : FieldId) : Schema :=
+  if schema.any (fun fd => fd.1 == f) then schema else schema ++ [(f, plainField)]
+
 def makeRequired (schema : Schema) (f : FieldId) : Schema :=
   schema.map (fun fd => if fd.1 == f then (fd.1, { fd.2 with required := true }) else fd)
 

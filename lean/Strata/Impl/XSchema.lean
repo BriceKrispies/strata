@@ -122,6 +122,70 @@ theorem MM.inv_putSlots {K : Type} [BEq K] [Hashable K] [LawfulBEq K] [LawfulHas
     cases getRec o.slots c.2 <;> simp [hkf]
   · simp [hT]
 
+theorem rkeysOf_congr' (s s' : Schema) (r : Record)
+    (h : ∀ g, (s'.lookup g).map FieldDef.ty = (s.lookup g).map FieldDef.ty ∨
+      (s.lookup g = none ∧ (s'.lookup g).map FieldDef.ty = some Ty.bool)) :
+    rkeysOf s' r = rkeysOf s r := by
+  unfold rkeysOf
+  congr 1
+  funext fv
+  rcases h fv.1 with h1 | ⟨h0, h1⟩
+  · cases hl : s.lookup fv.1 with
+    | none =>
+      cases hl' : s'.lookup fv.1 with
+      | none => rfl
+      | some d' => rw [hl, hl'] at h1; simp at h1
+    | some d =>
+      cases hl' : s'.lookup fv.1 with
+      | none => rw [hl, hl'] at h1; simp at h1
+      | some d' =>
+        rw [hl, hl'] at h1
+        simp only [Option.map_some, Option.some.injEq] at h1
+        simp [h1]
+  · rw [h0]
+    cases hl' : s'.lookup fv.1 with
+    | none => simp [hl'] at h1
+    | some d' =>
+      rw [hl'] at h1
+      simp only [Option.map_some, Option.some.injEq] at h1
+      simp [Ty.target?, h1]
+
+theorem ens_makeRequired_ty' (s : Schema) (f g : FieldId) :
+    ((makeRequired (ensureField s f) f).lookup g).map FieldDef.ty = (s.lookup g).map FieldDef.ty ∨
+      (s.lookup g = none ∧ ((makeRequired (ensureField s f) f).lookup g).map FieldDef.ty = some Ty.bool) := by
+  rw [lookup_ty_makeRequired]
+  rcases ensureField_lookup s f g with h | ⟨h0, h1⟩
+  · left; rw [h]
+  · right; refine ⟨h0, ?_⟩; rw [h1]; rfl
+
+theorem ens_makeUnique_ty' (s : Schema) (f g : FieldId) :
+    ((makeUnique (ensureField s f) f).lookup g).map FieldDef.ty = (s.lookup g).map FieldDef.ty ∨
+      (s.lookup g = none ∧ ((makeUnique (ensureField s f) f).lookup g).map FieldDef.ty = some Ty.bool) := by
+  rw [lookup_ty_makeUnique]
+  rcases ensureField_lookup s f g with h | ⟨h0, h1⟩
+  · left; rw [h]
+  · right; refine ⟨h0, ?_⟩; rw [h1]; rfl
+
+theorem ukeysOf_ensureField (S : TypeId) (s : Schema) (f : FieldId) (r : Record) :
+    ukeysOf S (ensureField s f) r = ukeysOf S s r := by
+  unfold ensureField
+  split
+  · rfl
+  · unfold ukeysOf
+    rw [List.filterMap_append]
+    simp [plainField]
+
+theorem ukeysOf_ens_makeRequired (S : TypeId) (s : Schema) (f : FieldId) (r : Record) :
+    ukeysOf S (makeRequired (ensureField s f) f) r = ukeysOf S s r := by
+  rw [ukeysOf_makeRequired, ukeysOf_ensureField]
+
+theorem ukeysOf_ens_makeUnique_sub (S : TypeId) (s : Schema) (f : FieldId) (r : Record)
+    (k : TypeId × FieldId × Val) (hk : k ∈ ukeysOf S s r) :
+    k ∈ ukeysOf S (makeUnique (ensureField s f) f) r := by
+  apply ukeysOf_makeUnique_sub
+  rw [ukeysOf_ensureField]
+  exact hk
+
 theorem setRequired_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
     (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (ty : TypeId) (f : FieldId)
@@ -140,25 +204,25 @@ theorem setRequired_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     | some o =>
       simp only [hty]
       by_cases hs : schemaChangeRefused core.limits
-          (scopedTypes (core.putType ty { o with schema := makeRequired o.schema f }).abs.types
-            (ty :: fieldTargets o.schema f)) strict = true
+          (scopedTypes (core.putType ty { o with schema := makeRequired (ensureField o.schema f) f }).abs.types
+            (ty :: fieldTargets (ensureField o.schema f) f)) strict = true
       · simp only [hs, if_true]; exact good_error _ _
       · simp only [hs, if_false, Bool.false_eq_true]
         refine ⟨rfl, fun e x' h => (by cases h), ?_⟩
         intro y hy
         simp only [Except.ok.injEq] at hy
         subst hy
-        have hsl : ({ o with schema := makeRequired o.schema f } : IObj).slots = o.slots := rfl
+        have hsl : ({ o with schema := makeRequired (ensureField o.schema f) f } : IObj).slots = o.slots := rfl
         refine ⟨?_, ?_, ?_, ?_, ?_⟩
         · exact inv_putType core ty _ core.nextId (Nat.le_refl _) (hinv ty o hty) hinv
         · show ((putTypeI core.types ty _).map Prod.fst).Nodup
           rw [putTypeI_keys]; exact hnd
         · exact MM.inv_putSlots ux (fun S o r => ukeysOf S o.schema r) core ty o _ hty hsl
-            (fun r => ukeysOf_makeRequired ty o.schema f r) hu
+            (fun r => ukeysOf_ens_makeRequired ty o.schema f r) hu
         · exact MM.inv_putSlots cx (fun S o r => ckeysOf S o.uniques r) core ty o _ hty hsl
             (fun r => rfl) hc
         · exact MM.inv_putSlots rx (fun S o r => rkeysOf o.schema r) core ty o _ hty hsl
-            (fun r => rkeysOf_congr _ _ r (lookup_ty_makeRequired o.schema f)) hr
+            (fun r => rkeysOf_congr' _ _ r (ens_makeRequired_ty' o.schema f)) hr
 
 theorem setUnique_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
@@ -177,7 +241,7 @@ theorem setUnique_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     | none => exact good_error _ _
     | some o =>
       simp only [hty]
-      cases hl : o.schema.lookup f with
+      cases hl : (ensureField o.schema f).lookup f with
       | none => exact good_error _ _
       | some d =>
         simp only [hl]
@@ -185,25 +249,26 @@ theorem setUnique_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
         · simp only [hd, if_true]; exact good_error _ _
         · simp only [hd, if_false, Bool.false_eq_true]
           by_cases hs : schemaChangeRefused core.limits
-              (scopedTypes (core.putType ty { o with schema := makeUnique o.schema f }).abs.types
-                (ty :: fieldTargets o.schema f)) strict = true
+              (scopedTypes (core.putType ty { o with schema := makeUnique (ensureField o.schema f) f }).abs.types
+                (ty :: fieldTargets (ensureField o.schema f) f)) strict = true
           · simp only [hs, if_true]; exact good_error _ _
           · simp only [hs, if_false, Bool.false_eq_true]
             refine ⟨rfl, fun e x' h => (by cases h), ?_⟩
             intro y hy
             simp only [Except.ok.injEq] at hy
             subst hy
-            have hsl : ({ o with schema := makeUnique o.schema f } : IObj).slots = o.slots := rfl
+            have hsl : ({ o with schema := makeUnique (ensureField o.schema f) f } : IObj).slots = o.slots := rfl
             refine ⟨?_, ?_, ?_, ?_, ?_⟩
             · exact inv_putType core ty _ core.nextId (Nat.le_refl _) (hinv ty o hty) hinv
             · show ((putTypeI core.types ty _).map Prod.fst).Nodup
               rw [putTypeI_keys]; exact hnd
             · -- the unique index gains the keys of the new unique field
-              refine MM.inv_addCells ux (cellsOf ty o.slots.size) (ukeysUnder ty o (makeUnique o.schema f))
+              refine MM.inv_addCells ux (cellsOf ty o.slots.size)
+                (ukeysUnder ty o (makeUnique (ensureField o.schema f) f))
                 core.ukeys _ hu ?_
               intro c k
               have h1 := keysBy_putSlots (fun S o r => ukeysOf S o.schema r) core ty o
-                { o with schema := makeUnique o.schema f } hty hsl c
+                { o with schema := makeUnique (ensureField o.schema f) f } hty hsl c
               show k ∈ (core.putType ty _).keysBy (fun S o r => ukeysOf S o.schema r) c ↔ _
               rw [h1, mem_cellsOf]
               by_cases hT : c.1 = ty
@@ -221,7 +286,7 @@ theorem setUnique_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
                   constructor
                   · intro hk; exact Or.inr hk
                   · rintro (hk | hk)
-                    · exact ukeysOf_makeUnique_sub _ _ _ _ _ hk
+                    · exact ukeysOf_ens_makeUnique_sub _ _ _ _ _ hk
                     · exact hk
               · have h2 : core.ukeys c = core.keysBy (fun S o r => ukeysOf S o.schema r) c := rfl
                 rw [h2]
@@ -229,7 +294,7 @@ theorem setUnique_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
             · exact MM.inv_putSlots cx (fun S o r => ckeysOf S o.uniques r) core ty o _ hty hsl
                 (fun r => rfl) hc
             · exact MM.inv_putSlots rx (fun S o r => rkeysOf o.schema r) core ty o _ hty hsl
-                (fun r => rkeysOf_congr _ _ r (lookup_ty_makeUnique o.schema f)) hr
+                (fun r => rkeysOf_congr' _ _ r (ens_makeUnique_ty' o.schema f)) hr
 
 theorem defineUnique_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)

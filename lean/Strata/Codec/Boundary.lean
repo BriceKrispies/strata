@@ -1473,10 +1473,66 @@ theorem lawful_memberIntent : Lawful encMemberIntent decMemberIntent := by
         repeat' split at h
         all_goals first | omega | simp at h
 
+/-- A change of a schema change in general (slice 11): tag `0` defines a field (its object type, its id, its
+    definition), `1` removes a field, `2` defines an object type, `3` removes one (and says whether it deletes its
+    records). -/
+def encChange : Change → Bytes
+  | .defineField ty f d => tag 0 :: encPair encNat (encPair encNat encFieldDef) (ty, f, d)
+  | .removeField ty f => tag 1 :: encPair encNat encNat (ty, f)
+  | .defineType ty => tag 2 :: encNat ty
+  | .removeType ty del => tag 3 :: encPair encNat encBool (ty, del)
+
+def decChange : Dec Change := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => decIso (decPair decNat (decPair decNat decFieldDef))
+        (fun x => Change.defineField x.1 x.2.1 x.2.2) r
+    | 1 => decIso (decPair decNat decNat) (fun x => Change.removeField x.1 x.2) r
+    | 2 => decIso decNat (fun x => Change.defineType x) r
+    | 3 => decIso (decPair decNat decBool) (fun x => Change.removeType x.1 x.2) r
+    | _ => none
+
+theorem lawful_change : Lawful encChange decChange := by
+  have hdf := lawful_pair lawful_nat (lawful_pair lawful_nat lawful_fieldDef)
+  have hnn := lawful_pair lawful_nat lawful_nat
+  have hnb := lawful_pair lawful_nat lawful_bool
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | defineField ty f d => simp [encChange, decChange, tag, dec_ctor_enc hdf, List.append_assoc]
+    | removeField ty f => simp [encChange, decChange, tag, dec_ctor_enc hnn, List.append_assoc]
+    | defineType ty => simp [encChange, decChange, tag, dec_ctor_enc lawful_nat, List.append_assoc]
+    | removeType ty del => simp [encChange, decChange, tag, dec_ctor_enc hnb, List.append_assoc]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decChange] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ 4 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk
+      · simp only [decChange, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hdf _ r x rest h
+        simp [encChange, byte_eq_tag b 0 hk, ← hy]
+      · simp only [decChange, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hnn _ r x rest h
+        simp [encChange, byte_eq_tag b 1 hk, ← hy]
+      · simp only [decChange, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv lawful_nat _ r x rest h
+        simp [encChange, byte_eq_tag b 2 hk, ← hy]
+      · simp only [decChange, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv hnb _ r x rest h
+        simp [encChange, byte_eq_tag b 3 hk, ← hy]
+      · simp only [decChange] at h
+        exfalso
+        repeat' split at h
+        all_goals first | omega | simp at h
+
 /-- An intent: tag `0` create, `1` update, `2` delete, `3` set required, `4` set unique, `5`
     define a composite unique constraint. Each names its object type first, right after the tag,
     as a natural. Slice 7: `6` creates a tenant (its owner, then its name) and `7` is a membership
-    intent (`encMemberIntent`). -/
+    intent (`encMemberIntent`). Slice 11: `8` is a schema change in general (the version it expects, whether it is
+    strict, its changes). -/
 def encIntent : Intent → Bytes
   | .create ty fs => tag 0 :: (encNat ty ++ encList encFieldVal fs)
   | .update ty id fs ev => tag 1 :: (encNat ty ++ encNat id ++ encList encFieldVal fs ++ encOpt encNat ev)
@@ -1486,6 +1542,7 @@ def encIntent : Intent → Bytes
   | .defineUnique ty fs => tag 5 :: (encNat ty ++ encList encNat fs)
   | .createTenant owner name => tag 6 :: (encNat owner ++ encStr name)
   | .member j => tag 7 :: encMemberIntent j
+  | .changeSchema ev s cs => tag 8 :: (encOpt encNat ev ++ encBool s ++ encList encChange cs)
 
 def decIntent : Dec Intent := fun bs =>
   match bs with
@@ -1540,6 +1597,13 @@ def decIntent : Dec Intent := fun bs =>
     | 7 => match decMemberIntent r with
       | some (j, r1) => some (.member j, r1)
       | none => none
+    | 8 => match decOpt decNat r with
+      | some (ev, r1) => match decBool r1 with
+        | some (s, r2) => match decList decChange r2 with
+          | some (cs, r3) => some (.changeSchema ev s cs, r3)
+          | none => none
+        | none => none
+      | none => none
     | _ => none
 
 theorem lawful_intent : Lawful encIntent decIntent := by
@@ -1563,13 +1627,16 @@ theorem lawful_intent : Lawful encIntent decIntent := by
       simp [encIntent, decIntent, tag, lawful_nat.1, lawful_str.1, List.append_assoc]
     | member j =>
       simp [encIntent, decIntent, tag, lawful_memberIntent.1]
+    | changeSchema ev s cs =>
+      simp [encIntent, decIntent, tag, (lawful_opt lawful_nat).1, lawful_bool.1,
+        (lawful_list lawful_change).1, List.append_assoc]
   · intro bs x rest h
     cases bs with
     | nil => simp [decIntent] at h
     | cons b r =>
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
-          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ 8 ≤ b.toNat by omega)
-        with hk | hk | hk | hk | hk | hk | hk | hk | hk
+          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ 9 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
       · simp only [decIntent, hk] at h
         cases hd1 : decNat r with
         | none => simp [hd1] at h
@@ -1702,6 +1769,25 @@ theorem lawful_intent : Lawful encIntent decIntent := by
           obtain ⟨rfl, rfl⟩ := h
           have e1 := lawful_memberIntent.2 r j r1 hd1
           simp [encIntent, byte_eq_tag b 7 hk, e1]
+      · simp only [decIntent, hk] at h
+        cases hd1 : decOpt decNat r with
+        | none => simp [hd1] at h
+        | some p1 =>
+          obtain ⟨ev, r1⟩ := p1
+          cases hd2 : decBool r1 with
+          | none => simp [hd1, hd2] at h
+          | some p2 =>
+            obtain ⟨s, r2⟩ := p2
+            cases hd3 : decList decChange r2 with
+            | none => simp [hd1, hd2, hd3] at h
+            | some p3 =>
+              obtain ⟨cs, r3⟩ := p3
+              simp only [hd1, hd2, hd3, Option.some.injEq, Prod.mk.injEq] at h
+              obtain ⟨rfl, rfl⟩ := h
+              have e1 := (lawful_opt lawful_nat).2 r ev r1 hd1
+              have e2 := lawful_bool.2 r1 s r2 hd2
+              have e3 := (lawful_list lawful_change).2 r2 cs r3 hd3
+              simp [encIntent, byte_eq_tag b 8 hk, e1, e2, e3, List.append_assoc]
       · simp only [decIntent] at h
         exfalso
         repeat' split at h

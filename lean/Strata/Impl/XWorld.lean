@@ -45,6 +45,90 @@ theorem member_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     subst hy
     exact hok
 
+
+/-- The indexes built from every record are consistent. -/
+theorem XTenant.rebuild_ok (core : ITenant) (hinv : core.Inv) (hnd : (core.types.map Prod.fst).Nodup) :
+    (XTenant.rebuild core).Ok := by
+  have hcell : ∀ (c : Cell) {K : Type} (kf : TypeId → IObj → Record → List K) (k : K),
+      k ∈ core.keysBy kf c → c ∈ core.allCells := by
+    intro c K kf k hk
+    unfold ITenant.keysBy ITenant.cellRec at hk
+    cases hT : core.typ? c.1 with
+    | none => simp [hT] at hk
+    | some o =>
+      simp only [hT] at hk
+      cases hg : getRec o.slots c.2 with
+      | none => simp [hg] at hk
+      | some r =>
+        have hlt := lt_of_getRec _ _ _ hg
+        unfold ITenant.allCells
+        apply List.mem_flatMap.mpr
+        exact ⟨(c.1, o), sc_lookup_mem_gen _ _ _ hT, (mem_cellsOf c.1 o.slots.size c).mpr ⟨rfl, hlt⟩⟩
+  refine ⟨hinv, hnd, ?_, ?_, ?_⟩
+  · apply MM.inv_addCells (∅ : MM (TypeId × FieldId × Val)) core.allCells core.ukeys (fun _ => []) core.ukeys
+    · intro k c; simp [MM.get]
+    · intro c k
+      constructor
+      · intro hk; exact Or.inr ⟨hcell c (fun S o r => ukeysOf S o.schema r) k hk, hk⟩
+      · rintro (h | ⟨-, h⟩)
+        · simp at h
+        · exact h
+  · apply MM.inv_addCells (∅ : MM (TypeId × List FieldId × List Val)) core.allCells core.ckeys (fun _ => [])
+      core.ckeys
+    · intro k c; simp [MM.get]
+    · intro c k
+      constructor
+      · intro hk; exact Or.inr ⟨hcell c (fun S o r => ckeysOf S o.uniques r) k hk, hk⟩
+      · rintro (h | ⟨-, h⟩)
+        · simp at h
+        · exact h
+  · apply MM.inv_addCells (∅ : MM Cell) core.allCells core.rkeys (fun _ => []) core.rkeys
+    · intro k c; simp [MM.get]
+    · intro c k
+      constructor
+      · intro hk; exact Or.inr ⟨hcell c (fun S o r => rkeysOf o.schema r) k hk, hk⟩
+      · rintro (h | ⟨-, h⟩)
+        · simp at h
+        · exact h
+
+/-- A schema change in general: the indexed kernel takes stage 1's tenant and builds the indexes again. -/
+theorem changeSchema_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
+    (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
+    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (ev : Option Nat) (strict : Bool)
+    (cs : List Change) :
+    Good ⟨core, ux, cx, rx⟩ (stepParts core ux cx rx p (.changeSchema ev strict cs))
+      (stepTenantI core p (.changeSchema ev strict cs)) := by
+  simp only [stepParts]
+  cases h : stepTenantI core p (.changeSchema ev strict cs) with
+  | error e => exact good_error _ _
+  | ok core' =>
+    refine ⟨rfl, fun e x' h' => (by cases h'), ?_⟩
+    intro y hy
+    simp only [Except.ok.injEq] at hy
+    subst hy
+    have hinv' : core'.Inv := stepTenantI_inv core p _ core' hok.1 h
+    have hs := stepTenantI_refines core p (.changeSchema ev strict cs) hok.1
+    rw [h] at hs
+    simp only [Except.map] at hs
+    obtain ⟨types1, hr, -, -, ht', -, -⟩ := changeSchema_ctx hs.symm
+    have hk0 : (core.abs.types.map Prod.fst).Nodup := by
+      have : core.abs.types.map Prod.fst = core.types.map Prod.fst := by
+        unfold ITenant.abs
+        rw [List.map_map]
+        rfl
+      rw [this]; exact hok.2.1
+    have hkeys : (core'.abs.types.map Prod.fst).Nodup := by
+      rw [show core'.abs.types = rewriteTypes core.abs.types (cs.flatMap Change.touched) types1 from
+        congrArg Tenant.types ht', sc_keys_rewriteTypes]
+      exact hr.keys hk0
+    have hmap : core'.abs.types.map Prod.fst = core'.types.map Prod.fst := by
+      unfold ITenant.abs
+      rw [List.map_map]
+      rfl
+    apply XTenant.rebuild_ok core' hinv'
+    rw [← hmap]
+    exact hkeys
+
 /-- The indexed outcome of one intent against one tenant agrees with stage 1's, and keeps the
     indexes consistent. -/
 theorem stepTenantXL_good (x : XTenant) (hok : x.Ok) (p : Principal) (i : Intent) :
@@ -59,6 +143,7 @@ theorem stepTenantXL_good (x : XTenant) (hok : x.Ok) (p : Principal) (i : Intent
   | defineUnique ty fs => exact defineUnique_good core ux cx rx hok p ty fs
   | createTenant owner name => exact createTenant_good core ux cx rx p owner name
   | member j => exact member_good core ux cx rx hok p j
+  | changeSchema ev strict cs => exact changeSchema_good core ux cx rx hok p ev strict cs
 
 /-- The indexed outcome (refusals without the tenant handed back) agrees with stage 1's, and an
     accepted indexed tenant is consistent. -/

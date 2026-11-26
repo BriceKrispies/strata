@@ -123,6 +123,60 @@ def parseRoles (s : String) : Option (List RoleId) :=
 def parseNow (s : String) : Option Nat :=
   if s.startsWith "@" then (dropChars s 1).toNat? else none
 
+/-- A field type token: `int`, `str`, `bool`, `ref:<type>:r` (a reference that restricts the delete of its target),
+    `ref:<type>:s` (one that is cleared when its target is deleted) and `list:<type>`. -/
+partial def parseTy (s : String) : Option Ty :=
+  if s = "int" then some .int
+  else if s = "str" then some .str
+  else if s = "bool" then some .bool
+  else if s.startsWith "list:" then (parseTy (dropChars s 5)).map Ty.list
+  else if s.startsWith "ref:" then
+    match (dropChars s 4).splitOn ":" with
+    | [t, "r"] => t.toNat?.map (fun n => Ty.ref n .restrict)
+    | [t, "s"] => t.toNat?.map (fun n => Ty.ref n .setNull)
+    | _ => none
+  else none
+
+/-- The options of a field definition after its type: `required`, `unique`, `default=<value>`, in any order. -/
+def parseFieldOpts : List String → FieldDef → Option FieldDef
+  | [], d => some d
+  | "required" :: rest, d => parseFieldOpts rest { d with required := true }
+  | "unique" :: rest, d => parseFieldOpts rest { d with unique := true }
+  | tok :: rest, d =>
+    if tok.startsWith "default=" then
+      (parseVal (dropChars tok 8)).bind (fun v => parseFieldOpts rest { d with default := .lit v })
+    else none
+
+/-- One change of a `schema` line: `define-field <type> <field> <ty> [required] [unique] [default=<v>]`,
+    `remove-field <type> <field>`, `define-type <type>`, `remove-type <type> [delete]`. -/
+def parseChange : List String → Option Change
+  | "define-field" :: t :: f :: ty :: opts => do
+    let d ← parseFieldOpts opts { ty := ← parseTy ty, required := false }
+    pure (.defineField (← t.toNat?) (← f.toNat?) d)
+  | ["remove-field", t, f] => do pure (.removeField (← t.toNat?) (← f.toNat?))
+  | ["define-type", t] => do pure (.defineType (← t.toNat?))
+  | ["remove-type", t] => do pure (.removeType (← t.toNat?) false)
+  | ["remove-type", t, "delete"] => do pure (.removeType (← t.toNat?) true)
+  | _ => none
+
+/-- The changes of a `schema` line, separated by `;`. -/
+def splitChanges (tokens : List String) : List (List String) :=
+  (tokens.foldr (fun tok (acc : List (List String)) =>
+    if tok = ";" then [] :: acc
+    else match acc with
+      | cur :: rest => (tok :: cur) :: rest
+      | [] => [[tok]]) [[]])
+
+/-- A schema change line: `schema [v=<n>] [strict|lax] <change> ; <change> ...` (strict unless it says `lax`). -/
+def parseSchemaOp (tokens : List String) : Option Intent := do
+  let (ev, rest) ← parseExpected tokens
+  let (strict, rest) := match rest with
+    | "strict" :: r => (true, r)
+    | "lax" :: r => (false, r)
+    | r => (true, r)
+  let cs ← if rest.isEmpty then some [] else (splitChanges rest).mapM parseChange
+  pure (.changeSchema ev strict cs)
+
 /-- A membership or creation line: the intents of slice 7. -/
 def parseMemberOp (rest : List String) : Option Intent :=
   match rest with
@@ -161,6 +215,7 @@ def parseOp (tokens : List String) : Option (Ctx × Intent) :=
     | "invite" :: _ => pure (c, ← parseMemberOp rest)
     | "invite-revoke" :: _ => pure (c, ← parseMemberOp rest)
     | "redeem" :: _ => pure (c, ← parseMemberOp rest)
+    | "schema" :: more => pure (c, ← parseSchemaOp more)
     | "create" :: fields => pure (c, .create ty (← parseFields fields))
     | "update" :: id :: rest => do
       let (ev, fields) ← parseExpected rest
@@ -317,6 +372,9 @@ def showPrincipal : Principal → String
 def showSchemaLine : SchemaLine → String
   | .field ty f => s!"field:{ty}.{f}"
   | .unique ty fs => s!"unique:{ty}:{",".intercalate (fs.map toString)}"
+  | .removeField ty f => s!"remove-field:{ty}.{f}"
+  | .defineType ty => s!"define-type:{ty}"
+  | .removeType ty => s!"remove-type:{ty}"
 
 /-- The workflow transitions an update fired, by workflow id (the kernel's map is sorted by id); `-` for none. -/
 def showFired (fs : List (String × String)) : String :=

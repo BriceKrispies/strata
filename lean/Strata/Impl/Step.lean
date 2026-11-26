@@ -15,6 +15,7 @@ step keeps the slot invariant (`ITenant.Inv`).
 -/
 
 import Strata.Impl.Problem
+import Strata.Impl.SchemaI
 
 namespace Strata
 namespace Impl
@@ -137,8 +138,9 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
       match t.typ? ty with
       | none => .error .invalidSchema
       | some o =>
-        let t' := t.putType ty { o with schema := makeRequired o.schema f }
-        if schemaChangeRefused t.limits (scopedTypes t'.abs.types (ty :: fieldTargets o.schema f))
+        let t' := t.putType ty { o with schema := makeRequired (ensureField o.schema f) f }
+        if schemaChangeRefused t.limits
+            (scopedTypes t'.abs.types (ty :: fieldTargets (ensureField o.schema f) f))
             strict then .error .migrationRejected
         else .ok t'
   | .setUnique ty f strict =>
@@ -147,14 +149,14 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
       match t.typ? ty with
       | none => .error .invalidSchema
       | some o =>
-        match o.schema.lookup f with
+        match (ensureField o.schema f).lookup f with
         | none => .error .invalidSchema
         | some d =>
           if d.ty.isList then .error .invalidSchema
           else
-            let t' := t.putType ty { o with schema := makeUnique o.schema f }
+            let t' := t.putType ty { o with schema := makeUnique (ensureField o.schema f) f }
             if schemaChangeRefused t.limits
-                (scopedTypes t'.abs.types (ty :: fieldTargets o.schema f)) strict then
+                (scopedTypes t'.abs.types (ty :: fieldTargets (ensureField o.schema f) f)) strict then
               .error .migrationRejected
             else .ok t'
   | .defineUnique ty fs =>
@@ -170,6 +172,8 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
           if schemaChangeRefused t.limits (scopedTypes t'.abs.types [ty]) true then
             .error .migrationRejected
           else .ok t'
+  | .changeSchema ev strict cs =>
+    changeSchemaI (schemaRulesOk t.policies) (canManage t.header p) t strict ev cs
   | .createTenant _ _ => .error .tenantExists
   | .member j => (stepMember t.mt (j.ctxOf p) j).map t.withM
 
@@ -186,7 +190,7 @@ def ITenant.genesis (owner : PrincipalId) : ITenant :=
 def commitI (t t' : ITenant) (p : Principal) (i : Intent) : ITenant :=
   { t' with revision := t.revision + 1,
             eventSeq := t.eventSeq + (eventBodies t.abs p i t'.abs).length,
-            schemaVersion := if i.isSchema then t.schemaVersion + 1 else t.schemaVersion }
+            schemaVersion := if i.changesSchema then t.schemaVersion + 1 else t.schemaVersion }
 
 theorem commitI_abs (t t' : ITenant) (p : Principal) (i : Intent) :
     (commitI t t' p i).abs = commitT t.abs t'.abs p i := rfl
@@ -295,6 +299,9 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
     (stepTenantI t p i).map ITenant.abs = stepTenant t.abs p i := by
   cases i with
   | createTenant owner name => simp [stepTenantI, stepTenant, Except.map]
+  | changeSchema ev strict cs =>
+    simp only [stepTenantI, stepTenant]
+    exact changeSchemaI_refines _ t p strict ev cs _ (canManage_header t p)
   | member j =>
     simp only [stepTenantI, stepTenant, stepMemberT, ITenant.abs_mt]
     cases stepMember t.mt (j.ctxOf p) j with
@@ -433,7 +440,7 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
         simp [stepTenantI, stepTenant, hty, hty', ho, ho', canManage_header, Except.map]
       | some o =>
         have hty' : t.abs.typ? ty = some o.abs := by rw [typ?_abs, hty]; rfl
-        have hpt := putType_abs t ty { o with schema := makeRequired o.schema f }
+        have hpt := putType_abs t ty { o with schema := makeRequired (ensureField o.schema f) f }
         simp only [stepTenantI, stepTenant, hty, hty', ho, ho', canManage_header, if_false,
           Bool.false_eq_true]
         simp only [hpt, IObj.abs_schema, IObj.abs, abs_members, abs_grants, abs_policies,
@@ -450,11 +457,11 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
         simp [stepTenantI, stepTenant, hty, hty', ho, ho', canManage_header, Except.map]
       | some o =>
         have hty' : t.abs.typ? ty = some o.abs := by rw [typ?_abs, hty]; rfl
-        have hpt := putType_abs t ty { o with schema := makeUnique o.schema f }
-        have hl : o.abs.schema.lookup f = o.schema.lookup f := rfl
+        have hpt := putType_abs t ty { o with schema := makeUnique (ensureField o.schema f) f }
+        have hl : (ensureField o.abs.schema f).lookup f = (ensureField o.schema f).lookup f := rfl
         simp only [stepTenantI, stepTenant, hty, hty', ho, ho', canManage_header, if_false,
           Bool.false_eq_true, hl]
-        cases o.schema.lookup f with
+        cases (ensureField o.schema f).lookup f with
         | none => simp [Except.map]
         | some d =>
           simp only []

@@ -74,6 +74,17 @@ def XTenant.deleteX (core : ITenant) (ux : MM (TypeId × FieldId × Val))
 /-- The cells of a type's slot array. -/
 def cellsOf (ty : TypeId) (n : Nat) : List Cell := (List.range n).map (fun i => (ty, i))
 
+/-- Every cell of every object type of the tenant. -/
+def ITenant.allCells (t : ITenant) : List Cell := t.types.flatMap (fun e => cellsOf e.1 e.2.slots.size)
+
+/-- The indexed tenant for a stage 1 tenant, its three indexes built from every record. A schema change in general
+    rewrites and removes records of several types, so it rebuilds. -/
+def XTenant.rebuild (core : ITenant) : XTenant :=
+  { core := core,
+    uidx := (∅ : MM (TypeId × FieldId × Val)).addCells core.allCells core.ukeys,
+    cidx := (∅ : MM (TypeId × List FieldId × List Val)).addCells core.allCells core.ckeys,
+    ridx := (∅ : MM Cell).addCells core.allCells core.rkeys }
+
 /-- The unique-index keys the records of type `ty` hold under schema `sch`, by cell. -/
 def ukeysUnder (ty : TypeId) (o : IObj) (sch : Schema) (c : Cell) :
     List (TypeId × FieldId × Val) :=
@@ -171,8 +182,9 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
       match core.typ? ty with
       | none => .error (.invalidSchema, ⟨core, ux, cx, rx⟩)
       | some o =>
-        let t' := core.putType ty { o with schema := makeRequired o.schema f }
-        if schemaChangeRefused core.limits (scopedTypes t'.abs.types (ty :: fieldTargets o.schema f))
+        let t' := core.putType ty { o with schema := makeRequired (ensureField o.schema f) f }
+        if schemaChangeRefused core.limits
+            (scopedTypes t'.abs.types (ty :: fieldTargets (ensureField o.schema f) f))
             strict then .error (.migrationRejected, ⟨core, ux, cx, rx⟩)
         else .ok ⟨t', ux, cx, rx⟩
   | .setUnique ty f strict =>
@@ -181,17 +193,17 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
       match core.typ? ty with
       | none => .error (.invalidSchema, ⟨core, ux, cx, rx⟩)
       | some o =>
-        match o.schema.lookup f with
+        match (ensureField o.schema f).lookup f with
         | none => .error (.invalidSchema, ⟨core, ux, cx, rx⟩)
         | some d =>
           if d.ty.isList then .error (.invalidSchema, ⟨core, ux, cx, rx⟩)
           else
-            let t' := core.putType ty { o with schema := makeUnique o.schema f }
+            let t' := core.putType ty { o with schema := makeUnique (ensureField o.schema f) f }
             if schemaChangeRefused core.limits
-                (scopedTypes t'.abs.types (ty :: fieldTargets o.schema f)) strict then
+                (scopedTypes t'.abs.types (ty :: fieldTargets (ensureField o.schema f) f)) strict then
               .error (.migrationRejected, ⟨core, ux, cx, rx⟩)
             else .ok ⟨t', ux.addCells (cellsOf ty o.slots.size)
-              (ukeysUnder ty o (makeUnique o.schema f)), cx, rx⟩
+              (ukeysUnder ty o (makeUnique (ensureField o.schema f) f)), cx, rx⟩
   | .defineUnique ty fs =>
     if !canManage core.header p then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
     else
@@ -205,6 +217,10 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
           if schemaChangeRefused core.limits (scopedTypes t'.abs.types [ty]) true then
             .error (.migrationRejected, ⟨core, ux, cx, rx⟩)
           else .ok ⟨t', ux, cx.addCells (cellsOf ty o.slots.size) (ckeysUnder ty o fs), rx⟩
+  | .changeSchema ev strict cs =>
+    match stepTenantI core p (.changeSchema ev strict cs) with
+    | .error e => .error (e, ⟨core, ux, cx, rx⟩)
+    | .ok core' => .ok (XTenant.rebuild core')
   | .createTenant _ _ => .error (.tenantExists, ⟨core, ux, cx, rx⟩)
   | .member j =>
     -- A membership step changes no record, so the indexes are as they were.

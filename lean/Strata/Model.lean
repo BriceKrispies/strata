@@ -9,6 +9,7 @@ that decides an outcome, the executable kernels, the working set and the harness
 -/
 
 import Strata.Members
+import Strata.SchemaChange
 
 namespace Strata
 
@@ -30,6 +31,10 @@ inductive Intent where
   /-- Define a composite unique constraint of type `ty` over these fields. Refused if existing
       records already agree on all of them. -/
   | defineUnique (ty : TypeId) (fs : List FieldId)
+  /-- A schema change in general (slice 11): a list of changes that define and remove fields and object types, applied in
+      order, with the version the caller expects the schema to be at and whether the records that no longer conform
+      refuse the change (`strict`, the kernel's `Reject`) or are kept (`Grandfather`). -/
+  | changeSchema (expected : Option Nat) (strict : Bool) (cs : List Change)
   /-- Create a tenant, owned by `owner`: only the system may, and only when the tenant does not exist
       (slice 7). The name is checked for being blank and not stored. -/
   | createTenant (owner : PrincipalId) (name : String)
@@ -131,8 +136,8 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
       match t.typ? ty with
       | none => .error .invalidSchema
       | some o =>
-        let t' := t.putType ty { o with schema := makeRequired o.schema f }
-        if schemaChangeRefused t.limits (scopedTypes t'.types (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
+        let t' := t.putType ty { o with schema := makeRequired (ensureField o.schema f) f }
+        if schemaChangeRefused t.limits (scopedTypes t'.types (ty :: fieldTargets (ensureField o.schema f) f)) strict then .error .migrationRejected
         else .ok t'
   | .setUnique ty f strict =>
     if !canManage t p then .error .unauthorized
@@ -140,13 +145,13 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
       match t.typ? ty with
       | none => .error .invalidSchema
       | some o =>
-        match o.schema.lookup f with
+        match (ensureField o.schema f).lookup f with
         | none => .error .invalidSchema
         | some d =>
           if d.ty.isList then .error .invalidSchema
           else
-            let t' := t.putType ty { o with schema := makeUnique o.schema f }
-            if schemaChangeRefused t.limits (scopedTypes t'.types (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
+            let t' := t.putType ty { o with schema := makeUnique (ensureField o.schema f) f }
+            if schemaChangeRefused t.limits (scopedTypes t'.types (ty :: fieldTargets (ensureField o.schema f) f)) strict then .error .migrationRejected
             else .ok t'
   | .defineUnique ty fs =>
     if !canManage t p then .error .unauthorized
@@ -160,6 +165,10 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
           let t' := t.putType ty { o with uniques := o.uniques ++ [fs] }
           if schemaChangeRefused t.limits (scopedTypes t'.types [ty]) true then .error .migrationRejected
           else .ok t'
+  -- The schema version is raised by the commit (`commitT`), as for the other schema intents.
+  | .changeSchema ev strict cs =>
+    (changeSchemaT (schemaRulesOk t.policies) t p strict ev cs).map
+      (fun t' => { t' with schemaVersion := t.schemaVersion })
   -- The tenant exists, so a creation is refused; a membership intent is the layer's decision.
   | .createTenant _ _ => .error .tenantExists
   | .member j => stepMemberT t p j
@@ -180,6 +189,7 @@ def authorized (t : Tenant) (p : Principal) : Intent → Bool
   | .setRequired ty _ _ => canManage t p && (t.typ? ty).isSome
   | .setUnique ty _ _ => canManage t p && (t.typ? ty).isSome
   | .defineUnique ty _ => canManage t p && (t.typ? ty).isSome
+  | .changeSchema _ _ _ => canManage t p
   -- A creation is never accepted by a tenant that exists.
   | .createTenant _ _ => false
   -- Redeeming asks for a signed-in caller; every other membership intent, the permission to manage
@@ -191,12 +201,13 @@ def authorized (t : Tenant) (p : Principal) : Intent → Bool
     type it names, and, for a field, the types the field refers to. Other intents touch none. -/
 def Intent.touched (t : Tenant) : Intent → List TypeId
   | .setRequired ty f _ => ty :: (match t.typ? ty with
-      | some o => fieldTargets o.schema f
+      | some o => fieldTargets (ensureField o.schema f) f
       | none => [])
   | .setUnique ty f _ => ty :: (match t.typ? ty with
-      | some o => fieldTargets o.schema f
+      | some o => fieldTargets (ensureField o.schema f) f
       | none => [])
   | .defineUnique ty _ => [ty]
+  | .changeSchema _ _ cs => cs.flatMap Change.touched
   | _ => []
 
 /-- A schema change that leaves existing records as they are is the one kind of intent that is
@@ -204,14 +215,29 @@ def Intent.touched (t : Tenant) : Intent → List TypeId
 def Intent.strict : Intent → Bool
   | .setRequired _ _ s => s
   | .setUnique _ _ s => s
+  | .changeSchema _ s _ => s
   | _ => true
 
-/-- The intents that change the schema and leave the records as they are. -/
+/-- A schema change in general that keeps the records that no longer conform (`Grandfather`): the one intent that can
+    leave a reference dangling (a retyped reference field whose records name a record that is not there). -/
+def Intent.laxChange : Intent → Bool
+  | .changeSchema _ false _ => true
+  | _ => false
+
+theorem Intent.laxChange_false_of_strict {i : Intent} (h : i.strict = true) : i.laxChange = false := by
+  cases i <;> simp_all [Intent.strict, Intent.laxChange]
+
+/-- The intents that change the schema of one object type and leave the records as they are. -/
 def Intent.isSchema : Intent → Bool
   | .setRequired _ _ _ => true
   | .setUnique _ _ _ => true
   | .defineUnique _ _ => true
   | _ => false
+
+/-- The intents that raise the schema version: the single-type schema intents and the schema change in general. -/
+def Intent.changesSchema : Intent → Bool
+  | .changeSchema _ _ _ => true
+  | i => i.isSchema
 
 /-! ## Events, revisions and effects (slice 9)
 
@@ -221,13 +247,6 @@ events are derived from the tenant before the step, the principal, the intent, a
 wrote: each derivation is the kernel's emission for that intent (`transition::create_record`,
 `update_record`, `delete_record`, `change_schema`, `create_tenant`). `step` keeps its type; `transition`
 returns the events and effects alongside the world. -/
-
-/-- A summary line of a schema change, by ids: the kernel's `apply_change` line for a field definition
-    (`redefine field <object>.<field>`) or for a composite constraint (`define unique constraint <object>`). -/
-inductive SchemaLine where
-  | field (ty : TypeId) (f : FieldId)
-  | unique (ty : TypeId) (fs : List FieldId)
-  deriving DecidableEq, Repr
 
 /-- Who a membership event names: a user, or a team, whose principal the kernel writes as `team:<id>`. -/
 inductive Member where
@@ -318,6 +337,32 @@ def memberBodies (p : Principal) : MemberIntent → MTenant → List EventBody
     | some r => [.memberChanged (.user r) (effRoles m r)]
     | none => []
 
+/-- Records in ascending id order. -/
+def sortedRecords (rs : Records) : Records :=
+  rs.mergeSort (fun a b => decide (a.1 ≤ b.1))
+
+/-- The update events of the records a schema change rewrote, in the kernel's order: by object type, then by record id.
+    A record is rewritten when it held a field its type no longer declares (`stripRecord`). `t` is the tenant before
+    and `t'` the one after. -/
+def rewrittenEvents (t t' : Tenant) (touched : List TypeId) : List EventBody :=
+  (touched.eraseDups.mergeSort (fun a b => decide (a ≤ b))).flatMap (fun T =>
+    match t.typ? T, t'.typ? T with
+    | some o, some o' =>
+      (sortedRecords o.records).flatMap (fun q =>
+        match o'.records.lookup q.1 with
+        | some r' => if r' == q.2 then [] else [EventBody.recordUpdated T q.1 q.2 r' []]
+        | none => [])
+    | _, _ => [])
+
+/-- The delete events of the records of the object types a schema change removes with their records, in the order of
+    the changes, each type's records by id (the kernel's `deleted_records`). -/
+def removedEvents (t : Tenant) (cs : List Change) : List EventBody :=
+  cs.flatMap (fun c => match c with
+    | .removeType T true => match t.typ? T with
+      | some o => (sortedRecords o.records).map (fun q => EventBody.recordDeleted T q.1 q.2)
+      | none => []
+    | _ => [])
+
 /-- The events an accepted intent against a tenant that exists emits. `t` is the tenant before the step, `t'`
     the tenant the decision wrote (its revision and sequence not yet raised). -/
 def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventBody
@@ -333,6 +378,9 @@ def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventB
     | some old => referrerEvents t ty id ++ [.recordDeleted ty id old]
     | none => []
   | .member j, t' => memberBodies p j t'.mt
+  | .changeSchema _ _ cs, t' =>
+    .schemaChanged (t.schemaVersion + 1) (cs.map Change.line) (changeGrandfathered t.limits t'.types cs) ::
+      (rewrittenEvents t t' (cs.flatMap Change.touched) ++ removedEvents t cs)
   | i, t' => match i.line with
     | some l => [.schemaChanged (t.schemaVersion + 1) [l] (violatedCount t.limits (scopedTypes t'.types (i.touched t)) t'.env)]
     | none => []
@@ -343,7 +391,7 @@ def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventB
 def commitT (t t' : Tenant) (p : Principal) (i : Intent) : Tenant :=
   { t' with revision := t.revision + 1,
             eventSeq := t.eventSeq + (eventBodies t p i t').length,
-            schemaVersion := if i.isSchema then t.schemaVersion + 1 else t.schemaVersion }
+            schemaVersion := if i.changesSchema then t.schemaVersion + 1 else t.schemaVersion }
 
 
 /-- The tenant a `CreateTenant` makes, when none exists: the system only, with a name that is not

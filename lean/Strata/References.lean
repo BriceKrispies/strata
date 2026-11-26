@@ -20,6 +20,7 @@ No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends
 
 import Strata.Model
 import Strata.StepParts
+import Strata.SchemaChangeInv
 
 namespace Strata
 
@@ -742,6 +743,48 @@ theorem refsOk_congr_ty {env : Env} {s s' : Schema} {r : Record}
   have h := hty fv.1
   cases h1 : s.lookup fv.1 <;> cases h2 : s'.lookup fv.1 <;> simp_all
 
+/-- A schema change that leaves every field's type as it was, except that it declares a field the type did not have
+    with a type that names no object type, leaves every reference resolving the same way. -/
+theorem refsOk_congr_ty' {env : Env} {s s' : Schema} {r : Record}
+    (hty : ∀ k, (s'.lookup k).map (fun d => d.ty) = (s.lookup k).map (fun d => d.ty) ∨
+      (s.lookup k = none ∧ (s'.lookup k).map (fun d => d.ty) = some .bool)) :
+    refsOk env s' r = refsOk env s r := by
+  unfold refsOk
+  congr 1
+  funext fv
+  rcases hty fv.1 with h | ⟨h0, h1⟩
+  · cases h1 : s.lookup fv.1 <;> cases h2 : s'.lookup fv.1 <;> simp_all
+  · rw [h0]
+    cases h2 : s'.lookup fv.1 with
+    | none => simp [h2] at h1
+    | some d =>
+      simp only [h2, Option.map_some, Option.some.injEq] at h1
+      show Val.resolves env d.ty fv.2 = true
+      rw [h1]
+      cases fv.2 with
+      | list vs =>
+        simp only [Val.resolves, List.all_eq_true]
+        intro e _
+        cases e <;> rfl
+      | ref id => rfl
+      | _ => rfl
+
+theorem ensure_makeRequired_ty (s : Schema) (f k : FieldId) :
+    (((makeRequired (ensureField s f) f).lookup k).map (fun d => d.ty) = (s.lookup k).map (fun d => d.ty)) ∨
+      (s.lookup k = none ∧ ((makeRequired (ensureField s f) f).lookup k).map (fun d => d.ty) = some .bool) := by
+  rw [makeRequired_ty]
+  rcases ensureField_lookup s f k with h | ⟨h0, h1⟩
+  · left; rw [h]
+  · right; refine ⟨h0, ?_⟩; rw [h1]; rfl
+
+theorem ensure_makeUnique_ty (s : Schema) (f k : FieldId) :
+    (((makeUnique (ensureField s f) f).lookup k).map (fun d => d.ty) = (s.lookup k).map (fun d => d.ty)) ∨
+      (s.lookup k = none ∧ ((makeUnique (ensureField s f) f).lookup k).map (fun d => d.ty) = some .bool) := by
+  rw [makeUnique_ty]
+  rcases ensureField_lookup s f k with h | ⟨h0, h1⟩
+  · left; rw [h]
+  · right; refine ⟨h0, ?_⟩; rw [h1]; rfl
+
 /-! ## Lemmas: a write to one object type -/
 
 /-- A write that replaces the records of one object type, keeping every record id, or that adds a
@@ -762,6 +805,36 @@ theorem refsOk_putType {t : Tenant} {ty : TypeId} {o o' : ObjType}
     · exact refsOk_mono (fun k x => hinc k x) hres
   · rw [typ?_putType_other t ty T o' hTy] at hT
     exact refsOk_mono (fun k x => hinc k x) (hrefs T o'' hT q hq)
+
+/-- A schema change that leaves every record as it was, and every field's type but for the declaration of fields of a
+    type that names no object type, keeps referential integrity of the tenant. -/
+theorem refsOk_putType_schema' {t : Tenant} {ty : TypeId} {o o' : ObjType}
+    (ho : t.typ? ty = some o) (hr : o'.records = o.records) (hty : ∀ k,
+      (o'.schema.lookup k).map (fun d => d.ty) = (o.schema.lookup k).map (fun d => d.ty) ∨
+      (o.schema.lookup k = none ∧ (o'.schema.lookup k).map (fun d => d.ty) = some .bool))
+    (hrefs : t.RefsOk) : (t.putType ty o').RefsOk := by
+  have henv : (t.putType ty o').env = t.env := by
+    funext k
+    rw [env_putType t ty o o' ho k]
+    by_cases hk : k == ty
+    · rw [if_pos hk, hr]
+      have hk' : k = ty := by simpa using hk
+      subst hk'
+      unfold Tenant.env
+      rw [ho]
+      simp
+    · rw [if_neg hk]
+  intro T o'' hT q hq
+  by_cases hTy : T = ty
+  · subst hTy
+    rw [typ?_putType_self t T o o' ho] at hT
+    cases hT
+    rw [refsOk_congr_ty' hty, henv]
+    have hq' : q ∈ o.records := by rw [← hr]; exact hq
+    exact hrefs T o ho q hq'
+  · rw [typ?_putType_other t ty T o' hTy] at hT
+    rw [henv]
+    exact hrefs T o'' hT q hq
 
 /-- A schema change that leaves every record and every reference's type as they were keeps
     referential integrity of the tenant. -/
@@ -866,8 +939,14 @@ theorem stepTenant_delete_eq {t t' : Tenant} {p : Principal} {ty : TypeId} {id :
     clears what named the deleted record in every type; and a schema change touches no record and
     changes no reference's type. -/
 theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
-    (hrefs : t.RefsOk) (h : stepTenant t p i = .ok t') : t'.RefsOk := by
+    (hrefs : t.RefsOk) (hlax : i.laxChange = false) (h : stepTenant t p i = .ok t') : t'.RefsOk := by
   cases i with
+  | changeSchema ev strict cs =>
+    have hs : strict = true := by
+      cases strict
+      · simp [Intent.laxChange] at hlax
+      · rfl
+    exact changeSchema_refs hrefs hs h
   | createTenant owner name => simp [stepTenant] at h
   | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact hrefs
   | create ty fs =>
@@ -964,7 +1043,7 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
       simp only [stepTenant, hT] at h
       repeat' split at h
       all_goals try cases h
-      exact refsOk_putType_schema hT rfl (fun k => makeRequired_ty o.schema f k) hrefs
+      exact refsOk_putType_schema' hT rfl (fun k => ensure_makeRequired_ty o.schema f k) hrefs
   | setUnique ty f strict =>
     cases hT : t.typ? ty with
     | none => simp only [stepTenant, hT] at h; split at h <;> cases h
@@ -972,7 +1051,7 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
       simp only [stepTenant, hT] at h
       repeat' split at h
       all_goals try cases h
-      exact refsOk_putType_schema hT rfl (fun k => makeUnique_ty o.schema f k) hrefs
+      exact refsOk_putType_schema' hT rfl (fun k => ensure_makeUnique_ty o.schema f k) hrefs
   | defineUnique ty fs =>
     cases hT : t.typ? ty with
     | none => simp only [stepTenant, hT] at h; split at h <;> cases h
@@ -984,13 +1063,13 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
 
 /-- Referential integrity for the world: every accepted step keeps it, strict or not. -/
 theorem step_preserves_refs (w w' : World) (i : Intent) (c : Ctx)
-    (hrefs : w.RefsOk) (h : step w i c = .ok w') : w'.RefsOk := by
+    (hrefs : w.RefsOk) (hlax : i.laxChange = false) (h : step w i c = .ok w') : w'.RefsOk := by
   intro x t' hx
   rcases step_cases h with ⟨t, t₁, ht, hs, rfl⟩ | ⟨owner, name, rfl, hnone, rfl⟩
   · by_cases hxc : x = c.tenant
     · simp [hxc] at hx
       subst hx
-      exact stepTenant_preserves_refs t t₁ c.principal i (hrefs c.tenant t ht) hs
+      exact stepTenant_preserves_refs t t₁ c.principal i (hrefs c.tenant t ht) hlax hs
     · simp [hxc] at hx
       exact hrefs x t' hx
   · by_cases hxc : x = c.tenant
@@ -1082,7 +1161,7 @@ theorem setRequired_records (t t' : Tenant) (p : Principal) (ty : TypeId) (f : F
       simp only [stepTenant, hT] at h
       repeat' split at h
       all_goals (try cases h)
-      all_goals exact env_putType_records t ty o { o with schema := makeRequired o.schema f } hT rfl T
+      all_goals exact env_putType_records t ty o { o with schema := makeRequired (ensureField o.schema f) f } hT rfl T
 
 /-- A field made unique leaves the counter and every type's records as they are. -/
 theorem setUnique_records (t t' : Tenant) (p : Principal) (ty : TypeId) (f : FieldId)
@@ -1100,7 +1179,7 @@ theorem setUnique_records (t t' : Tenant) (p : Principal) (ty : TypeId) (f : Fie
       simp only [stepTenant, hT] at h
       repeat' split at h
       all_goals (try cases h)
-      all_goals exact env_putType_records t ty o { o with schema := makeUnique o.schema f } hT rfl T
+      all_goals exact env_putType_records t ty o { o with schema := makeUnique (ensureField o.schema f) f } hT rfl T
 
 /-- A composite unique constraint leaves the counter and every type's records as they are. -/
 theorem defineUnique_records (t t' : Tenant) (p : Principal) (ty : TypeId) (fs : List FieldId)

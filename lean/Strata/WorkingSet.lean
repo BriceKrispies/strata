@@ -92,6 +92,8 @@ structure Header where
   roles : List RoleId := [ownerRole, publicRole]
   teams : List (TeamId × TeamDef) := []
   invitations : List (InvitationId × InvitationDef) := []
+  /-- The schema version (slice 11): a schema change names the version it expects. -/
+  schemaVersion : Nat := 1
 
 def TypeHead.ofObj (o : ObjType) : TypeHead :=
   { schema := o.schema, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows }
@@ -104,14 +106,15 @@ def TypeHead.withRecords (hh : TypeHead) (rs : Records) : ObjType :=
 def _root_.Strata.Tenant.header (t : Tenant) : Header :=
   { types := t.types.map (fun e => (e.1, TypeHead.ofObj e.2)), members := t.members,
     grants := t.grants, policies := t.policies, limits := t.limits, roles := t.roles,
-    teams := t.teams, invitations := t.invitations }
+    teams := t.teams, invitations := t.invitations, schemaVersion := t.schemaVersion }
 
 /-- A header as a tenant with no records, so the model's permission functions apply to it. They
     read neither records nor the counter. -/
 def Header.asTenant (h : Header) : Tenant :=
   { types := h.types.map (fun e => (e.1, TypeHead.withRecords e.2 [])),
     members := h.members, grants := h.grants, policies := h.policies, nextId := 0,
-    limits := h.limits, roles := h.roles, teams := h.teams, invitations := h.invitations }
+    limits := h.limits, roles := h.roles, teams := h.teams, invitations := h.invitations,
+    schemaVersion := h.schemaVersion }
 
 /-- The records of each object type of a tenant, in the tenant's type order. -/
 def _root_.Strata.Tenant.tables (t : Tenant) : List (TypeId × Records) :=
@@ -215,6 +218,9 @@ inductive Delta where
       `cleared`. Like the Rust kernel's `StateDelta`, the delta names every record it writes. -/
   | remove (ty : TypeId) (id : RecordId) (cleared : List (TypeId × RecordId))
   | schema (ty : TypeId) (h : TypeHead)
+  /-- Replace the object types of the tenant: a schema change in general (slice 11) writes several types, and the
+      records of the ones it rewrites or removes, at once. -/
+  | types (ts : List (TypeId × ObjType))
   /-- Replace the tenant's membership: its members, grants, policies, roles, teams and invitations
       (slice 7). The record tables, the counter and the limits are not touched. -/
   | members (m : MTenant)
@@ -252,6 +258,7 @@ def Delta.apply (t : Tenant) : Delta → Tenant
       if q.1 == id then (q.1, r) else q) })
   | .remove ty id cl => t.removeAt ty id cl
   | .schema ty h => t.modType ty (fun o => { o with schema := h.schema, uniques := h.uniques })
+  | .types ts => { t with types := ts }
   | .members m => t.withM m
   | .genesis _ => t
 
@@ -337,6 +344,7 @@ def applyWorld (w : World) (x : TenantId) (d : Delta) : World :=
   | .replace ty id r => upd w x ((w x).map (fun t => (Delta.replace ty id r).apply t))
   | .remove ty id cl => upd w x ((w x).map (fun t => (Delta.remove ty id cl).apply t))
   | .schema ty h => upd w x ((w x).map (fun t => (Delta.schema ty h).apply t))
+  | .types ts => upd w x ((w x).map (fun t => (Delta.types ts).apply t))
   | .members m => upd w x ((w x).map (fun t => (Delta.members m).apply t))
 
 def Store.applyDelta (s : Store) (x : TenantId) (d : Delta) : Store :=
@@ -421,26 +429,26 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
       | none => .error .invalidSchema
       | some o =>
         let types' := putTypeList (assembleTypes h all) ty
-          { schema := makeRequired o.schema f, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows,
+          { schema := makeRequired (ensureField o.schema f) f, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows,
             records := tableOf all ty }
-        if schemaChangeRefused h.limits (scopedTypes types' (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
-        else .ok (.schema ty { schema := makeRequired o.schema f, uniques := o.uniques })
+        if schemaChangeRefused h.limits (scopedTypes types' (ty :: fieldTargets (ensureField o.schema f) f)) strict then .error .migrationRejected
+        else .ok (.schema ty { schema := makeRequired (ensureField o.schema f) f, uniques := o.uniques })
   | .setUnique ty f strict =>
     if !canManage h.asTenant p then .error .unauthorized
     else
       match h.types.lookup ty with
       | none => .error .invalidSchema
       | some o =>
-        match o.schema.lookup f with
+        match (ensureField o.schema f).lookup f with
         | none => .error .invalidSchema
         | some d =>
           if d.ty.isList then .error .invalidSchema
           else
             let types' := putTypeList (assembleTypes h all) ty
-              { schema := makeUnique o.schema f, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows,
+              { schema := makeUnique (ensureField o.schema f) f, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows,
                 records := tableOf all ty }
-            if schemaChangeRefused h.limits (scopedTypes types' (ty :: fieldTargets o.schema f)) strict then .error .migrationRejected
-            else .ok (.schema ty { schema := makeUnique o.schema f, uniques := o.uniques })
+            if schemaChangeRefused h.limits (scopedTypes types' (ty :: fieldTargets (ensureField o.schema f) f)) strict then .error .migrationRejected
+            else .ok (.schema ty { schema := makeUnique (ensureField o.schema f) f, uniques := o.uniques })
   | .defineUnique ty fs =>
     if !canManage h.asTenant p then .error .unauthorized
     else
@@ -455,6 +463,9 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
               records := tableOf all ty }
           if schemaChangeRefused h.limits (scopedTypes types' [ty]) true then .error .migrationRejected
           else .ok (.schema ty { schema := o.schema, uniques := o.uniques ++ [fs] })
+  | .changeSchema ev strict cs =>
+    (changeSchemaT (schemaRulesOk h.policies) { h.asTenant with types := assembleTypes h all, nextId := n } p strict
+      ev cs).map (fun t' => .types t'.types)
   | .createTenant _ _ => .error .tenantExists
   | .member j =>
     match stepMember h.asTenant.mt (j.ctxOf p) j with
@@ -623,6 +634,35 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
     funext T id; exact recordAt_has t T id
   cases i with
   | createTenant owner name => simp [decideTenant, stepTenant, Except.map]
+  | changeSchema ev strict cs =>
+    have hA := changeSchemaT_types_congr (schemaRulesOk t.policies)
+      { t.header.asTenant with types := assembleTypes t.header t.tables, nextId := t.nextId } t p strict ev cs
+      rfl rfl (assemble_header t) rfl rfl
+    have hpol : t.header.policies = t.policies := rfl
+    simp only [decideTenant, stepTenant, hpol]
+    cases hc : changeSchemaT (schemaRulesOk t.policies) t p strict ev cs with
+    | error e =>
+      cases hcA : changeSchemaT (schemaRulesOk t.policies)
+          { t.header.asTenant with types := assembleTypes t.header t.tables, nextId := t.nextId } p strict ev cs with
+      | error e' =>
+        rw [hcA, hc] at hA
+        simp only [Except.map, Except.error.injEq] at hA ⊢
+        rw [hA]
+      | ok tA =>
+        rw [hcA, hc] at hA
+        simp [Except.map] at hA
+    | ok t1 =>
+      obtain ⟨types1, -, -, rfl, -, -⟩ := changeSchemaT_parts hc
+      cases hcA : changeSchemaT (schemaRulesOk t.policies)
+          { t.header.asTenant with types := assembleTypes t.header t.tables, nextId := t.nextId } p strict ev cs with
+      | error e' =>
+        rw [hcA, hc] at hA
+        simp [Except.map] at hA
+      | ok tA =>
+        rw [hcA, hc] at hA
+        simp only [Except.map, Except.ok.injEq] at hA ⊢
+        rw [hA]
+        rfl
   | member j =>
     simp only [decideTenant, stepTenant, stepMemberT]
     have hmt : t.header.asTenant.mt = t.mt := rfl
@@ -730,7 +770,7 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
     | none => by_cases ho : canManage t p = true <;> simp [ho, hT, Except.map, canManage_header]
     | some o =>
       by_cases ho : canManage t p = true
-      · cases hl : o.schema.lookup f with
+      · cases hl : (ensureField o.schema f).lookup f with
         | none => simp [ho, hT, hl, TypeHead.ofObj, Except.map]
         | some d =>
           by_cases hd : d.ty.isList = true
@@ -739,10 +779,10 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
               header_limits, Tenant.putType, ho, hl, hd, TypeHead.ofObj, bne_self_eq_false,
               Bool.false_eq_true, ite_false, if_false, Bool.not_true]
             by_cases hs : schemaChangeRefused t.limits (scopedTypes (putTypeList t.types ty
-                { schema := makeUnique o.schema f, uniques := o.uniques, constraints := o.constraints,
+                { schema := makeUnique (ensureField o.schema f) f, uniques := o.uniques, constraints := o.constraints,
                   workflows := o.workflows,
                   records := o.records })
-                (ty :: fieldTargets o.schema f))
+                (ty :: fieldTargets (ensureField o.schema f) f))
                 strict = true
             · simp [hs, Except.map]
             · simp [hs, Except.map, Delta.apply, Tenant.modType, hT, Tenant.putType]
@@ -843,6 +883,7 @@ theorem fetch_applyWorld_other (w : World) (x : TenantId) (d : Delta) (k : Key)
     answer and the list; a schema change changes the header only. Answers are invalidated by any record change of their tenant, the granularity
     of the per-object-type change counters (D-5064). -/
 def touchedIn : Delta → Key → Bool
+  | .types _, _ => true
   | .schema _ _, .header _ => true
   | .members _, .header _ => true
   | .genesis _, .header _ => true
@@ -1320,14 +1361,18 @@ theorem touchedIn_sound : InvSound touchedIn := by
   · obtain ⟨m, rfl⟩ := hnm; exact sound_members w x m k hx hin
   by_cases hng : ∃ o, d = .genesis o
   · obtain ⟨o, rfl⟩ := hng; exact sound_genesis w x o k hx hin
+  by_cases hnt : ∃ ts, d = .types ts
+  · obtain ⟨ts, rfl⟩ := hnt; simp [touchedIn] at hin
   have hnm' : ∀ m, d ≠ .members m := fun m h => hnm ⟨m, h⟩
   have hng' : ∀ o, d ≠ .genesis o := fun o h => hng ⟨o, h⟩
+  have hnt' : ∀ ts, d ≠ .types ts := fun ts h => hnt ⟨ts, h⟩
   cases k with
   | header t =>
     simp only [Key.tenant] at hx; subst hx
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | genesis o => exact absurd rfl (hng' o)
+    | types ts => exact absurd rfl (hnt' ts)
     | schema ty' h' => simp [touchedIn] at hin
     | create ty' id' r =>
       simp only [fetch, applyWorld, upd_same]
@@ -1349,6 +1394,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | genesis o => exact absurd rfl (hng' o)
+    | types ts => exact absurd rfl (hnt' ts)
     | create ty' id' r => simp [touchedIn] at hin
     | schema ty' h' =>
       simp only [fetch, applyWorld, upd_same]
@@ -1372,6 +1418,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | genesis o => exact absurd rfl (hng' o)
+    | types ts => exact absurd rfl (hnt' ts)
     | create ty' id' r =>
       have h : (ty == ty' && id == id') = false := by simpa [touchedIn] using hin
       simp only [fetch, applyWorld, upd_same]
@@ -1413,6 +1460,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | genesis o => exact absurd rfl (hng' o)
+    | types ts => exact absurd rfl (hnt' ts)
     | schema ty' h' =>
       simp only [fetch, applyWorld, upd_same]
       cases hw : w t with
@@ -1429,6 +1477,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | genesis o => exact absurd rfl (hng' o)
+    | types ts => exact absurd rfl (hnt' ts)
     | schema ty' h' =>
       simp only [fetch, applyWorld, upd_same]
       cases hw : w t with
@@ -1445,6 +1494,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     cases d with
     | members m => exact absurd rfl (hnm' m)
     | genesis o => exact absurd rfl (hng' o)
+    | types ts => exact absurd rfl (hnt' ts)
     | create ty' id' r =>
       have h : (ty == ty' && decide (a < id')) = false := by simpa [touchedIn] using hin
       simp only [fetch, applyWorld, upd_same]

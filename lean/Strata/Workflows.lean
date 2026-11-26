@@ -638,6 +638,7 @@ theorem stepTenant_preserves_states (t t' : Tenant) (p : Principal) (i : Intent)
     t'.StatesOk := by
   cases i with
   | createTenant owner name => simp [stepTenant] at h
+  | changeSchema ev strict cs => exact changeSchema_states hs h
   | member j =>
     obtain ⟨m', rfl⟩ := stepTenant_member_eq h
     exact hs

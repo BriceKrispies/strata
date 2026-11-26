@@ -707,6 +707,7 @@ theorem schema_step_putType (t t' : Tenant) (p : Principal) (i : Intent)
   | create ty fs => simp [Intent.isSchema] at hi
   | update ty id fs ev => simp [Intent.isSchema] at hi
   | delete ty id ev => simp [Intent.isSchema] at hi
+  | changeSchema ev strict cs => simp [Intent.isSchema] at hi
   | setRequired ty f strict =>
     simp only [stepTenant] at h
     repeat' split at h
@@ -734,6 +735,7 @@ theorem schemaViolated_of_strict (t t' : Tenant) (p : Principal) (i : Intent)
   | create ty fs => simp [Intent.isSchema] at hi
   | update ty id fs ev => simp [Intent.isSchema] at hi
   | delete ty id ev => simp [Intent.isSchema] at hi
+  | changeSchema ev strict cs => simp [Intent.isSchema] at hi
   | setRequired ty f strict =>
     simp only [Intent.strict] at hs
     subst hs
@@ -862,6 +864,7 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : Principal) (i : Inten
     (hd : t.Distinct) (h : stepTenant t p i = .ok t') : t'.Distinct := by
   obtain ⟨hkeys, hD⟩ := hd
   cases i with
+  | changeSchema ev strict cs => exact changeSchema_distinct ⟨hkeys, hD⟩ h
   | createTenant owner name => simp [stepTenant] at h
   | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact ⟨hkeys, hD⟩
   | create ty fs =>
@@ -947,7 +950,7 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : Principal) (i : Inten
         rw [typ?_putType_self t T o _ hty] at hT'
         cases hT'
         obtain ⟨hs, hr⟩ := hD T o hty
-        exact ⟨by rw [keys_makeRequired]; exact hs, hr⟩
+        exact ⟨by rw [keys_makeRequired]; exact keys_ensureField _ _ hs, hr⟩
       · rw [typ?_putType_other t ty T _ hTy] at hT'
         exact hD T o' hT'
   | setUnique ty f strict =>
@@ -963,7 +966,7 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : Principal) (i : Inten
         rw [typ?_putType_self t T o _ hty] at hT'
         cases hT'
         obtain ⟨hs, hr⟩ := hD T o hty
-        exact ⟨by rw [keys_makeUnique]; exact hs, hr⟩
+        exact ⟨by rw [keys_makeUnique]; exact keys_ensureField _ _ hs, hr⟩
       · rw [typ?_putType_other t ty T _ hTy] at hT'
         exact hD T o' hT'
   | defineUnique ty fs =>
@@ -1075,6 +1078,18 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : Principal) (i : Intent)
     t'.UniqueRecords := by
   obtain ⟨-, hids, -, hd, hu⟩ := hwf
   cases i with
+  | changeSchema ev strict cs =>
+    have hs : strict = true := by simpa [Intent.strict] using hstrict
+    subst hs
+    obtain ⟨hT, hU⟩ := changeSchema_table h
+    intro T o2 hT2 q₁ hq₁ q₂ hq₂ hne
+    by_cases hTt : T ∈ cs.flatMap Change.touched
+    · have hk := tableViolated_false (hT T o2 hT2 hTt)
+      exact ⟨fun fd hfd hu' => hk.2.1 fd hfd hu' q₁ hq₁ q₂ hq₂ hne,
+        fun u hu' => hk.2.2 u hu' q₁ hq₁ q₂ hq₂ hne⟩
+    · rcases hU T o2 hT2 hTt with h0 | he
+      · exact hu T o2 h0 q₁ hq₁ q₂ hq₂ hne
+      · rw [he] at hq₁; cases hq₁
   | createTenant owner name => simp [stepTenant] at h
   | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact hu
   | create ty fs =>
@@ -1193,6 +1208,7 @@ theorem set_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (t
     (hr : callerReserved c.principal = false) :
     step w (.setUnique ty f true) c = .error .migrationRejected ∧
       ∀ w', step w (.setUnique ty f true) c ≠ .ok w' := by
+  have hens : ensureField o.schema f = o.schema := ensureField_eq_of_lookup _ _ d hd
   have hmem : (ty, { o with schema := makeUnique o.schema f }) ∈
       (t.putType ty { o with schema := makeUnique o.schema f }).types :=
     lookup_mem (typ?_putType_self t ty o _ ho)
@@ -1212,7 +1228,7 @@ theorem set_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (t
     simp only [Bool.true_and, List.any_eq_true]
     exact ⟨_, List.mem_filter.mpr ⟨hmem, by simp⟩, hviol⟩
   have hs : step w (.setUnique ty f true) c = .error .migrationRejected := by
-    simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, ho, hp, hd, hl, hv]
+    simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, ho, hp, hd, hl, hv, hens]
   exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
 
 /-- A table of one integer field, with two records that agree on it. -/
@@ -1317,7 +1333,8 @@ theorem setRequired_spec (t t' : Tenant) (p : Principal) (ty : TypeId) (f : Fiel
 theorem setUnique_spec (t t' : Tenant) (p : Principal) (ty : TypeId) (f : FieldId) (s : Bool)
     (h : stepTenant t p (.setUnique ty f s) = .ok t') :
     t'.nextId = t.nextId ∧ (∀ T, t'.env T = t.env T) ∧
-      ∀ o, t.typ? ty = some o → t'.typ? ty = some { o with schema := makeUnique o.schema f } := by
+      ∀ o, t.typ? ty = some o →
+        t'.typ? ty = some { o with schema := makeUnique (ensureField o.schema f) f } := by
   refine ⟨(setUnique_records t t' p ty f s h).1, (setUnique_records t t' p ty f s h).2, fun o hT => ?_⟩
   simp only [stepTenant, hT] at h
   repeat' split at h

@@ -310,6 +310,7 @@ theorem stepTenant_preserves_satisfied (t t' : Tenant) (p : Principal) (i : Inte
     (h : stepTenant t p i = .ok t') : t'.Satisfied := by
   cases i with
   | createTenant owner name => simp [stepTenant] at h
+  | changeSchema ev strict cs => exact changeSchema_satisfied hs h
   | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact hs
   | create ty fs =>
     cases hT : t.typ? ty with

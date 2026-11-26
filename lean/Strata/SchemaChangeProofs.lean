@@ -1,8 +1,9 @@
 /-
-Theorems about the schema change in general (slice 11, part a), over `Strata/SchemaChange.lean`.
+Theorems about the schema change in general (slice 11), over `Strata/SchemaChange.lean`. The lemmas that the state
+invariants use are in `Strata/SchemaChangeInv.lean`.
 -/
 
-import Strata.SchemaChange
+import Strata.Uniqueness
 
 namespace Strata
 
@@ -48,97 +49,88 @@ theorem applyChanges_cons (valid : List (TypeId × ObjType) → Bool) (types : L
   rfl
 
 /-- An accepted schema change raises the schema version by exactly one, and its object types are the ones the
-    changes leave, in order (`applyChanges`). -/
+    changes leave (`applyChanges`) with the records of the touched types rewritten (`rewriteTypes`). -/
 theorem changeSchemaT_ok (valid : List (TypeId × ObjType) → Bool) (t t' : Tenant) (p : Principal)
     (strict : Bool) (expected : Option Nat) (cs : List Change)
     (h : changeSchemaT valid t p strict expected cs = .ok t') :
     t'.schemaVersion = t.schemaVersion + 1 ∧
-      ∃ types', applyChanges valid t.types cs = .ok types' ∧ t'.types = types' := by
-  unfold changeSchemaT at h
-  split at h
-  · simp at h
-  · split at h
-    · simp at h
-    · split at h
-      · simp at h
-      · split at h
-        · simp at h
-        · split at h
-          · simp at h
-          · rename_i types' hap
-            split at h
-            · simp at h
-            · simp only [Except.ok.injEq] at h
-              subst h
-              exact ⟨rfl, types', hap, rfl⟩
+      ∃ types1, applyChanges valid t.types cs = .ok types1 ∧
+        t'.types = rewriteTypes t.types (cs.flatMap Change.touched) types1 := by
+  obtain ⟨types1, hap, -, rfl, -, -⟩ := changeSchemaT_parts h
+  exact ⟨rfl, types1, hap, rfl⟩
 
-/-- An accepted change leaves object types the validity predicate accepts. With the concrete rules of
-    `schemaRulesOk`, the schema the change leaves follows them: a reference names an object type of the tenant, a
-    unique field is not a list, a composite constraint names declared fields. -/
+/-- An accepted change leaves object types the validity predicate accepts, before the records are rewritten. With the
+    concrete rules of `schemaRulesOk`, the schema the change leaves follows them: a reference names an object type of
+    the tenant, a unique field is not a list, a composite constraint names declared fields, a constraint and a workflow
+    read declared fields. -/
 theorem applyChanges_valid (valid : List (TypeId × ObjType) → Bool) :
     ∀ (types : List (TypeId × ObjType)) (cs : List Change) (r : List (TypeId × ObjType)),
-      applyChanges valid types cs = .ok r → valid r = true := by
-  intro types cs
-  induction cs generalizing types with
-  | nil =>
-    intro r h
-    simp only [applyChanges] at h
-    split at h
-    · simp only [Except.ok.injEq] at h
-      subst h
-      assumption
-    · simp at h
-  | cons c cs ih =>
-    intro r h
-    simp only [applyChanges_cons] at h
-    cases hc : applyChange types c with
-    | error e =>
-      rw [hc] at h
-      change Except.error e = Except.ok r at h
-      cases h
-    | ok types' =>
-      rw [hc] at h
-      change applyChanges valid types' cs = Except.ok r at h
-      exact ih types' r h
+      applyChanges valid types cs = .ok r → valid r = true :=
+  sc_applyChanges_valid valid
 
 theorem changeSchemaT_valid (valid : List (TypeId × ObjType) → Bool) (t t' : Tenant) (p : Principal)
     (strict : Bool) (expected : Option Nat) (cs : List Change)
     (h : changeSchemaT valid t p strict expected cs = .ok t') :
-    valid t'.types = true := by
-  obtain ⟨_, types', hap, hty⟩ := changeSchemaT_ok valid t t' p strict expected cs h
-  rw [hty]
-  exact applyChanges_valid valid t.types cs types' hap
+    ∃ types1, valid types1 = true ∧ t'.types = rewriteTypes t.types (cs.flatMap Change.touched) types1 := by
+  obtain ⟨_, types1, hap, hty⟩ := changeSchemaT_ok valid t t' p strict expected cs h
+  exact ⟨types1, applyChanges_valid valid t.types cs types1 hap, hty⟩
+
+/-- Rewriting the records changes no schema rule. -/
+theorem schemaRulesOk_rewrite (ps : List Policy) (orig : List (TypeId × ObjType)) (touched : List TypeId)
+    (types : List (TypeId × ObjType)) :
+    schemaRulesOk ps (rewriteTypes orig touched types) = schemaRulesOk ps types := by
+  have hk : ∀ X, (rewriteTypes orig touched types).any (fun e => e.1 == X) = types.any (fun e => e.1 == X) := by
+    intro X
+    rw [rewriteTypes_eq, List.any_map]
+    rfl
+  have hp : ∀ pl, policyOk (rewriteTypes orig touched types) pl = policyOk types pl := by
+    intro pl
+    unfold policyOk
+    cases pl.resource with
+    | object T =>
+      simp only [sc_lookup_rewriteTypes]
+      cases types.lookup T with
+      | none => rfl
+      | some o =>
+        obtain ⟨hs, -⟩ := rwObj_record_view orig touched T o
+        simp only [Option.map_some, hs]
+    | anyObject => rfl
+    | schema => rfl
+    | members => rfl
+  have hp' : policyOk (rewriteTypes orig touched types) = policyOk types := funext hp
+  unfold schemaRulesOk
+  simp only [hk, hp']
+  rw [rewriteTypes_eq, List.all_map]
+  have key : ∀ (f g : TypeId × ObjType → Bool), (∀ e, f e = g e) → types.all f = types.all g := by
+    intro f g h; rw [funext h]
+  rw [key _ _ (fun e => ?_)]
+  obtain ⟨hs, hu, hc, hw, -⟩ := rwObj_record_view orig touched e.1 e.2
+  simp only [Function.comp, hs, hu, hc, hw]
 
 /-- The concrete instance: an accepted change leaves a schema that `schemaRulesOk` accepts. -/
 theorem changeSchemaT_rules (t t' : Tenant) (p : Principal) (strict : Bool) (expected : Option Nat)
-    (cs : List Change) (h : changeSchemaT schemaRulesOk t p strict expected cs = .ok t') :
-    schemaRulesOk t'.types = true :=
-  changeSchemaT_valid schemaRulesOk t t' p strict expected cs h
+    (cs : List Change) (h : changeSchemaT (schemaRulesOk t.policies) t p strict expected cs = .ok t') :
+    schemaRulesOk t.policies t'.types = true := by
+  obtain ⟨types1, hv, hty⟩ := changeSchemaT_valid _ t t' p strict expected cs h
+  rw [hty, schemaRulesOk_rewrite]
+  exact hv
 
 /-- An accepted strict change re-validated the types it touches: the violation check of the change came out false
-    over the object types the changes leave (`changesScope`). -/
+    over the object types the changes leave (`changesScope`), and so did the check of the references. -/
 theorem changeSchemaT_strict_not_violated (valid : List (TypeId × ObjType) → Bool) (t t' : Tenant)
     (p : Principal) (expected : Option Nat) (cs : List Change)
     (h : changeSchemaT valid t p true expected cs = .ok t') :
-    ∃ types', applyChanges valid t.types cs = .ok types' ∧
-      schemaViolated t.limits (changesScope types' cs) = false := by
-  unfold changeSchemaT at h
-  split at h
-  · simp at h
-  · split at h
-    · simp at h
-    · split at h
-      · simp at h
-      · split at h
-        · simp at h
-        · split at h
-          · simp at h
-          · rename_i types' hap
-            split at h
-            · simp at h
-            · rename_i hnot
-              refine ⟨types', hap, ?_⟩
-              simpa [schemaChangeRefused] using hnot
+    ∃ types1, applyChanges valid t.types cs = .ok types1 ∧
+      schemaViolated t.limits (changesScope t'.types cs) = false ∧
+      refsViolated (changesScope t'.types cs) (recordsIn t'.types) = false := by
+  obtain ⟨types1, hap, -, rfl, hch, -⟩ := changeSchemaT_parts h
+  refine ⟨types1, hap, ?_⟩
+  have hch' : (schemaViolated t.limits (changesScope (rewriteTypes t.types (cs.flatMap Change.touched) types1) cs)
+      || refsViolated (changesScope (rewriteTypes t.types (cs.flatMap Change.touched) types1) cs)
+        (recordsIn (rewriteTypes t.types (cs.flatMap Change.touched) types1))) = false := by
+    simpa [changeRefused] using hch
+  rw [Bool.or_eq_false_iff] at hch'
+  exact hch'
 
 /-- A strict change (`Reject`) leaves the object types it re-validates conforming: every record of each of them
     conforms to the schema the change leaves, and its unique fields and composite constraints hold. -/
@@ -150,11 +142,7 @@ theorem changeSchemaT_strict_conforms (valid : List (TypeId × ObjType) → Bool
         q₁.1 ≠ q₂.1 → agreeOn [fd.1] q₁.2.fields q₂.2.fields = false) ∧
       ∀ u ∈ e.2.uniques, ∀ q₁ ∈ e.2.records, ∀ q₂ ∈ e.2.records,
         q₁.1 ≠ q₂.1 → agreeOn u q₁.2.fields q₂.2.fields = false := by
-  obtain ⟨_, types', hap, hty⟩ := changeSchemaT_ok valid t t' p true expected cs h
-  obtain ⟨types'', hap'', hv⟩ := changeSchemaT_strict_not_violated valid t t' p expected cs h
-  rw [hap] at hap''
-  cases hap''
-  rw [hty]
+  obtain ⟨_, _, hv, -⟩ := (changeSchemaT_strict_not_violated valid t t' p expected cs h)
   exact schemaViolated_false hv
 
 /-- A change applied on its own: the object types it leaves are the result of the change, which the validity predicate
@@ -179,27 +167,15 @@ theorem applyChanges_singleton (valid : List (TypeId × ObjType) → Bool) (type
     · simp at h
 
 theorem lookup_putTypeList_self (l : List (TypeId × ObjType)) (ty : TypeId) (o : ObjType)
-    (h : l.lookup ty ≠ none) : (putTypeList l ty o).lookup ty = some o := by
-  induction l with
-  | nil => simp [List.lookup] at h
-  | cons e es ih =>
-    obtain ⟨k, p⟩ := e
-    by_cases hk : k = ty
-    · subst hk
-      simp [putTypeList, List.lookup]
-    · have hrest : es.lookup ty ≠ none := by
-        intro hn
-        apply h
-        have hk2 : (ty == k) = false := by simp [Ne.symm hk]
-        simp [List.lookup, hk, hk2, hn]
-      have hk2 : (ty == k) = false := by simp [Ne.symm hk]
-      simp [putTypeList, List.lookup, hk, hk2, ih hrest]
+    (h : l.lookup ty ≠ none) : (putTypeList l ty o).lookup ty = some o :=
+  sc_lookup_putTypeList_self l ty o h
 
-/-- Removing a field drops its definition from its object type and its stored values from every record of the type. -/
+/-! ## Removing a field -/
+
+/-- Removing a field drops its definition from its object type; the records are rewritten afterwards. -/
 theorem removeField_drops (types types' : List (TypeId × ObjType)) (ty : TypeId) (f : FieldId) (o : ObjType)
     (ho : types.lookup ty = some o) (h : applyChange types (.removeField ty f) = .ok types') :
-    ∀ o', types'.lookup ty = some o' →
-      (∀ fd ∈ o'.schema, !(fd.1 == f) = true) ∧ ∀ q ∈ o'.records, ∀ fv ∈ q.2.fields, !(fv.1 == f) = true := by
+    ∀ o', types'.lookup ty = some o' → (∀ fd ∈ o'.schema, !(fd.1 == f) = true) ∧ o'.records = o.records := by
   intro o' ho'
   simp only [applyChange, ho] at h
   split at h
@@ -213,65 +189,108 @@ theorem removeField_drops (types types' : List (TypeId × ObjType)) (ty : TypeId
     · intro fd hfd
       have := (List.mem_filter.mp hfd).2
       simpa using this
-    · intro q hq fv hfv
-      rcases List.mem_map.mp hq with ⟨q0, _, hq0⟩
-      subst hq0
-      have := (List.mem_filter.mp hfv).2
-      simpa using this
+    · rfl
   · simp at h
 
-/-- A removal of a type with records is refused `migrationRejected` unless the change deletes them. -/
-theorem removeType_refused_with_records (types : List (TypeId × ObjType)) (ty : TypeId) (o : ObjType)
-    (ho : types.lookup ty = some o) (hr : o.records ≠ []) :
-    applyChange types (.removeType ty false) = .error .migrationRejected := by
-  simp [applyChange, ho, hr]
-
-/-- An accepted removal of a type without deletion of its records had no records. -/
-theorem removeType_ok_empty (types types' : List (TypeId × ObjType)) (ty : TypeId) (o : ObjType)
-    (ho : types.lookup ty = some o) (h : applyChange types (.removeType ty false) = .ok types') :
-    o.records = [] := by
-  by_cases hne : o.records = []
-  · exact hne
-  · rw [removeType_refused_with_records types ty o ho hne] at h
-    cases h
-
-theorem lookup_filter_removed (l : List (TypeId × ObjType)) (ty : TypeId) :
-    (l.filter (fun e => !(e.1 == ty))).lookup ty = none := by
-  induction l with
-  | nil => rfl
-  | cons e es ih =>
-    obtain ⟨k, p⟩ := e
-    by_cases hk : k = ty
-    · subst hk
-      simp [List.filter_cons, ih]
-    · have hk2 : (ty == k) = false := by simp [Ne.symm hk]
-      simp [List.filter_cons, List.lookup, hk, hk2, ih]
-
-/-- Removing a type and its records is accepted, and then the type is gone. -/
-theorem removeType_deleted_gone (types types' : List (TypeId × ObjType)) (ty : TypeId) (o : ObjType)
-    (ho : types.lookup ty = some o) (h : applyChange types (.removeType ty true) = .ok types') :
-    types'.lookup ty = none := by
-  simp only [applyChange, ho] at h
-  split at h
-  · cases h
-  · cases h
-    exact lookup_filter_removed types ty
+/-- The fields of a stripped record are declared. -/
+theorem stripRecord_declared (schema : Schema) (r : Record) :
+    ∀ fv ∈ (stripRecord schema r).fields, declaredIn schema fv.1 = true := by
+  intro fv hfv
+  unfold stripRecord at hfv
+  split at hfv
+  · rename_i hlen
+    have hsub : (r.fields.filter (fun fv => schema.any (fun fd => fd.1 == fv.1))).Sublist r.fields :=
+      List.filter_sublist
+    have hlen' : (r.fields.filter (fun fv => schema.any (fun fd => fd.1 == fv.1))).length = r.fields.length :=
+      beq_iff_eq.mp hlen
+    have heq := hsub.eq_of_length hlen'
+    rw [← heq] at hfv
+    exact by simpa [declaredIn] using (List.mem_filter.mp hfv).2
+  · exact by simpa [declaredIn] using (List.mem_filter.mp hfv).2
 
 /-- An accepted schema change of one `removeField` drops the stored values of the field from every record of the type. -/
 theorem changeSchemaT_removeField (valid : List (TypeId × ObjType) → Bool) (t t' : Tenant) (p : Principal)
     (strict : Bool) (expected : Option Nat) (ty : TypeId) (f : FieldId)
     (h : changeSchemaT valid t p strict expected [.removeField ty f] = .ok t') :
     ∀ o', t'.typ? ty = some o' → ∀ q ∈ o'.records, ∀ fv ∈ q.2.fields, !(fv.1 == f) = true := by
-  obtain ⟨_, types', hap, hty⟩ := changeSchemaT_ok valid t t' p strict expected [.removeField ty f] h
-  obtain ⟨r', hr', hr_eq, _⟩ := applyChanges_singleton valid t.types types' _ hap
+  obtain ⟨_, types1, hap, hty⟩ := changeSchemaT_ok valid t t' p strict expected [.removeField ty f] h
+  obtain ⟨r', hr', hr_eq, _⟩ := applyChanges_singleton valid t.types types1 _ hap
   obtain ⟨o, ho⟩ : ∃ o, t.types.lookup ty = some o := by
     cases hh : t.types.lookup ty with
     | none => simp [applyChange, hh] at hr'
     | some o => exact ⟨o, rfl⟩
   intro o' ho' q hq fv hfv
-  have hlook : r'.lookup ty = some o' := by
+  have hlook : (rewriteTypes t.types ([Change.removeField ty f].flatMap Change.touched) types1).lookup ty = some o' := by
     have h1 := ho'
     unfold Tenant.typ? at h1
-    rw [hty, hr_eq] at h1
+    rw [hty] at h1
     exact h1
-  exact (removeField_drops t.types r' ty f o ho hr' o' hlook).2 q hq fv hfv
+  rw [sc_lookup_rewriteTypes] at hlook
+  have hl1 : types1.lookup ty = some (match types1.lookup ty with | some x => x | none => o) := by
+    cases hh : types1.lookup ty with
+    | none => rw [hh] at hlook; simp at hlook
+    | some x => rfl
+  cases hh : types1.lookup ty with
+  | none => rw [hh] at hlook; simp at hlook
+  | some o1 =>
+    rw [hh] at hlook
+    simp only [Option.map_some, Option.some.injEq] at hlook
+    subst hlook
+    have hdrops := (removeField_drops t.types r' ty f o ho hr' o1 (by rw [← hr_eq]; exact hh)).1
+    have htouch : ty ∈ [Change.removeField ty f].flatMap Change.touched := by simp [Change.touched]
+    have horig : t.types.any (fun e0 => e0.1 == ty) = true := sc_any_of_lookup _ _ _ ho
+    have hrw : rwObj t.types ([Change.removeField ty f].flatMap Change.touched) ty o1 =
+        { o1 with records := o1.records.map (fun q => (q.1, stripRecord o1.schema q.2)) } := by
+      unfold rwObj
+      rw [if_pos]
+      simp only [Bool.and_eq_true]
+      exact ⟨by simpa using htouch, horig⟩
+    rw [hrw] at hq
+    obtain ⟨q1, -, rfl⟩ := List.mem_map.mp hq
+    have hd := stripRecord_declared o1.schema q1.2 fv hfv
+    unfold declaredIn at hd
+    obtain ⟨fd, hfd, hfdk⟩ := List.any_eq_true.mp hd
+    have h1 := hdrops fd hfd
+    have : fd.1 = fv.1 := by simpa using hfdk
+    rw [this] at h1
+    exact h1
+
+/-! ## Removing an object type -/
+
+/-- A removal of a type with records, without deleting them, is refused: the change list is `migrationRejected`. -/
+theorem removeType_refused_with_records (types : List (TypeId × ObjType)) (ty : TypeId) (o : ObjType)
+    (ho : types.lookup ty = some o) (hr : o.records ≠ []) :
+    removalsRefused types [.removeType ty false] = true := by
+  simp [removalsRefused, ho, hr]
+
+/-- An accepted removal of a type without deletion of its records had no records. -/
+theorem removeType_ok_empty (valid : List (TypeId × ObjType) → Bool) (t t' : Tenant) (p : Principal)
+    (strict : Bool) (expected : Option Nat) (ty : TypeId) (o : ObjType)
+    (ho : t.types.lookup ty = some o)
+    (h : changeSchemaT valid t p strict expected [.removeType ty false] = .ok t') : o.records = [] := by
+  obtain ⟨-, -, -, -, -, hrem⟩ := changeSchemaT_parts h
+  by_cases hne : o.records = []
+  · exact hne
+  · rw [removeType_refused_with_records t.types ty o ho hne] at hrem
+    cases hrem
+
+theorem lookup_filter_removed (l : List (TypeId × ObjType)) (ty : TypeId) :
+    (l.filter (fun e => !(e.1 == ty))).lookup ty = none := by
+  rw [sc_lookup_filter]; simp
+
+/-- Removing a type and its records is accepted, and then the type is gone. -/
+theorem removeType_deleted_gone (types types' : List (TypeId × ObjType)) (ty : TypeId) (o : ObjType)
+    (ho : types.lookup ty = some o) (h : applyChange types (.removeType ty true) = .ok types') :
+    types'.lookup ty = none := by
+  simp only [applyChange, ho, Except.ok.injEq] at h
+  subst h
+  exact lookup_filter_removed types ty
+
+/-! ## Defining an object type -/
+
+/-- Defining an object type the tenant has leaves it as it is. -/
+theorem defineType_existing (types : List (TypeId × ObjType)) (ty : TypeId)
+    (h : types.any (fun e => e.1 == ty) = true) : applyChange types (.defineType ty) = .ok types := by
+  simp [applyChange, h]
+
+end Strata

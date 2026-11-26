@@ -23,6 +23,9 @@ theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant
     (hinv : t.Inv) (h : stepTenantI t p i = .ok t') : t'.Inv := by
   cases i with
   | createTenant owner name => simp [stepTenantI] at h
+  | changeSchema ev strict cs =>
+    simp only [stepTenantI] at h
+    exact changeSchemaI_inv _ _ t t' strict ev cs hinv h
   | member j =>
     simp only [stepTenantI] at h
     cases hs : stepMember t.mt (j.ctxOf p) j with
@@ -104,8 +107,8 @@ theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant
         · simp only [Except.ok.injEq] at h
           subst h
           intro T q hq
-          exact inv_putType t ty { o with schema := makeRequired o.schema f } t.nextId (Nat.le_refl _)
-            (hinv ty o hty) hinv T q hq
+          exact inv_putType t ty { o with schema := makeRequired (ensureField o.schema f) f } t.nextId
+            (Nat.le_refl _) (hinv ty o hty) hinv T q hq
   | setUnique ty f strict =>
     simp only [stepTenantI] at h
     split at h
@@ -114,7 +117,7 @@ theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant
       | none => simp [hty] at h
       | some o =>
         simp only [hty] at h
-        cases hl : o.schema.lookup f with
+        cases hl : (ensureField o.schema f).lookup f with
         | none => simp [hl] at h
         | some d =>
           simp only [hl] at h
@@ -125,7 +128,7 @@ theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant
             · simp only [Except.ok.injEq] at h
               subst h
               intro T q hq
-              exact inv_putType t ty { o with schema := makeUnique o.schema f } t.nextId
+              exact inv_putType t ty { o with schema := makeUnique (ensureField o.schema f) f } t.nextId
                 (Nat.le_refl _) (hinv ty o hty) hinv T q hq
   | defineUnique ty fs =>
     simp only [stepTenantI] at h
