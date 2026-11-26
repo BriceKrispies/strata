@@ -3500,3 +3500,455 @@ team 1 1 s:ops - 3
 tenant 2 next=1 required=1
 type 2 required=
 end
+scenario h-read-records-visible-missing-and-invisible
+ok
+ok
+ok
+ok
+ok
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+row 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+row 3 owner=102 v=1 1=s:elm 2=i:7 6=i:7 9=s:p102
+row 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103 10=s:shown
+ok
+next -
+row 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103 10=s:shown
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+ok
+next -
+ok
+next -
+row 5 owner=100 v=1 1=r:1 4=i:3 5=b:1
+ok
+next -
+ok
+next -
+ok
+next -
+ok
+next -
+ok
+next -
+ok
+next -
+ok
+next -
+state
+tenant 1 next=6 required=1
+record 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+record 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101 10=s:hidden
+record 3 owner=102 v=1 1=s:elm 2=i:7 6=i:7 9=s:p102
+record 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103 10=s:shown
+type 2 required=
+type 2 record 5 owner=100 v=1 1=r:1 4=i:3 5=b:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-records-refusals
+ok
+err unknown_object
+err unknown_object
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+err limit_exceeded
+err limit_exceeded
+err limit_exceeded
+err no_tenant
+err no_tenant
+ok
+err unknown_object
+err limit_exceeded
+err unknown_object
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 100 0
+end
+scenario h-read-redaction-by-record-and-by-principal
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 3=b:1 6=i:7 9=s:p100 10=s:shown
+row 2 owner=100 v=1 1=s:ash 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:fir 3=b:1 6=i:7 9=s:p100
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 3=b:1 6=i:7 9=s:p100 10=s:shown
+row 2 owner=100 v=1 1=s:ash 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:fir 3=b:1 6=i:7 9=s:p100
+ok
+next -
+row 5 owner=100 v=1 4=i:3 5=b:1
+row 6 owner=101 v=1 4=i:1 5=b:0
+ok
+next -
+row 5 owner=100 v=1 5=b:1
+row 6 owner=101 v=1 5=b:0
+ok
+next -
+row 5 owner=100 v=1 5=b:1
+row 6 owner=101 v=1 5=b:0
+ok
+next -
+row 7 owner=100 v=1 1=s:open 2=i:3 3=s:note
+row 8 owner=100 v=1 1=s:open 2=i:0
+row 9 owner=100 v=1 1=s:open
+ok
+next -
+row 7 owner=100 v=1 1=s:open 2=i:3 3=s:note
+row 8 owner=100 v=1 1=s:open 2=i:0
+row 9 owner=100 v=1 1=s:open
+ok
+next -
+ok
+next -
+state
+tenant 1 next=10 required=1
+record 1 owner=100 v=1 1=s:oak 3=b:1 6=i:7 9=s:p100 10=s:shown
+record 2 owner=100 v=1 1=s:ash 3=b:0 6=i:7 9=s:p100 10=s:hidden
+record 3 owner=100 v=1 1=s:elm 6=i:7 9=s:p100 10=s:nothing
+record 4 owner=100 v=1 1=s:fir 3=b:1 6=i:7 9=s:p100
+type 2 required=
+type 2 record 5 owner=100 v=1 4=i:3 5=b:1
+type 2 record 6 owner=101 v=1 4=i:1 5=b:0
+type 4 required=
+type 4 record 7 owner=100 v=1 1=s:open 2=i:3 3=s:note
+type 4 record 8 owner=100 v=1 1=s:open 2=i:0 3=s:hid
+type 4 record 9 owner=100 v=1 1=s:open 3=s:none
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-query-orders-by-keys-then-id
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+next -
+row 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+row 3 owner=102 v=1 1=s:elm 2=i:7 6=i:7 9=s:p102
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 5 owner=100 v=1 1=s:yew 2=i:5 3=b:0 6=i:7 9=s:p100
+row 6 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103
+ok
+next -
+row 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+row 3 owner=102 v=1 1=s:elm 2=i:7 6=i:7 9=s:p102
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 5 owner=100 v=1 1=s:yew 2=i:5 3=b:0 6=i:7 9=s:p100
+row 6 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103
+ok
+next -
+row 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+row 5 owner=100 v=1 1=s:yew 2=i:5 3=b:0 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 6 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+row 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103
+ok
+next o3
+row 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+row 5 owner=100 v=1 1=s:yew 2=i:5 3=b:0 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+ok
+next -
+ok
+next -
+ok
+next -
+state
+tenant 1 next=7 required=1
+record 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+record 2 owner=101 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p101
+record 3 owner=102 v=1 1=s:elm 2=i:7 6=i:7 9=s:p102
+record 4 owner=103 v=1 1=s:fir 3=b:1 6=i:7 9=s:p103
+record 5 owner=100 v=1 1=s:yew 2=i:5 3=b:0 6=i:7 9=s:p100
+record 6 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-query-pages-and-cursors
+ok
+ok
+ok
+ok
+ok
+ok
+next o2
+row 5 owner=100 v=1 1=s:e 2=i:5 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+ok
+next o4
+row 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+ok
+next -
+row 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+ok
+next -
+ok
+next -
+ok
+next -
+row 5 owner=100 v=1 1=s:e 2=i:5 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+ok
+next -
+row 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+err invalid_intent
+err invalid_intent
+ok
+next o3
+row 5 owner=100 v=1 1=s:e 2=i:5 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+ok
+next -
+row 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+ok
+next o1
+row 5 owner=100 v=1 1=s:e 2=i:5 6=i:7 9=s:p100
+ok
+next -
+row 5 owner=100 v=1 1=s:e 2=i:5 6=i:7 9=s:p100
+row 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+row 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+ok
+ok
+next -
+state
+tenant 1 next=6 required=1
+record 1 owner=100 v=1 1=s:a 2=i:1 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:b 2=i:2 6=i:7 9=s:p100
+record 3 owner=100 v=1 1=s:c 2=i:3 6=i:7 9=s:p100
+record 4 owner=100 v=1 1=s:d 2=i:4 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-query-refusals-in-the-kernels-order
+ok
+err unknown_query
+err unknown_query
+err unknown_query
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err limit_exceeded
+err limit_exceeded
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 2=i:5 6=i:7 9=s:p100
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 2=i:5 6=i:7 9=s:p100
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 2=i:5 6=i:7 9=s:p100
+err invalid_intent
+err unknown_query
+err invalid_intent
+err no_tenant
+ok
+err unknown_query
+err unknown_query
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=1 1=s:oak 2=i:5 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 100 0
+end
+scenario h-read-query-filter-and-hidden-order-keys
+ok
+ok
+ok
+ok
+ok
+ok
+ok
+err workflow_violation
+ok
+ok
+next -
+row 2 owner=100 v=1 1=s:oak 2=i:3 6=i:7 9=s:p100
+ok
+next -
+row 4 owner=101 v=1 4=i:2 5=b:0
+row 5 owner=100 v=1 4=i:5 5=b:1
+row 3 owner=100 v=1 4=i:9 5=b:1
+ok
+next -
+row 3 owner=100 v=1 5=b:1
+row 4 owner=101 v=1 5=b:0
+row 5 owner=100 v=1 5=b:1
+ok
+next -
+row 3 owner=100 v=1 5=b:1
+row 4 owner=101 v=1 5=b:0
+row 5 owner=100 v=1 5=b:1
+ok
+next o2
+row 8 owner=100 v=1 1=s:open 2=i:0
+row 7 owner=100 v=1 1=s:open 2=i:2 3=s:a
+ok
+next o2
+row 7 owner=100 v=1 1=s:open 2=i:2 3=s:a
+ok
+next o2
+row 8 owner=100 v=1 1=s:open 2=i:0
+row 7 owner=100 v=1 1=s:open 2=i:2 3=s:a
+state
+tenant 1 next=9 required=1
+record 1 owner=100 v=1 1=s:elm 2=i:7 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:oak 2=i:3 6=i:7 9=s:p100
+type 2 required=
+type 2 record 3 owner=100 v=1 4=i:9 5=b:1
+type 2 record 4 owner=101 v=1 4=i:2 5=b:0
+type 2 record 5 owner=100 v=1 4=i:5 5=b:1
+type 4 required=
+type 4 record 6 owner=100 v=1 1=s:open 2=i:2 3=s:b
+type 4 record 7 owner=100 v=1 1=s:open 2=i:2 3=s:a
+type 4 record 8 owner=100 v=1 1=s:open 2=i:0 3=s:z
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-follows-writes-and-schema-changes
+ok
+ok
+ok
+ok
+next -
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+ok
+next -
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+row 1 owner=100 v=1 1=s:oak 2=i:5 3=b:1 6=i:7 9=s:p100 10=s:secret
+ok
+ok
+next -
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+ok
+ok
+next -
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+ok
+next -
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+ok
+ok
+next -
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+row 2 owner=100 v=1 1=s:ash 2=i:9 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+ok
+ok
+next -
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+ok
+next -
+row 3 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:more
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+ok
+ok
+next -
+row 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100
+row 3 owner=100 v=2 1=s:elm 2=i:7 6=i:7 9=s:p100
+ok
+ok
+ok
+next -
+row 4 owner=100 v=1 4=i:3 5=b:1
+ok
+ok
+ok
+next -
+row 5 owner=100 v=1 1=s:open 2=i:3 3=s:n
+state
+tenant 1 next=6 required=1,2
+record 1 owner=100 v=2 1=s:oak 2=i:5 3=b:0 6=i:7 9=s:p100 10=s:secret
+record 3 owner=100 v=2 1=s:elm 2=i:7 6=i:7 9=s:p100 10=s:more
+type 2 required=4
+type 2 record 4 owner=100 v=1 4=i:3 5=b:1
+type 4 required=
+type 4 record 5 owner=100 v=1 1=s:open 2=i:3 3=s:n
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-read-another-tenant-and-unknown-principal
+ok
+ok
+ok
+next -
+row 1 owner=200 v=1 1=s:oak 2=i:5 6=i:7 9=s:p200
+row 2 owner=201 v=1 1=s:ash 2=i:6 6=i:7 9=s:p201
+ok
+next -
+ok
+next -
+ok
+next -
+row 2 owner=201 v=1 1=s:ash 2=i:6 6=i:7 9=s:p201
+row 1 owner=200 v=1 1=s:oak 2=i:5 6=i:7 9=s:p200
+ok
+next -
+ok
+next -
+ok
+next -
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=3 required=1
+record 1 owner=200 v=1 1=s:oak 2=i:5 6=i:7 9=s:p200
+record 2 owner=201 v=1 1=s:ash 2=i:6 6=i:7 9=s:p201
+type 2 required=
+end
