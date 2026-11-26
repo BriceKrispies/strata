@@ -81,12 +81,15 @@ fn fixture_tenant() -> Tenant {
         revision: 0,
         event_seq: 0,
         schema_version: 1,
+        setting_defs: vec![],
+        overrides: vec![],
+        setting_revs: vec![],
     }
 }
 
 const FIXTURE_TENANT: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
-    128, 16, 2, 0, 1, 0, 0, 0, 0, 1,
+    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0,
 ];
 
 /// The fixture tenant with a role `2`, a team and an invitation (`fxTenantM` in
@@ -121,7 +124,7 @@ fn fixture_tenant_members() -> Tenant {
 const FIXTURE_TENANT_MEMBERS: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
     128, 16, 3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1,
-    7, 0, 0, 1,
+    7, 0, 0, 1, 0, 0, 0,
 ];
 
 /// The fixture tenant with one workflow on its object type `1` (slice 9): id `""`, field 1, initial
@@ -158,7 +161,7 @@ const FIXTURE_TENANT_WORKFLOW: &[u8] = &[
     4, 111, 112, 101, 110, // from "open"
     6, 99, 108, 111, 115, 101, 100, // to "closed"
     0, 0, // no guard, no assignments
-    1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 2, 0, 1, 0, 0, 0, 0, 1,
+    1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0,
 ];
 
 #[test]
@@ -746,6 +749,9 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
         revision: gen_nat(rng),
         event_seq: gen_nat(rng),
         schema_version: gen_nat(rng),
+        setting_defs: vec![],
+        overrides: vec![],
+        setting_revs: vec![],
     }
 }
 

@@ -43,6 +43,12 @@
 //! its field, a transition is its name (a string) before its source, and a tenant ends with its revision,
 //! its event sequence and its schema version (three naturals, in that order, after its invitations).
 //!
+//! Slice 12 adds the settings of a tenant. A write of a setting is intent tag `9`: its name (a string),
+//! its level (one byte: platform `0`, tenant `1`, team `2`, person `3`), an option of the team's number,
+//! an option of the value (none removes the override) and the expected revision (a natural). A tenant
+//! ends, after its schema version, with three lists: its setting definitions, its overrides and its
+//! setting revisions, each entry as its encoder describes.
+//!
 //! Every value has one encoding and the decoders accept nothing else: [`decode_all`] requires the
 //! input to be consumed exactly.
 //!
@@ -280,10 +286,68 @@ pub struct InvitationDef {
     pub revoked_by: Option<u64>,
 }
 
+/// A level at which a setting is overridden (slice 12; the Lean `SettingLevel`): platform `0`, tenant `1`,
+/// team `2`, person `3`, one byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingLevel {
+    Platform,
+    Tenant,
+    Team,
+    Person,
+}
+
+/// A setting's type (slice 12; the Lean `SettingType`): a flag `0`, a whole number `1`, text `2`, one byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingType {
+    Bool,
+    Int,
+    Str,
+}
+
+/// The subject of an override (slice 12; the Lean `SettingSubject`): the tenant (`0`), a team by its number
+/// (`1`) or a person by its number (`2`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingSubject {
+    Tenant,
+    Team(u64),
+    Person(u64),
+}
+
+/// What a setting allows (slice 12; the Lean `SettingAllowed`): a closed set of values (`0`), or a range of
+/// whole numbers, low then high (`1`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SettingAllowed {
+    Closed(Vec<Val>),
+    Range(i64, i64),
+}
+
+/// A setting's definition (slice 12; the Lean `SettingDef`): its name, its type, the levels that may hold an
+/// override, its lock (`None` when unlocked), its default and what it allows (`None` when anything).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingDef {
+    pub name: String,
+    pub ty: SettingType,
+    pub levels: Vec<SettingLevel>,
+    pub locked: Option<SettingLevel>,
+    pub default: Val,
+    pub allowed: Option<SettingAllowed>,
+}
+
+/// An override of a setting (slice 12; the Lean `SettingOverride`): its setting, its subject (which names its
+/// level), its value and its revision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingOverride {
+    pub name: String,
+    pub subject: SettingSubject,
+    pub value: Val,
+    pub revision: u64,
+}
+
 /// Everything one tenant owns, as the boundary carries it: its object types by id, its members
 /// (each user with its roles), what each role grants, its policies, the next record id, the size
-/// bounds, (slice 7) the roles its schema defines, its teams and its invitations, and (slice 9) its
-/// revision, its event sequence and its schema version. The owner is a member holding role `0`.
+/// bounds, (slice 7) the roles its schema defines, its teams and its invitations, (slice 9) its
+/// revision, its event sequence and its schema version, and (slice 12) its setting definitions, its
+/// overrides and the revision of each setting. The owner is a member holding role `0`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tenant {
     pub types: Vec<(u64, ObjType)>,
@@ -298,6 +362,9 @@ pub struct Tenant {
     pub revision: u64,
     pub event_seq: u64,
     pub schema_version: u64,
+    pub setting_defs: Vec<SettingDef>,
+    pub overrides: Vec<SettingOverride>,
+    pub setting_revs: Vec<(String, u64)>,
 }
 
 /// The acting context of a step: which tenant, and who is acting.
@@ -435,6 +502,15 @@ pub enum Intent {
         expected: Option<u64>,
         strict: bool,
         changes: Vec<Change>,
+    },
+    /// A write of a setting (slice 12; the Lean `writeSetting`): the setting's name, its level, the team when the
+    /// level is a team's, the value (`None` removes the override) and the revision the caller read.
+    WriteSetting {
+        setting: String,
+        level: SettingLevel,
+        team: Option<u64>,
+        value: Option<Val>,
+        expected_revision: u64,
     },
 }
 
@@ -855,6 +931,9 @@ fn put_tenant(out: &mut Vec<u8>, t: &Tenant) {
     put_nat(out, t.revision);
     put_nat(out, t.event_seq);
     put_nat(out, t.schema_version);
+    put_list(out, t.setting_defs.as_slice(), put_setting_def);
+    put_list(out, t.overrides.as_slice(), put_setting_override);
+    put_list(out, t.setting_revs.as_slice(), put_setting_rev);
 }
 
 /// A membership intent: its tag, then its fields (`encMemberIntent`).
@@ -957,6 +1036,91 @@ fn put_change(out: &mut Vec<u8>, c: &Change) {
     }
 }
 
+/// An option (`encOpt`): a tag, then the value when there is one.
+fn put_opt<T>(out: &mut Vec<u8>, v: &Option<T>, put: fn(&mut Vec<u8>, &T)) {
+    match v {
+        None => out.push(0),
+        Some(x) => {
+            out.push(1);
+            put(out, x);
+        }
+    }
+}
+
+/// A setting level: one byte, platform `0`, tenant `1`, team `2`, person `3` (`encLevel`).
+fn put_setting_level(out: &mut Vec<u8>, l: &SettingLevel) {
+    out.push(match l {
+        SettingLevel::Platform => 0,
+        SettingLevel::Tenant => 1,
+        SettingLevel::Team => 2,
+        SettingLevel::Person => 3,
+    });
+}
+
+/// A setting's type, one byte: flag `0`, whole number `1`, text `2` (`encSettingType`).
+fn put_setting_type(out: &mut Vec<u8>, t: &SettingType) {
+    out.push(match t {
+        SettingType::Bool => 0,
+        SettingType::Int => 1,
+        SettingType::Str => 2,
+    });
+}
+
+/// A subject: the tenant `0`, a team `1` and its number, a person `2` and its number (`encSubject`).
+fn put_setting_subject(out: &mut Vec<u8>, s: &SettingSubject) {
+    match s {
+        SettingSubject::Tenant => out.push(0),
+        SettingSubject::Team(t) => {
+            out.push(1);
+            put_nat(out, *t);
+        }
+        SettingSubject::Person(p) => {
+            out.push(2);
+            put_nat(out, *p);
+        }
+    }
+}
+
+/// What a setting allows: a closed list of values `0`, or a range of integers `1`, low then high (`encAllowed`).
+fn put_allowed(out: &mut Vec<u8>, a: &SettingAllowed) {
+    match a {
+        SettingAllowed::Closed(values) => {
+            out.push(0);
+            put_list(out, values.as_slice(), put_val);
+        }
+        SettingAllowed::Range(lo, hi) => {
+            out.push(1);
+            put_int(out, *lo);
+            put_int(out, *hi);
+        }
+    }
+}
+
+/// A setting definition: its name, its type, its levels, its lock as an option, its default and its allowed
+/// values as an option (`encSettingDef`).
+fn put_setting_def(out: &mut Vec<u8>, d: &SettingDef) {
+    put_str(out, &d.name);
+    put_setting_type(out, &d.ty);
+    put_list(out, d.levels.as_slice(), put_setting_level);
+    put_opt(out, &d.locked, put_setting_level);
+    put_val(out, &d.default);
+    put_opt(out, &d.allowed, put_allowed);
+}
+
+/// An override: its setting, its subject, its value and its revision (`encOverride`).
+fn put_setting_override(out: &mut Vec<u8>, o: &SettingOverride) {
+    put_str(out, &o.name);
+    put_setting_subject(out, &o.subject);
+    put_val(out, &o.value);
+    put_nat(out, o.revision);
+}
+
+/// A setting's revision at the tenant: its name, then its revision (`encSettingRev`).
+fn put_setting_rev(out: &mut Vec<u8>, e: &(String, u64)) {
+    put_str(out, &e.0);
+    put_nat(out, e.1);
+}
+
 fn put_ctx(out: &mut Vec<u8>, c: &Ctx) {
     put_nat(out, c.tenant);
     put_principal(out, &c.principal);
@@ -1022,6 +1186,20 @@ fn put_intent(out: &mut Vec<u8>, i: &Intent) {
             put_opt_nat(out, *expected);
             put_bool(out, *strict);
             put_list(out, changes.as_slice(), put_change);
+        }
+        Intent::WriteSetting {
+            setting,
+            level,
+            team,
+            value,
+            expected_revision,
+        } => {
+            out.push(9);
+            put_str(out, setting);
+            put_setting_level(out, level);
+            put_opt(out, team, put_u64);
+            put_opt(out, value, put_val);
+            put_nat(out, *expected_revision);
         }
     }
 }
@@ -1617,6 +1795,9 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
     let revision = get_nat(r)?;
     let event_seq = get_nat(r)?;
     let schema_version = get_nat(r)?;
+    let setting_defs = get_list(r, get_setting_def)?;
+    let overrides = get_list(r, get_setting_override)?;
+    let setting_revs = get_list(r, get_setting_rev)?;
     Some(Tenant {
         types,
         members,
@@ -1630,6 +1811,9 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
         revision,
         event_seq,
         schema_version,
+        setting_defs,
+        overrides,
+        setting_revs,
     })
 }
 
@@ -1727,6 +1911,91 @@ fn get_change(r: &mut Reader<'_>) -> Option<Change> {
     }
 }
 
+/// An option: a tag (`0` none, `1` some), then the value.
+fn get_opt<T>(r: &mut Reader<'_>, get: fn(&mut Reader<'_>) -> Option<T>) -> Option<Option<T>> {
+    match r.byte()? {
+        0 => Some(None),
+        1 => Some(Some(get(r)?)),
+        _ => None,
+    }
+}
+
+fn get_setting_level(r: &mut Reader<'_>) -> Option<SettingLevel> {
+    match r.byte()? {
+        0 => Some(SettingLevel::Platform),
+        1 => Some(SettingLevel::Tenant),
+        2 => Some(SettingLevel::Team),
+        3 => Some(SettingLevel::Person),
+        _ => None,
+    }
+}
+
+fn get_setting_type(r: &mut Reader<'_>) -> Option<SettingType> {
+    match r.byte()? {
+        0 => Some(SettingType::Bool),
+        1 => Some(SettingType::Int),
+        2 => Some(SettingType::Str),
+        _ => None,
+    }
+}
+
+fn get_setting_subject(r: &mut Reader<'_>) -> Option<SettingSubject> {
+    match r.byte()? {
+        0 => Some(SettingSubject::Tenant),
+        1 => Some(SettingSubject::Team(get_nat(r)?)),
+        2 => Some(SettingSubject::Person(get_nat(r)?)),
+        _ => None,
+    }
+}
+
+fn get_allowed(r: &mut Reader<'_>) -> Option<SettingAllowed> {
+    match r.byte()? {
+        0 => Some(SettingAllowed::Closed(get_list(r, get_val)?)),
+        1 => {
+            let lo = get_int(r)?;
+            let hi = get_int(r)?;
+            Some(SettingAllowed::Range(lo, hi))
+        }
+        _ => None,
+    }
+}
+
+fn get_setting_def(r: &mut Reader<'_>) -> Option<SettingDef> {
+    let name = get_str(r)?;
+    let ty = get_setting_type(r)?;
+    let levels = get_list(r, get_setting_level)?;
+    let locked = get_opt(r, get_setting_level)?;
+    let default = get_val(r)?;
+    let allowed = get_opt(r, get_allowed)?;
+    Some(SettingDef {
+        name,
+        ty,
+        levels,
+        locked,
+        default,
+        allowed,
+    })
+}
+
+fn get_setting_override(r: &mut Reader<'_>) -> Option<SettingOverride> {
+    let name = get_str(r)?;
+    let subject = get_setting_subject(r)?;
+    let value = get_val(r)?;
+    let revision = get_nat(r)?;
+    Some(SettingOverride {
+        name,
+        subject,
+        value,
+        revision,
+    })
+}
+
+fn get_setting_rev(r: &mut Reader<'_>) -> Option<(String, u64)> {
+    let name = get_str(r)?;
+    let revision = get_nat(r)?;
+    Some((name, revision))
+}
+
 fn get_ctx(r: &mut Reader<'_>) -> Option<Ctx> {
     let tenant = get_nat(r)?;
     let principal = get_principal(r)?;
@@ -1789,6 +2058,20 @@ fn get_intent(r: &mut Reader<'_>) -> Option<Intent> {
                 expected,
                 strict,
                 changes,
+            })
+        }
+        9 => {
+            let setting = get_str(r)?;
+            let level = get_setting_level(r)?;
+            let team = get_opt(r, get_u64)?;
+            let value = get_opt(r, get_val)?;
+            let expected_revision = get_nat(r)?;
+            Some(Intent::WriteSetting {
+                setting,
+                level,
+                team,
+                value,
+                expected_revision,
             })
         }
         _ => None,

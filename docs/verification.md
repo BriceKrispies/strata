@@ -174,6 +174,22 @@ The theorems are in `lean/Audit.lean` (the last section, after the first half's 
 | Aggregates: refusals | `aggregate_unknown_query`, `aggregate_unknown_aggregate`, `aggregate_undeclared_param`, `aggregate_unknown_object`, `aggregate_undeclared_filter`, `aggregate_unknown_field`, `aggregate_scan_window` | An unknown query or aggregate is `unknownQuery`; an undeclared parameter or filter field is `invalidIntent`; an unknown object type is `unknownObject`, an unknown named field `unknownField`; a type of more than 10,000 records is `limitExceeded` (rule `scan-bound-exceeded`) |
 | Aggregates: count over the rows | `aggregate_count_queryAll`, `queryAll_length_eq`, `plainSelected`, `aggregateOn_count_form`, `condHolds_redact`, `evalExpr_redact`, `fields_get_redact`, `lookup_filter`, `length_filterMap_eq_filter` | An ungrouped count with no request filter and no field is the number of rows of `queryAll` (the records the reader may read in whole that the query filter selects), when the query filter reads no field a read rule covers |
 
+Slice 12 (settings; `lean/Strata/Settings.lean`, the intent in `lean/Strata/Model.lean`, the theorems in the last
+section of `lean/Audit.lean`, which `lake env lean Audit.lean` checks):
+
+| Property | Theorems | Statement |
+|---|---|---|
+| Resolution (a read) | `resolve_value_eq`, `resolve_person`, `resolve_team`, `resolve_tenant`, `resolve_platform`, `resolve_default`, `resolve_closed_level_ignored` | The value read is the value of the most specific open level that holds an override (the person's, then the first team's in the kernel's order, then the tenant's), else the platform's value when the level is open and the value is of its type and within its limits, else the default; an override at a closed level is not read |
+| Refusals of a write, in the kernel's order | `write_system_refused`, `write_anonymous_refused`, `write_platform_refused`, `write_tenant_unauthorized`, `write_team_unauthorized`, `write_undefined_refused`, `write_closed_level_refused`, `write_team_unnamed_refused`, `write_team_unknown_refused`, `write_team_elsewhere_refused`, `write_wrong_type_refused`, `write_over_limit_refused`, `write_out_of_range_refused`, `write_not_allowed_refused`, `write_version_refused`, `write_remove_absent_refused`, `write_bound_refused` | Each refusal of `writeSettingT`, with the checks before it passed as premises (the caller holds the capabilities its level needs, the definition is found, the level is open, the team is named and exists, the value is of the type and allowed) |
+| An accepted write | `writeSettingT_ok_form`, `write_keeps_others`, `write_only_key_changes`, `write_sets_override`, `write_removes_override`, `write_raises_revision` | The write changes exactly one override, the one its key names: every other override is kept; the key holds the new value at the setting's next revision, or nothing after a removal; the setting's revision rises by one and no other setting's revision changes |
+| Events and transitions | `write_event`, `refused_write_no_transition` | An accepted write emits exactly one `SettingChanged` event, carrying the setting and its subject and no value; a refused write has no transition, so no state and no event follow |
+| Support | `writeSettingCore_ok_subject`, `writeSettingCore_ok_form`, `settingDef?_name`, `lookup_filter_append_self`, `lookup_filter_append_other`, `decisionView_*` | The subject an accepted write names exists, the form of the overrides and revisions it leaves, the definition a lookup finds has the name asked for, the revision lookup over the rewritten list, and the decision view (the fields a write reads) |
+
+Not proven: that an accepted write's subject is the one `settingSubjectOf` gives (the event is stated with it, and the
+shape lemmas give the subject the write names); the 100,000-override bound beyond its refusal; the executable kernels'
+refinement of the settings (the executable kernels call the spec's `writeSettingT` and `resolve` on the abstraction,
+so the refinement is by construction, `stepTenantI_refines` and `stepX_refines` cover the intent).
+
 Not proven (the statements are in the review note, not in the audit): the sum, minimum, maximum and top list over the
 rows of `queryAll` (`aggregate` folds the selected records, which a read rule can leave out, so the equation needs
 the rule check on the stored record); the scan bound of an aggregate's selection; the group bound; the cursor of a
@@ -484,7 +500,7 @@ From `transition::change_schema`, `plan_migration`, `apply_change` and `schema::
 | A new unique constraint that existing records already violate | `UniqueViolated` (a composite constraint), `MigrationRejected` (a strict unique field) | covered for a composite constraint (`defineUnique`) and for a strict unique field (`setUnique`); a lax change is kept, its count not modelled | 3 |
 | A breaking change that reaches dependents not all pinned at the version in force, or past their window, or that is not a retype; a retype whose stored values do not round-trip | `InvalidSchema` | covered for a field removed or redefined with another type that a composite constraint, constraint, workflow or policy of its type reads, and for a type removed and defined again while a field or a policy names it (`impactRefused`); no pins, no retype; the dependents of the fixture's reads and queries are not in the tenant, see the slice 11 review note; the pin rules stay in `Strata.Evolution` (`accepted`) | 11 |
 | A field change whose stored values cannot be carried | `MigrationRejected` | not covered | 11 |
-| Settings effects, such as a setting retyped while overrides exist | `InvalidSchema` | not covered | 12 |
+| Settings effects, such as a setting retyped while overrides exist | `InvalidSchema` | not covered (settings are not changed by a schema change in the model; see the slice 12 review note) | not done |
 | `Reject` and a record violates the new schema, constraints included | `MigrationRejected` | covered for the touched types of any change (`changeRefused`: the table check of slice 4 and a dangling reference), for a unique field (slice 3) and the constraints (slice 5) | 0, 3, 5, 11 |
 | `Grandfather`: violating records stay, counted in the event | | covered for every schema change (`lax`), and the count is the number of records of the touched types that violate the schema the change leaves (`violatedCount`, `changeGrandfathered`, `transition_setRequired`); the count's agreement with the kernel's per-record validation is checked by the differential run, not proved | 0, 9, 11 |
 | An object type removed while it has records and the change does not delete them; a role removed while held | `MigrationRejected`, `InvalidSchema` | object type: covered (`removeType_refused_with_records`), checked after the violation check as the kernel does; role: not covered | 11 |
@@ -592,14 +608,19 @@ which.
 
 ### Settings (`settings::write_setting`, `resolve`)
 
-Not covered; slice 12. `WriteSetting`: the caller is not a person (`Unauthorized`); platform
-level (`InvalidIntent`); tenant or team level without its capability (`Unauthorized`); undefined
-setting (`UnknownObject`); the level is not open (`InvalidIntent`); a team missing, unknown, or
-given where none is allowed (`InvalidIntent`); `null` or the wrong type (`TypeMismatch`); over
-the value limits (`LimitExceeded`); `expected_revision` not the override's (`VersionConflict`);
-removing an absent override (`InvalidIntent`); over 100,000 overrides (`LimitExceeded`).
-Accepted: the override put or removed; `SettingChanged`. Resolution: the person, team and tenant
-overrides, then the platform value, then the default, each only where its level is open.
+Covered in the model (slice 12, `lean/Strata/Settings.lean`; theorems in `lean/Audit.lean`, the last section).
+`WriteSetting`, in the kernel's check order: the caller is not a person (`Unauthorized`); the platform level
+(`InvalidIntent`); tenant or team level without its capability (`Unauthorized`); undefined setting
+(`UnknownObject`); the level is not open, by a level the definition does not allow or a lock (`InvalidIntent`);
+a team named where none is allowed, a team missing or unknown (`InvalidIntent`); `null` or a value of another
+type (`Invalid`, the kernel's `TypeMismatch`); a value past the value limits or outside a range (`LimitExceeded`);
+a value outside a closed set (`InvalidIntent`); `expected_revision` not the override's (`VersionConflict`); removing
+an absent override (`InvalidIntent`); a new override past 100,000 (`LimitExceeded`, not reached by any fixture).
+Accepted: the override put or removed, the setting's revision raised by one, one `SettingChanged` event (the
+setting, the level and the subject, with no value). Resolution: the person, team and tenant overrides, then the
+platform value, then the default, each only where its level is open. Covered by the differential run (`setting`
+operations and reads, and the `h-setting-*` scenarios); not covered: schema changes that define or remove
+settings, the platform level's values, timestamps and declared types, and the reference form of `allowed`.
 
 ### Ledger (`ledger::decide_intent`, `post_after`, `ledger_expiry::decide`)
 
@@ -681,7 +702,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **9 (done)** | Events and revisions: event bodies, sequence numbers, the revision, `Publish` effects, the grandfathered count (`lean/Strata/EventProofs.lean`, see the slice 9 review note) | 1 to 8, for their content |
 | 10 (done, with the proof gaps of the slice 10 review notes) | Reads: visibility, field read rules, record reads, named queries (filter, order, pages) (`lean/Strata/Reads.lean`), text search (`lean/Strata/Search.lean`) and aggregates (`lean/Strata/Aggregates.lean`) are in the model, with the executable versions (`lean/Strata/Impl/Read.lean`, `Impl/Search.lean`, `Impl/Aggregates.lean`), the harness and the generator; the codec of the read declarations is not, and the sum, minimum, maximum and top-list equations over rows are not proved | 5, 6 |
 | 11 (part a done in the model: the envelope, define and remove field, define and remove object type, the validity predicate with its concrete rules, the strict and lax checks, all in `lean/Strata/SchemaChange.lean`; not yet: the intent in `step`, retype with value migration, role and other entity kinds, the events, the executable kernels, the codec of the change list, the harness and the generator restriction, and the evolution model's acceptance as the rule for breaking changes) | 3 to 8 |
-| 12 | Settings | 6, 7 |
+| **12 (done)** | Settings: definitions in the fixture (the platform's `member_names` is built in), the intent `writeSetting` decided in the kernel's check order with one `SettingChanged` event, resolution as a read (`lean/Strata/Settings.lean`); the executable kernels, the codec (intent tag 9 and the tenant's three lists) and the Rust mirror, the harness, the generator and the `h-setting-*` scenarios cover them (see the slice 12 review note) | 6, 7 |
 | 13 | Ledger | 6 |
 | 14 | Operations | 1 to 8, 13 |
 | 15 | Triggers and automations | 6, 9 |
@@ -1481,6 +1502,64 @@ and `SchemaChangeProofs.lean` (the theorems), `Impl/SchemaI.lean` (the executabl
   random changes. The hand-written scenarios `h-schema-*` and `h-require-and-unique-define-absent-fields` were added to
   `scenarios.txt`; their expected outcomes are written by `bless_fixtures` from the model, so the first run of the
   correspondence test is the first comparison with the kernel.
+
+### Slice 12 review note: what was abstracted
+
+Slice 12 is settings. The model is `lean/Strata/Settings.lean` (the data types are in `ModelBase.lean`, the
+intent `writeSetting` in `Model.lean`, the fixture's definitions in `Fixture.lean`); the theorems are in the last
+section of `lean/Audit.lean`.
+
+- **Definitions are data, not schema changes.** A tenant holds its setting definitions (`settingDefs`); the kernel's
+  `define-setting` and `remove-setting` schema changes are not modelled, so the fixture's five definitions are given
+  in the initial tenants, and the schema change that would define a setting is left out (the gap table says so). The
+  platform's `member_names` (the kernel's `platform_definitions`) is known to every tenant and is found after the
+  tenant's own definitions, as the kernel's lookup does.
+- **The decision view.** `writeSettingCore` reads only the membership, the settings and the limits of the tenant, so it
+  runs on `Tenant.decisionView`, and `writeSettingT` writes its overrides and revisions back to the tenant. The
+  congruence lemmas (`writeSettingT_with`, `writeSettingT_header`) hold by reduction.
+- **Platform values are a parameter.** `resolveWith` takes the platform's values as a function. `resolve` gives none, as
+  the kernel's `resolve` does (the control plane's values are handed in by the kernel's `resolve_with`). The platform
+  level cannot be written by a tenant (`write_platform_refused`).
+- **Teams.** A team is a number in the model and `team<n>` in the kernel. The order of teams is the order of those
+  strings (`teamKey`), which is the kernel's ordering of team identifiers. The harness writes teams as `team<n>`.
+- **Capabilities.** `setting-write-tenant` and `setting-write-team` are the numbers `1` and `2` (`capWriteTenant`,
+  `capWriteTeam`); the fixture grants no capability, so only the owner, who holds every capability, writes at those
+  levels. A person writes its own person level without a capability, as the kernel's gateway checks it.
+- **Types and values.** Settings hold a flag, a whole number or text (`SettingType`). The kernel's timestamps and
+  declared types, and the reference form of `allowed` (`SettingAllowed`, a closed set or a range), are not modelled.
+  The kernel's `set_by` and `set_at` are not held: an override is its subject, value and revision.
+- **Events.** `SettingChanged` names the setting and the subject and carries no value, as the kernel's event does. The
+  model's subject for an accepted write is `settingSubjectOf`; the level of the event is the subject's.
+- **Working set and executable kernels.** A setting write decides on the header, which now carries the definitions,
+  the overrides and the revisions (`Header.settingDefs`, `overrides`, `settingRevs`), and applies as a new delta
+  (`Delta.settings`). The stage 1 and indexed kernels decide a write with `writeSettingT` on the abstraction and
+  replace the settings fields, so the refinement is by construction (`stepTenantI`, `setting_good`).
+- **Codec.** The intent is tag `9`: name, level byte, option of team, option of value, expected revision. The tenant
+  encoding appends three lists after the schema version: the definitions, the overrides and the revisions. The
+  fixtures `fix_tenant`, `fix_tenant_members`, `fix_result_ok` have three more zero bytes (three empty lists). The
+  Rust mirror is `crates/lean-kernel-ffi/src/codec.rs`.
+- **Harness.** `op <t> <p> setting <name> <level> [team=<n>] [v=<rev>] <value|remove>` and
+  `read <t> <p> setting <name>`. The state prints each override (`setting-override`) and each non-zero revision
+  (`setting-revision`) after the membership; a tenant with none prints as before. The read prints its source, its
+  team, its value and the tenant's revision. The kernel's fixture installs the five definitions in the schema batch
+  that installs the rest, so the revision and schema version are unchanged.
+- **Generator and scenarios.** `lean_diff::generate_reads` adds setting writes and reads to the generated
+  operations; `generate()` (the fixture scenarios) is unchanged. Sixteen `h-setting-*` scenarios cover each refusal,
+  each source of resolution and the team order.
+- **Not reached.** The 100,000-override bound (`LimitExceeded`) and the platform source of a read (no platform value is
+  held). The fixture's writers hold no capability, so no scenario has a writer write at the tenant or team level
+  (the editor's refusal is the case that is reached).
+- **Not covered.** Defining and removing settings by schema change (slice 11's change kinds have none for them);
+  the control plane's platform values; timestamps and declared types; the reference form of `allowed`; the events of
+  the settings' definition changes; the kernel's definition authority (`setting-define`), which the
+  definition-authority row of the gap table keeps.
+- **What was checked.** `lake build` builds the whole library with no `sorry`; `lake env lean Audit.lean` prints only
+  `propext`, `Classical.choice` and `Quot.sound` for the new theorems; `strata_model`, `--impl` and `--indexed` print
+  the same text on `fixtures/scenarios.txt`, and the outcome lines of the existing scenarios are those of
+  `expected.txt`. The Rust sides (codec, harness, generator, coverage, integration test) were written by reading and
+  are not compiled or run here; `to_run` lists them. `expected.txt` is not updated, so the new `h-setting-*` outcomes
+  are written by `bless_fixtures` from the model, and the first run of the correspondence test is the comparison with
+  the kernel.
 
 ## What covers the rest
 

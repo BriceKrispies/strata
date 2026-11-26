@@ -26,11 +26,11 @@
 //! bound is only ever built so that the model's size and the kernel's encoding agree on which
 //! side of it it falls (see `straddle`).
 
-use crate::lean::{build_model, kernel_output, op_outcomes, read_shapes, run_model};
+use crate::lean::{build_model, kernel_output, read_shapes, run_model};
 use std::path::Path;
 
 /// The intent kinds the generator produces; each is the word after the principal in an `op` line.
-pub const GENERATED_INTENTS: [&str; 19] = [
+pub const GENERATED_INTENTS: [&str; 20] = [
     "create",
     "update",
     "patch",
@@ -50,6 +50,7 @@ pub const GENERATED_INTENTS: [&str; 19] = [
     "invite-revoke",
     "redeem",
     "schema",
+    "setting",
 ];
 
 /// Known differences between the model and the kernel that are intended, each with its reason.
@@ -142,6 +143,11 @@ pub enum OpKind {
     ReadSearch(String, Vec<String>, Vec<String>),
     /// An aggregate of a named query: the query, the aggregate, and its arguments (`filter.<n>=<v>`, `k=v`).
     ReadAggregate(String, String, Vec<String>),
+    /// A setting write (slice 12): the setting's name, its level token, the team it names (when any), the
+    /// expected revision (`v=<n>`, omitted when zero) and the value token, or `None` for a removal.
+    SettingWrite(String, String, Option<u64>, u64, Option<String>),
+    /// A setting read (slice 12): the setting's name.
+    SettingRead(String),
 }
 
 pub type Scenario = Vec<Op>;
@@ -259,6 +265,23 @@ impl Op {
                 self.tenant,
                 self.principal.token(),
                 args.iter().map(|arg| format!(" {arg}")).collect::<String>()
+            ),
+            OpKind::SettingWrite(name, level, team, expected, value) => format!(
+                "{head} setting {name} {level}{}{}{}",
+                team.map_or(String::new(), |t| format!(" team={t}")),
+                if *expected == 0 {
+                    String::new()
+                } else {
+                    format!(" v={expected}")
+                },
+                value
+                    .as_ref()
+                    .map_or(" remove".to_string(), |v| format!(" {v}"))
+            ),
+            OpKind::SettingRead(name) => format!(
+                "read {} {} setting {name}",
+                self.tenant,
+                self.principal.token()
             ),
         }
     }
@@ -1925,10 +1948,211 @@ fn with_queries(seed: u64, mut ops: Scenario) -> Scenario {
     ops
 }
 
-/// The scenario of case `seed` with its searches and aggregates placed in (see `with_queries`). `generate`
-/// alone is what the fixture scenarios are made of, so the fixture does not change.
+/// The setting name a setting operation picks (slice 12): one of the fixture's five, the platform's
+/// `member_names`, or a name no tenant defines (`unknown_object`).
+fn setting_name(rng: &mut Lcg) -> &'static str {
+    match rng.below(14) {
+        0 => "nope",
+        1 | 2 => "notify",
+        3 | 4 => "density",
+        5 | 6 => "label",
+        7 => "banner",
+        8 | 9 => "mode",
+        _ => "member_names",
+    }
+}
+
+/// The level a setting write names (slice 12): the platform (always refused for a user), the tenant, a team
+/// or the person.
+fn setting_level(rng: &mut Lcg) -> &'static str {
+    match rng.below(10) {
+        0 => "platform",
+        1..=3 => "tenant",
+        4..=6 => "team",
+        _ => "person",
+    }
+}
+
+/// The value token a setting write carries, or `None` for a removal (slice 12). Mostly a value of the setting's
+/// type and within its allowed set or range, sometimes out of them, of the wrong type, or null.
+fn setting_value(rng: &mut Lcg, name: &str) -> Option<String> {
+    if rng.below(5) == 0 {
+        return None;
+    }
+    if rng.below(12) == 0 {
+        return Some("n".to_string());
+    }
+    if rng.below(10) == 0 {
+        let wrong = match name {
+            "notify" => "s:x",
+            "density" => "s:3",
+            _ => "i:1",
+        };
+        return Some(wrong.to_string());
+    }
+    let values: &[&str] = match name {
+        "notify" => &["b:0", "b:1"],
+        "density" => &["i:0", "i:3", "i:9", "i:10", "i:-1"],
+        "label" => &["s:x", "s:a_b"],
+        "banner" => &["s:hi", "s:none"],
+        "mode" => &["s:plain", "s:bold", "s:italic"],
+        "member_names" => &["s:members", "s:everyone", "s:nobody", "s:anyone"],
+        _ => &["s:x", "i:1", "b:1"],
+    };
+    Some(rng.pick(values).to_string())
+}
+
+/// The subject an override of a setting names, as a key of the guess (slice 12).
+fn setting_subject(level: &str, team: Option<u64>, principal: Caller) -> String {
+    match level {
+        "tenant" => "tenant".to_string(),
+        "team" => format!("team{}", team.unwrap_or(0)),
+        "person" => format!("p{}", principal.token()),
+        _ => "platform".to_string(),
+    }
+}
+
+/// What the settings generator expects of the overrides it has made so far (slice 12), as if every write it
+/// makes were accepted: the revision of each override held (by tenant, setting and subject) and the writes
+/// made to each setting of each tenant (the setting's revision counts them). A guess: an expected revision is
+/// the guessed one most of the time and another one sometimes, so accepted and refused writes both occur.
+#[derive(Default)]
+struct SettingGuess {
+    held: std::collections::BTreeMap<String, u64>,
+    writes: std::collections::BTreeMap<String, u64>,
+}
+
+/// A setting write (slice 12): a tenant, a caller (mostly the owner and the editor,
+/// with the system, an anonymous caller and a user of another tenant as well), a setting name, a level, a team
+/// (named at the team level, sometimes missing, and now and then at another level), an expected revision
+/// (usually the guessed one) and a value or a removal.
+fn setting_write_op(rng: &mut Lcg, guess: &mut SettingGuess) -> Op {
+    let tenant = match rng.below(12) {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0 => Caller::System,
+        1 | 2 => Caller::Anonymous,
+        3 => Caller::User(999),
+        4 => Caller::User(if home == 100 { 201 } else { 101 }),
+        5..=9 => Caller::User(home),
+        10..=13 => Caller::User(home + 1),
+        14..=16 => Caller::User(home + 2),
+        _ => Caller::User(home + 3),
+    };
+    let name = setting_name(rng);
+    let level = setting_level(rng);
+    // Teams 1 to 3: a team may not exist, which is a refusal.
+    let team = if level == "team" {
+        (rng.below(10) != 0).then(|| 1 + rng.below(3))
+    } else {
+        (rng.below(8) == 0).then(|| 1 + rng.below(3))
+    };
+    let key = format!("{tenant}/{name}/{}", setting_subject(level, team, principal));
+    let expected = if rng.below(6) == 0 {
+        rng.below(4)
+    } else {
+        guess.held.get(&key).copied().unwrap_or(0)
+    };
+    let value = setting_value(rng, name);
+    let revision = {
+        let writes = guess.writes.entry(format!("{tenant}/{name}")).or_insert(0);
+        *writes += 1;
+        *writes
+    };
+    if value.is_some() {
+        guess.held.insert(key, revision);
+    } else {
+        guess.held.remove(&key);
+    }
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::SettingWrite(
+            name.to_string(),
+            level.to_string(),
+            team,
+            expected,
+            value,
+        ),
+    }
+}
+
+/// A setting read (slice 12): a tenant, a caller (as for a record read) and a setting name.
+fn setting_read_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(12) {
+        0 => 3,
+        1 | 2 => 2,
+        _ => 1,
+    };
+    let principal = read_caller(rng, home_of(tenant));
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::SettingRead(setting_name(rng).to_string()),
+    }
+}
+
+/// A team defined by its owner and given a member, so that a team's override can resolve for that member
+/// (slice 12). Teams 1 and 2 only, in tenant 1 or, now and then, tenant 2.
+fn setting_team_setup(rng: &mut Lcg) -> Vec<Op> {
+    let tenant = if rng.below(4) == 0 { 2 } else { 1 };
+    let home = home_of(tenant);
+    let team = 1 + rng.below(2);
+    let member = home + rng.below(4);
+    vec![
+        Op {
+            tenant,
+            principal: Caller::User(home),
+            object: 1,
+            kind: OpKind::Team(team, "s:ops".to_string()),
+        },
+        Op {
+            tenant,
+            principal: Caller::User(home),
+            object: 1,
+            kind: OpKind::TeamAdd(team, member),
+        },
+    ]
+}
+
+/// The settings operations placed among the operations of a scenario, from a stream of their own (slice 12):
+/// writes and reads of the settings, and a team set up now and then. The team comes early, so that the
+/// writes and reads after it can see its member.
+fn with_settings(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7365_7474_696e_6773);
+    for _ in 0..4 {
+        rng.below(2);
+    }
+    if rng.below(2) == 0 {
+        let at = rng.below(ops.len() as u64 / 3 + 1) as usize;
+        for (k, op) in setting_team_setup(&mut rng).into_iter().enumerate() {
+            ops.insert(at + k, op);
+        }
+    }
+    let mut guess = SettingGuess::default();
+    for _ in 0..4 + rng.below(8) {
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let op = if rng.below(4) == 0 {
+            setting_read_op(&mut rng)
+        } else {
+            setting_write_op(&mut rng, &mut guess)
+        };
+        ops.insert(at, op);
+    }
+    ops
+}
+
+/// The scenario of case `seed` with its searches, aggregates and settings placed in (see `with_queries` and
+/// `with_settings`). `generate` alone is what the fixture scenarios are made of, so the fixture does not change.
 pub fn generate_reads(seed: u64) -> Scenario {
-    with_queries(seed, generate(seed))
+    with_settings(seed, with_queries(seed, generate(seed)))
 }
 
 /// The seed of case `index` in a run with base seed `base`.
@@ -2053,6 +2277,9 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::ReadQuery(..) => "read-query",
         OpKind::ReadSearch(..) => "read-search",
         OpKind::ReadAggregate(..) => "read-aggregate",
+        OpKind::SettingWrite(_, _, _, _, Some(_)) => "setting",
+        OpKind::SettingWrite(_, _, _, _, None) => "setting-remove",
+        OpKind::SettingRead(_) => "read-setting",
     }
 }
 
@@ -2060,14 +2287,16 @@ fn count_outcomes(scenarios: &[Scenario], lean: &[Vec<String>]) -> Outcomes {
     let mut counts = Outcomes::new();
     for (ops, out) in scenarios.iter().zip(lean) {
         // Line 0 is `scenario <name>`; then the lines of each operation, the first of which is its outcome.
-        for (op, group) in ops.iter().zip(op_outcomes(out)) {
+        for (op, group) in ops.iter().zip(op_groups(out)) {
             let line = &group[0];
             *counts.entry(line.clone()).or_default() += 1;
             *counts
                 .entry(format!("{} {line}", intent_name(op)))
                 .or_default() += 1;
             // The shapes of a read's answer, besides its outcome.
-            for shape in read_shapes(&op.render(), group) {
+            let mut shapes = read_shapes(&op.render(), group);
+            shapes.extend(setting_shapes(&op.render(), group));
+            for shape in shapes {
                 if !shape.ends_with(" ok") {
                     *counts.entry(shape).or_default() += 1;
                 }
@@ -2075,6 +2304,69 @@ fn count_outcomes(scenarios: &[Scenario], lean: &[Vec<String>]) -> Outcomes {
         }
     }
     counts
+}
+
+/// The outcome groups of an operation's output, cut as `lean::op_outcomes` cuts them, and in addition with
+/// the lines of a setting read (`source`, `team`, `value` and `tenant-rev`, slice 12) in the group of their
+/// read. `op_outcomes` does not know those lines, so it would start a group at each of them and the groups
+/// would fall out of step with the operations. Its continuation prefixes are repeated here for that reason.
+pub fn op_groups<S: AsRef<str>>(output: &[S]) -> Vec<&[S]> {
+    const CONTINUATION: [&str; 14] = [
+        "revision ",
+        "event ",
+        "effect ",
+        "next ",
+        "row ",
+        "examined ",
+        "hit ",
+        "scanned ",
+        "group ",
+        "top ",
+        "source ",
+        "team ",
+        "value ",
+        "tenant-rev ",
+    ];
+    let end = output
+        .iter()
+        .position(|line| line.as_ref() == "state")
+        .unwrap_or(output.len());
+    let mut groups: Vec<&[S]> = Vec::new();
+    let mut start: Option<usize> = None;
+    for (at, line) in output.iter().enumerate().take(end).skip(1) {
+        if CONTINUATION
+            .iter()
+            .any(|prefix| line.as_ref().starts_with(prefix))
+        {
+            continue;
+        }
+        if let Some(first) = start {
+            groups.push(&output[first..at]);
+        }
+        start = Some(at);
+    }
+    if let Some(first) = start {
+        groups.push(&output[first..end]);
+    }
+    groups
+}
+
+/// The shapes of a setting read's answer as the coverage counts them (slice 12): for an accepted read, the
+/// source its value came from (`read-setting ok source <source>`). Its refusals are counted by their own
+/// outcome, as for every intent.
+pub fn setting_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String> {
+    let mut words = rendered.split_whitespace();
+    if words.next() != Some("read") || words.nth(2) != Some("setting") {
+        return Vec::new();
+    }
+    if group.first().map(|line| line.as_ref()) != Some("ok") {
+        return Vec::new();
+    }
+    group
+        .iter()
+        .find_map(|line| line.as_ref().strip_prefix("source "))
+        .map(|source| vec![format!("read-setting ok source {source}")])
+        .unwrap_or_default()
 }
 
 /// [`diff_batch`] that also reports the outcomes counted in the Lean output.
@@ -2140,7 +2432,9 @@ fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
         | OpKind::ReadRecords(_)
         | OpKind::ReadQuery(..)
         | OpKind::ReadSearch(..)
-        | OpKind::ReadAggregate(..) => None,
+        | OpKind::ReadAggregate(..)
+        | OpKind::SettingWrite(..)
+        | OpKind::SettingRead(_) => None,
     }
 }
 
@@ -2319,6 +2613,23 @@ pub const REQUIRED_PER_INTENT: &[&str] = &[
     "read-query err unknown_query",
     "read-query err invalid_intent",
     "read-query err limit_exceeded",
+    // Settings (slice 12). The platform source is not required: the kernel's `resolve` holds no platform
+    // values, so no read reaches it.
+    "setting ok",
+    "setting-remove ok",
+    "setting err unauthorized",
+    "setting err invalid_intent",
+    "setting err unknown_object",
+    "setting err invalid",
+    "setting err limit_exceeded",
+    "setting err version_conflict",
+    "setting-remove err invalid_intent",
+    "read-setting err unknown_object",
+    "read-setting err no_tenant",
+    "read-setting ok source person",
+    "read-setting ok source team",
+    "read-setting ok source tenant",
+    "read-setting ok source default",
 ];
 
 /// Fail when the batch did not reach every outcome kind often enough: `ok`, every error the model

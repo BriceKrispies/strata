@@ -13,10 +13,9 @@
 //! Lean process, and that happens only once there is a disagreement to shrink.
 
 use crate::lean::{
-    build_model, compare_outputs, kernel_output, op_outcomes, read_shapes, run_model, Generator,
-    ScenarioStream,
+    build_model, compare_outputs, kernel_output, read_shapes, run_model, Generator, ScenarioStream,
 };
-use crate::lean_diff::lean_error_names;
+use crate::lean_diff::{lean_error_names, op_groups, setting_shapes};
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -227,7 +226,7 @@ fn minimise_disagreement(
 /// The accepted outcome kinds, one per intent kind of the scenario format: the intent's name
 /// followed by `ok`. `require` and `unique` are split by their mode, as the model's strict and lax
 /// schema outcomes differ.
-pub const ACCEPTED_KINDS: [&str; 23] = [
+pub const ACCEPTED_KINDS: [&str; 25] = [
     "create ok",
     "update ok",
     "patch ok",
@@ -251,6 +250,8 @@ pub const ACCEPTED_KINDS: [&str; 23] = [
     "redeem ok",
     "read-records ok",
     "read-query ok",
+    "setting ok",
+    "setting-remove ok",
 ];
 
 /// The outcome kinds of reads that a run must also reach: the shapes of an accepted read (with rows and
@@ -262,7 +263,11 @@ pub const ACCEPTED_KINDS: [&str; 23] = [
 /// because the fixture cannot reach them: an aggregate's unknown field (the kernel's definition checks refuse
 /// a declared field the object type lacks), its sum overflow (no fixture integer is near the limit) and its
 /// group bound (no field of the fixture has a thousand values).
-pub const READ_KINDS: [&str; 23] = [
+///
+/// The setting reads (slice 12) are the answer's source (`person`, `team`, `tenant` and `default`) and the two
+/// refusals a setting read can give. The platform source is not required: the kernel's `resolve` holds no
+/// platform values, so no read reaches it.
+pub const READ_KINDS: [&str; 29] = [
     "read-records ok rows>0",
     "read-records ok rows=0",
     "read-records err limit_exceeded",
@@ -286,6 +291,26 @@ pub const READ_KINDS: [&str; 23] = [
     "read-aggregate err unknown_query",
     "read-aggregate err invalid_intent",
     "read-aggregate err limit_exceeded scan-bound-exceeded",
+    "read-setting ok source person",
+    "read-setting ok source team",
+    "read-setting ok source tenant",
+    "read-setting ok source default",
+    "read-setting err unknown_object",
+    "read-setting err no_tenant",
+];
+
+/// The refusals of setting writes (slice 12), each by the intent that made it (`setting` for a write, and
+/// `setting-remove` for a removal). Unauthorized covers the editor at the tenant and team levels, the system and
+/// an anonymous caller; invalid_intent covers the platform level, a level the definition closes, a removal of
+/// an absent override, a team that does not exist and a team named at the person level.
+pub const SETTING_KINDS: &[&str] = &[
+    "setting err unauthorized",
+    "setting err invalid_intent",
+    "setting err unknown_object",
+    "setting err invalid",
+    "setting err limit_exceeded",
+    "setting err version_conflict",
+    "setting-remove err invalid_intent",
 ];
 
 /// Outcome kinds the model can print that no scenario can reach, each with the reason. They are
@@ -336,6 +361,7 @@ fn intent_of(op: &str) -> &'static str {
         return match tokens.get(3).copied() {
             Some("records") => "read-records",
             Some("query") => "read-query",
+            Some("setting") => "read-setting",
             _ => "unknown",
         };
     }
@@ -365,6 +391,9 @@ fn intent_of(op: &str) -> &'static str {
         Some("invite") => "invite",
         Some("invite-revoke") => "invite-revoke",
         Some("redeem") => "redeem",
+        // A removal has no value token, so its last token is `remove` (slice 12).
+        Some("setting") if tokens.last().copied() == Some("remove") => "setting-remove",
+        Some("setting") => "setting",
         _ => "unknown",
     }
 }
@@ -377,18 +406,25 @@ fn count_outcomes(
 ) {
     for (case, part) in cases.iter().zip(lean_parts) {
         // Line 0 is `scenario <name>`; then the lines of each operation, the first of which is its outcome.
-        for (op, group) in case.ops.iter().zip(op_outcomes(part)) {
+        for (op, group) in case.ops.iter().zip(op_groups(part)) {
             let line = &group[0];
+            let intent = intent_of(op);
             let kind = if *line == "ok" {
-                format!("{} ok", intent_of(op))
+                format!("{intent} ok")
             } else if let Some(error) = line.strip_prefix("err ") {
                 format!("err {error}")
             } else {
                 "unparsed".to_string()
             };
             *coverage.entry(kind).or_insert(0) += 1;
+            // A refusal of a setting write or read, by the intent that made it (slice 12).
+            if intent.contains("setting") && line.starts_with("err ") {
+                *coverage.entry(format!("{intent} {line}")).or_insert(0) += 1;
+            }
             // The shapes of a read's answer, besides its outcome.
-            for shape in read_shapes(op, group) {
+            let mut shapes = read_shapes(op, group);
+            shapes.extend(setting_shapes(op, group));
+            for shape in shapes {
                 if !shape.ends_with(" ok") {
                     *coverage.entry(shape).or_insert(0) += 1;
                 }
@@ -422,6 +458,7 @@ pub fn run(
         .collect();
     required.extend(ACCEPTED_KINDS.iter().map(|kind| kind.to_string()));
     required.extend(READ_KINDS.iter().map(|kind| kind.to_string()));
+    required.extend(SETTING_KINDS.iter().map(|kind| kind.to_string()));
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     // `lake exe` runs in `lean_dir`, so a relative batch path would be read from the wrong place.

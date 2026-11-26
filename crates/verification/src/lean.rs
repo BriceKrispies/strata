@@ -52,6 +52,8 @@
 //! | `read <t> <p> records <type> <ids..>` | `ReadRequest::Records`, the ids `n` or `a-b` |
 //! | `read <t> <p> query <name> [k=v ..] [page=<n>] [cursor=<c>]` | `ReadRequest::Named`; a cursor is `o<n>` (`PageCursor::Offset`) or `a<id>` (`After`) |
 //! | `Err.unknownQuery` (read only) | `UnknownQuery` |
+//! | `setting <name> <level> [team=<n>] [v=<rev>] <value\|remove>` (slice 12) | `WriteSetting`, the team `team<n>`, the expected revision `<rev>` (zero when absent); the fixture defines `notify`, `density`, `label`, `banner` and `mode` (`fixture_settings`) |
+//! | `read <t> <p> setting <name>` (slice 12) | `settings::resolve` for the principal; `err <kind>`, or the source, the team's number, the value and the tenant's revision |
 //!
 //! # The Main.lean protocol
 //!
@@ -71,7 +73,9 @@
 //!                              `revoke <user> <role>`, `team <team> <label>`, `team-assign <team> <role>`,
 //!                              `team-revoke <team> <role>`, `team-add <team> <user>`,
 //!                              `team-remove <team> <user>`, `invite <inv> <address> <roles> @<now>`,
-//!                              `invite-revoke <inv>`, `redeem <inv> @<now> [verified=<address>]`.
+//!                              `invite-revoke <inv>`, `redeem <inv> @<now> [verified=<address>]`, or a setting write
+//!                              (slice 12): `setting <name> <level> [team=<n>] [v=<rev>] <value|remove>`, a value being
+//!                              `i:<int>`, `s:<text>`, `b:0`, `b:1` or `n`.
 //!                              A text (name, label, address) is `s:<text>` with `_` for a space; roles
 //!                              are numbers separated by commas, or `-` for none; `@<now>` is the time of
 //!                              the request in milliseconds
@@ -579,6 +583,82 @@ fn fixture_queries() -> Vec<SchemaChange> {
         ),
     ];
     changes.into_iter().map(with_aggregates).collect()
+}
+
+/// The setting definitions of the fixture (slice 12, the model's `fixtureSettings`): `notify` (a flag, opened at the
+/// tenant and the person), `density` (a whole number from 0 to 9, opened at the tenant, the team and the person),
+/// `label` (text, opened at the team and the person), `banner` (text, opened at the tenant and the person, locked at
+/// the tenant) and `mode` (text from the closed set `plain` and `bold`, opened at the tenant and the team).
+fn fixture_settings() -> Vec<SchemaChange> {
+    let define = |name: &str,
+                  ty: &str,
+                  levels: &[SettingLevel],
+                  locked_by: Option<SettingLevel>,
+                  default: Value,
+                  allowed: Option<SettingAllowed>| {
+        SchemaChange::DefineSetting(SettingDef {
+            id: id(name.to_string()),
+            label: name.to_string(),
+            r#type: SettingType::new(ty).expect("fixture setting types are valid"),
+            default,
+            levels: levels.iter().copied().collect(),
+            locked_by,
+            area: None,
+            description: None,
+            allowed,
+        })
+    };
+    vec![
+        define(
+            "notify",
+            "bool",
+            &[SettingLevel::Tenant, SettingLevel::Person],
+            None,
+            Value::Bool(false),
+            None,
+        ),
+        define(
+            "density",
+            "i64",
+            &[
+                SettingLevel::Tenant,
+                SettingLevel::Team,
+                SettingLevel::Person,
+            ],
+            None,
+            Value::Int(3),
+            Some(SettingAllowed::Range { min: 0, max: 9 }),
+        ),
+        define(
+            "label",
+            "string",
+            &[SettingLevel::Team, SettingLevel::Person],
+            None,
+            Value::Str("plain".to_string()),
+            None,
+        ),
+        define(
+            "banner",
+            "string",
+            &[SettingLevel::Tenant, SettingLevel::Person],
+            Some(SettingLevel::Tenant),
+            Value::Str("none".to_string()),
+            None,
+        ),
+        define(
+            "mode",
+            "string",
+            &[SettingLevel::Tenant, SettingLevel::Team],
+            None,
+            Value::Str("plain".to_string()),
+            Some(SettingAllowed::Closed {
+                values: vec![
+                    Value::Str("plain".to_string()),
+                    Value::Str("bold".to_string()),
+                ],
+            }),
+        ),
+    ]
 }
 
 /// The aggregates and the declared fields of a fixture query (the model's `fixtureQueries`, slice 10, second
@@ -1152,6 +1232,72 @@ fn parse_member_op(rest: &[&str], ctx: &mut Context) -> Option<Intent> {
 
 /// A principal token of the scenario format: a number is that user, `system` the system and `anon` an
 /// anonymous caller.
+/// A settings level token (slice 12).
+fn parse_setting_level(token: &str) -> Option<SettingLevel> {
+    match token {
+        "platform" => Some(SettingLevel::Platform),
+        "tenant" => Some(SettingLevel::Tenant),
+        "team" => Some(SettingLevel::Team),
+        "person" => Some(SettingLevel::Person),
+        _ => None,
+    }
+}
+
+/// A setting value token (slice 12): `i:<int>`, `s:<text>` (no `_` for a space, as the model reads it), `b:0`,
+/// `b:1`, or `n` for null. The model's other forms (lists, references, repeated text) are not written here.
+fn parse_setting_value(token: &str) -> Option<Value> {
+    if token == "n" {
+        return Some(Value::Null);
+    }
+    if let Some(n) = token.strip_prefix("i:") {
+        return Some(Value::Int(n.parse().ok()?));
+    }
+    if let Some(text) = token.strip_prefix("s:") {
+        return Some(Value::Str(text.to_string()));
+    }
+    match token {
+        "b:0" => Some(Value::Bool(false)),
+        "b:1" => Some(Value::Bool(true)),
+        _ => None,
+    }
+}
+
+/// A setting write (slice 12): `setting <name> <level> [team=<n>] [v=<rev>] <value|remove>`, from the token
+/// `setting` on. The team is `team<n>`, the expected revision is zero when no `v=` token is given, and `remove`
+/// removes the override (the model's `parseSettingOp`).
+fn parse_setting_op(tokens: &[&str]) -> Option<Intent> {
+    let ["setting", name, level, more @ ..] = tokens else {
+        return None;
+    };
+    let level = parse_setting_level(level)?;
+    let (team, more) = match more.split_first() {
+        Some((first, rest)) => match first.strip_prefix("team=") {
+            Some(n) => (Some(n.parse::<u64>().ok()?), rest),
+            None => (None, more),
+        },
+        None => (None, more),
+    };
+    let (expected_revision, more) = match more.split_first() {
+        Some((first, rest)) => match first.strip_prefix("v=") {
+            Some(n) => (n.parse::<u64>().ok()?, rest),
+            None => (0, more),
+        },
+        None => (0, more),
+    };
+    let value = match more {
+        ["remove"] => None,
+        [value] => Some(parse_setting_value(value)?),
+        _ => return None,
+    };
+    Some(Intent::WriteSetting {
+        setting: SettingId::try_from(name.to_string()).ok()?,
+        level,
+        team: team.map(|n| id::<TeamId>(format!("team{n}"))),
+        value,
+        expected_revision,
+    })
+}
+
 fn parse_principal(token: &str) -> Principal {
     match token {
         "system" => Principal::System,
@@ -1360,6 +1506,8 @@ fn initial_world() -> World {
             object: ticket(),
             fields: vec![field_id(1), field_id(3)],
         });
+        // The setting definitions (slice 12), in the same batch, so the revision and schema version stay as they were.
+        changes.extend(fixture_settings());
         world = run(
             &world,
             principal(owner),
@@ -1614,6 +1762,106 @@ fn initial_membership() -> &'static [Vec<String>; 2] {
     })
 }
 
+/// A setting's subject as the printed forms name it (slice 12): the tenant, or the subject's own name, which is
+/// `team<n>` for a team and `p<n>` for a person in the kernel too.
+fn subject_text(level: SettingLevel, subject: &str) -> String {
+    match level {
+        SettingLevel::Tenant => "tenant".to_string(),
+        _ => subject.to_string(),
+    }
+}
+
+/// The settings of a tenant that hold an override or a revision (slice 12, the model's `settingLines`): one line
+/// per override in key order, then one per setting whose revision is above zero, by name. An override's key is its
+/// setting, its level and its subject, where the tenant's subject is the tenant's number `n`. Nothing when there are
+/// none, so a tenant without a setting write prints as before.
+fn setting_lines(n: u64, tenant: &TenantState) -> Vec<String> {
+    let Some(values) = tenant.setting_values.as_deref() else {
+        return Vec::new();
+    };
+    let mut overrides: Vec<(String, &SettingOverride)> = values
+        .overrides
+        .values()
+        .map(|held| {
+            let subject = match held.level {
+                SettingLevel::Tenant => n.to_string(),
+                _ => held.subject.clone(),
+            };
+            (
+                format!("{}/{}/{subject}", held.setting.as_str(), held.level.as_str()),
+                held,
+            )
+        })
+        .collect();
+    overrides.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out: Vec<String> = overrides
+        .iter()
+        .map(|(_, held)| {
+            format!(
+                "setting-override {n} {} level={} subject={} value={} rev={}",
+                held.setting.as_str(),
+                held.level.as_str(),
+                subject_text(held.level, &held.subject),
+                show_value(&held.value),
+                held.revision
+            )
+        })
+        .collect();
+    out.extend(
+        values
+            .revisions
+            .iter()
+            .filter(|(_, revision)| **revision > 0)
+            .map(|(setting, revision)| {
+                format!("setting-revision {n} {} {revision}", setting.as_str())
+            }),
+    );
+    out
+}
+
+/// The source of a resolved setting as the printed forms name it (slice 12).
+fn source_text(source: &SettingSource) -> &'static str {
+    match source {
+        SettingSource::Person => "person",
+        SettingSource::Team => "team",
+        SettingSource::Tenant => "tenant",
+        SettingSource::Platform => "platform",
+        SettingSource::Default => "default",
+    }
+}
+
+/// The lines of a setting read (slice 12, the model's `showSettingRead`): `err <kind>`, or `ok`, the source, the
+/// team's number (`-` for none), the value and the setting's revision at the tenant. A tenant that does not exist
+/// is `no_tenant`, and a name the kernel does not define is `unknown_object`, as the kernel refuses it.
+fn setting_read_lines(world: &World, ctx: &Context, name: &str) -> Vec<String> {
+    let Some(tenant) = world.tenants.get(&ctx.tenant) else {
+        return vec!["err no_tenant".to_string()];
+    };
+    let Ok(setting) = SettingId::try_from(name.to_string()) else {
+        return vec!["err unknown_object".to_string()];
+    };
+    match strata_kernel::settings::resolve(tenant, &ctx.principal, &setting) {
+        Err(error) => vec![format!("err {}", show_error(error.kind))],
+        Ok(resolution) => {
+            let team = match &resolution.team {
+                Some(team) => team
+                    .as_str()
+                    .strip_prefix("team")
+                    .unwrap_or(team.as_str())
+                    .to_string(),
+                None => "-".to_string(),
+            };
+            vec![
+                "ok".to_string(),
+                format!("source {}", source_text(&resolution.source)),
+                format!("team {team}"),
+                format!("value {}", show_value(&resolution.value)),
+                format!("tenant-rev {}", resolution.tenant_revision),
+            ]
+        }
+    }
+}
+
 fn show_world(world: &World) -> Vec<String> {
     let mut out = Vec::new();
     // Tenants 1 and 2 are always printed, `absent` when they are; tenant 3 only when a creation made it.
@@ -1690,6 +1938,8 @@ fn show_world(world: &World) -> Vec<String> {
         if n == 3 || lines != initial_membership()[n as usize - 1] {
             out.extend(lines);
         }
+        // The setting overrides and revisions (slice 12), after the membership, as the model prints them.
+        out.extend(setting_lines(n, tenant));
     }
     out
 }
@@ -1850,6 +2100,16 @@ fn event_text(event: &DomainEvent, changes: &[SchemaChange]) -> String {
             "member-changed who={} roles={}",
             member_text(principal),
             show_numbers(roles.iter().map(role_number).collect())
+        ),
+        EventBody::SettingChanged {
+            setting,
+            level,
+            subject,
+        } => format!(
+            "setting-changed setting={} level={} subject={}",
+            setting.as_str(),
+            level.as_str(),
+            subject_text(*level, subject)
         ),
         // The model has no such event. The line does not start with `event `, so a kernel that emits one
         // makes the comparison fail instead of being hidden by the filter of `outcome_lines`.
@@ -2279,6 +2539,13 @@ pub fn kernel_output(scenarios: &str) -> String {
                             existing: ExistingData::Reject,
                         }
                     }
+                    ["setting", ..] => match parse_setting_op(rest) {
+                        Some(intent) => intent,
+                        None => {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                    },
                     _ => match parse_member_op(rest, &mut ctx) {
                         Some(intent) => intent,
                         None => {
@@ -2339,6 +2606,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                         }
                         None => out.push(format!("unparsed {line}")),
                     },
+                    ["setting", name] => out.extend(setting_read_lines(&world, &ctx, name)),
                     _ => match parse_read(rest) {
                         Some(request) => out.extend(read_lines(&world.read(&request, &ctx))),
                         None => out.push(format!("unparsed {line}")),
@@ -2488,7 +2756,7 @@ pub fn parse_audit(output: &str) -> Vec<Checked> {
 /// a first line with the lines that follow it up to the next first line; the state lines at the end
 /// are not an operation's. The `k`th group is the outcome of the `k`th operation.
 pub fn op_outcomes<S: AsRef<str>>(output: &[S]) -> Vec<&[S]> {
-    const CONTINUATION: [&str; 10] = [
+    const CONTINUATION: [&str; 14] = [
         "revision ",
         "event ",
         "effect ",
@@ -2499,6 +2767,10 @@ pub fn op_outcomes<S: AsRef<str>>(output: &[S]) -> Vec<&[S]> {
         "scanned ",
         "group ",
         "top ",
+        "source ",
+        "team ",
+        "value ",
+        "tenant-rev ",
     ];
     let end = output
         .iter()
