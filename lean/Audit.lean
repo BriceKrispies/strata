@@ -1032,3 +1032,427 @@ import Strata
 #print axioms Strata.Impl.absX_commitWorldX
 #print axioms Strata.Impl.transitionX_refines
 #print axioms Strata.Impl.commitI_abs
+
+/-! ## Slice 10: reads (`Strata/Reads.lean`): records and named queries
+
+The statements are about the model's `read`. The theorems are checked by `lake env lean Audit.lean`,
+which is not a module of the `lake build` target. -/
+
+namespace Strata
+
+/-! ### Visibility and the system -/
+
+theorem system_never_visible (t : Tenant) (ty : TypeId) (r : Record) :
+    t.canRead .system ty r = false := by
+  simp [Tenant.canRead, Tenant.allows, Tenant.rolesOf, Tenant.mt, MTenant.rolesOf]
+
+theorem redact_system (rs : FieldRules) (ty : TypeId) (r : Record) :
+    redact rs .system ty r = r := by
+  have hkeep : r.fields.filter (fun fv => shownField rs .system ty r fv.1) = r.fields :=
+    List.filter_eq_self.mpr (fun a _ => by simp [shownField])
+  simp only [redact, hkeep]
+
+/-! ### Record reads -/
+
+theorem rowOf_visible {t : Tenant} {rs : FieldRules} {p : Principal} {ty : TypeId}
+    {id : RecordId} {row : RecordId × Record} (h : rowOf t rs p ty id = some row) :
+    ∃ r, t.recordAt ty id = some r ∧ t.canRead p ty r = true ∧ row = (id, redact rs p ty r) := by
+  unfold rowOf at h
+  cases hr : t.recordAt ty id with
+  | none => simp [hr] at h
+  | some r =>
+    cases hv : t.canRead p ty r with
+    | false => simp [hr, hv] at h
+    | true =>
+      simp only [hr, hv, ite_true] at h
+      exact ⟨r, rfl, hv, (Option.some.inj h).symm⟩
+
+/-- A missing record and an invisible one are left out the same way: neither yields a row. -/
+theorem missing_and_invisible_same (t : Tenant) (rs : FieldRules) (p : Principal) (ty : TypeId)
+    (id : RecordId) :
+    (t.recordAt ty id = none → rowOf t rs p ty id = none) ∧
+    (∀ r, t.recordAt ty id = some r → t.canRead p ty r = false → rowOf t rs p ty id = none) := by
+  constructor
+  · intro h
+    simp [rowOf, h]
+  · intro r hr hv
+    simp [rowOf, hr, hv]
+
+theorem readRecords_limit_first (t : Tenant) (spec : ReadSpec) (p : Principal) (ty : TypeId)
+    (ids : List RecordId) (h : maxReadIds < ids.length) :
+    readRecords t spec p ty ids = .error .limitExceeded := by
+  simp [readRecords, h]
+
+theorem readRecords_unknown_type (t : Tenant) (spec : ReadSpec) (p : Principal) (ty : TypeId)
+    (ids : List RecordId) (h : ids.length ≤ maxReadIds) (hty : t.typ? ty = none) :
+    readRecords t spec p ty ids = .error .unknownObject := by
+  have h' : ¬ maxReadIds < ids.length := by omega
+  simp [readRecords, h', hty]
+
+/-- The rows of a record read are the visible records, redacted, in request order. -/
+theorem readRecords_rows (t : Tenant) (spec : ReadSpec) (p : Principal) (ty : TypeId)
+    (ids : List RecordId) (rows : List (RecordId × Record))
+    (h : readRecords t spec p ty ids = .ok rows) :
+    rows = ids.filterMap (rowOf t spec.rules p ty) ∧
+    ∀ x ∈ rows, ∃ id r, t.recordAt ty id = some r ∧ t.canRead p ty r = true ∧
+      x = (id, redact spec.rules p ty r) := by
+  unfold readRecords at h
+  split at h
+  · simp at h
+  · split at h
+    · simp at h
+    · have hrows : rows = ids.filterMap (rowOf t spec.rules p ty) := by
+        simpa using (Except.ok.inj h).symm
+      refine ⟨hrows, ?_⟩
+      intro x hx
+      rw [hrows] at hx
+      obtain ⟨id, _, hid⟩ := List.mem_filterMap.mp hx
+      obtain ⟨r, hr, hv, hx'⟩ := rowOf_visible hid
+      exact ⟨id, r, hr, hv, hx'⟩
+
+/-- A read rule that hides a field of a stored record keeps that field out of every row, for every
+    reader but the system (which the rule does not restrict). -/
+theorem hidden_field_absent (rs : FieldRules) (p : Principal) (ty : TypeId) (r : Record)
+    (f : FieldId) (e : Expr) (hp : p ≠ .system) (hr : rs.rule ty f = some e)
+    (hh : condHolds (readEnv p r) (some e) = false) :
+    ∀ v, (f, v) ∉ (redact rs p ty r).fields := by
+  intro v hv
+  simp only [redact, List.mem_filter] at hv
+  obtain ⟨_, hs⟩ := hv
+  cases p with
+  | system => exact hp rfl
+  | user n => simp_all [shownField]
+  | anonymous => simp_all [shownField]
+
+/-- The system is refused every record, so it reads none: the answer is the error or the empty list. -/
+theorem system_reads_no_record (t : Tenant) (spec : ReadSpec) (ty : TypeId)
+    (ids : List RecordId) (h : ids.length ≤ maxReadIds) :
+    readRecords t spec .system ty ids =
+      if (t.typ? ty).isNone then .error .unknownObject else .ok [] := by
+  have h' : ¬ maxReadIds < ids.length := by omega
+  unfold readRecords
+  simp only [h', ite_false]
+  split
+  · rfl
+  · have : ids.filterMap (rowOf t spec.rules .system ty) = [] := by
+      apply List.filterMap_eq_nil_iff.mpr
+      intro id _
+      unfold rowOf
+      cases t.recordAt ty id with
+      | none => rfl
+      | some r => simp [system_never_visible]
+    simp [this]
+
+end Strata
+
+namespace Strata
+
+/-! ### Named queries -/
+
+theorem scanRows_mem (t : Tenant) (spec : ReadSpec) (p : Principal) (q : QueryDef)
+    (x : RecordId × Record) :
+    x ∈ scanRows t spec p q ↔ ∃ id r, (id, r) ∈ t.recordsOf q.ty ∧ t.canRead p q.ty r = true ∧
+      condHolds (readEnv p (redact spec.rules p q.ty r)) q.filter = true ∧
+      x = (id, redact spec.rules p q.ty r) := by
+  unfold scanRows
+  rw [List.mem_filterMap]
+  constructor
+  · rintro ⟨⟨id, r⟩, hmem, hx⟩
+    dsimp only at hx
+    split at hx
+    · rename_i hv
+      split at hx
+      · rename_i hf
+        simp only [Option.some.injEq] at hx
+        exact ⟨id, r, hmem, hv, hf, hx.symm⟩
+      · simp at hx
+    · simp at hx
+  · rintro ⟨id, r, hmem, hv, hf, rfl⟩
+    refine ⟨(id, r), hmem, ?_⟩
+    simp [hv, hf]
+
+theorem queryAll_mem_iff (t : Tenant) (spec : ReadSpec) (p : Principal) (q : QueryDef)
+    (x : RecordId × Record) : x ∈ queryAll t spec p q ↔ x ∈ scanRows t spec p q := by
+  unfold queryAll
+  exact List.mem_mergeSort
+
+/-- The rows of a named query are exactly the records the principal may read whose redacted copy
+    makes the filter exactly `true`, each redacted. -/
+theorem query_mem_iff (t : Tenant) (spec : ReadSpec) (p : Principal) (q : QueryDef)
+    (x : RecordId × Record) :
+    x ∈ queryAll t spec p q ↔ ∃ id r, (id, r) ∈ t.recordsOf q.ty ∧ t.canRead p q.ty r = true ∧
+      condHolds (readEnv p (redact spec.rules p q.ty r)) q.filter = true ∧
+      x = (id, redact spec.rules p q.ty r) := by
+  rw [queryAll_mem_iff, scanRows_mem]
+
+/-- A row of a named query hides no field a read rule hides on the record it was read from. -/
+theorem query_rows_hide (t : Tenant) (spec : ReadSpec) (p : Principal) (q : QueryDef)
+    (x : RecordId × Record) (hx : x ∈ queryAll t spec p q) :
+    ∃ id r, (id, r) ∈ t.recordsOf q.ty ∧ x = (id, redact spec.rules p q.ty r) ∧
+      ∀ f e, spec.rules.rule q.ty f = some e →
+        condHolds (readEnv p r) (some e) = false →
+        ∀ v, (f, v) ∉ x.2.fields := by
+  obtain ⟨id, r, hmem, hv, _, hxr⟩ := (query_mem_iff t spec p q x).mp hx
+  refine ⟨id, r, hmem, hxr, ?_⟩
+  intro f e hr hh v hvm
+  have hp : p ≠ .system := by
+    rintro rfl
+    simp [system_never_visible] at hv
+  rw [hxr] at hvm
+  exact hidden_field_absent spec.rules p q.ty r f e hp hr hh v hvm
+
+theorem orderKey_length (q : QueryDef) (row : RecordId × Record) :
+    (orderKey q row).length = (orderDirs q).length := by
+  simp [orderKey, orderDirs]
+
+/-- The rows of a named query are in order: each row's keys, then its id, are at most the next row's. -/
+theorem queryAll_sorted (t : Tenant) (spec : ReadSpec) (p : Principal) (q : QueryDef) :
+    (queryAll t spec p q).Pairwise
+      (fun a b => keysLe (orderDirs q) (orderKey q a) (orderKey q b) = true) := by
+  unfold queryAll
+  apply List.pairwise_mergeSort
+  · intro a b c h1 h2
+    exact keysLe_trans _ _ _ _ (orderKey_length q a) (orderKey_length q b)
+      (orderKey_length q c) h1 h2
+  · intro a b
+    exact keysLe_total _ _ _ (orderKey_length q a) (orderKey_length q b)
+
+theorem walk_eq_drop {α : Type} (L : List α) (size : Nat) (hs : 0 < size) :
+    ∀ n off, L.length - off ≤ n → walk L size off = L.drop off := by
+  intro n
+  induction n with
+  | zero =>
+    intro off h
+    have hlen : L.length ≤ off := by omega
+    unfold walk
+    split
+    · omega
+    · simp [List.drop_eq_nil_of_le hlen]
+  | succ n ih =>
+    intro off h
+    unfold walk
+    split
+    · rename_i hc
+      rw [ih (off + size) (by omega), ← List.drop_drop, List.take_append_drop]
+    · rename_i hc
+      rw [List.take_of_length_le (by simp; omega)]
+
+/-- The pages of a named query, concatenated, are the whole of its result, in order. Since the result
+    lists each record once, no record appears in two pages. -/
+theorem query_pages_concat (t : Tenant) (spec : ReadSpec) (p : Principal) (q : QueryDef)
+    (size : Nat) (hs : 0 < size) :
+    walk (queryAll t spec p q) size 0 = queryAll t spec p q := by
+  rw [walk_eq_drop _ size hs (queryAll t spec p q).length 0 (by simp), List.drop_zero]
+
+/-! ### The limits and refusals of a named query -/
+
+theorem query_unknown (t : Tenant) (spec : ReadSpec) (p : Principal) (qid : QueryId)
+    (params : List (String × Val)) (page : Option Nat) (cursor : Option Cursor)
+    (h : spec.queries.lookup qid = none) :
+    queryPage t spec p qid params page cursor = .error .unknownQuery := by
+  simp [queryPage, h]
+
+theorem query_undeclared_param (t : Tenant) (spec : ReadSpec) (p : Principal) (qid : QueryId)
+    (params : List (String × Val)) (page : Option Nat) (cursor : Option Cursor) (q : QueryDef)
+    (hq : spec.queries.lookup qid = some q)
+    (hp : params.any (fun kv => !(q.params.contains kv.1)) = true) :
+    queryPage t spec p qid params page cursor = .error .invalidIntent := by
+  unfold queryPage
+  rw [hq]
+  dsimp only
+  rw [if_pos hp]
+
+theorem query_page_zero (t : Tenant) (spec : ReadSpec) (p : Principal) (qid : QueryId)
+    (params : List (String × Val)) (page : Option Nat) (cursor : Option Cursor) (q : QueryDef)
+    (hq : spec.queries.lookup qid = some q)
+    (hp : params.any (fun kv => !(q.params.contains kv.1)) = false)
+    (hs : (page.or q.limit).getD defaultPage = 0) :
+    queryPage t spec p qid params page cursor = .error .invalidIntent := by
+  unfold queryPage
+  rw [hq]
+  dsimp only
+  rw [if_neg (by rw [hp]; decide), if_pos hs]
+
+theorem query_page_over (t : Tenant) (spec : ReadSpec) (p : Principal) (qid : QueryId)
+    (params : List (String × Val)) (page : Option Nat) (cursor : Option Cursor) (q : QueryDef)
+    (hq : spec.queries.lookup qid = some q)
+    (hp : params.any (fun kv => !(q.params.contains kv.1)) = false)
+    (hs : maxPage < (page.or q.limit).getD defaultPage) :
+    queryPage t spec p qid params page cursor = .error .limitExceeded := by
+  have hz : (page.or q.limit).getD defaultPage ≠ 0 := by omega
+  unfold queryPage
+  rw [hq]
+  dsimp only
+  rw [if_neg (by rw [hp]; decide), if_neg hz, if_pos hs]
+
+theorem query_wrong_cursor (t : Tenant) (spec : ReadSpec) (p : Principal) (qid : QueryId)
+    (params : List (String × Val)) (page : Option Nat) (q : QueryDef) (id : RecordId)
+    (hq : spec.queries.lookup qid = some q)
+    (hp : params.any (fun kv => !(q.params.contains kv.1)) = false)
+    (hs : 0 < (page.or q.limit).getD defaultPage)
+    (hb : (page.or q.limit).getD defaultPage ≤ maxPage) :
+    queryPage t spec p qid params page (some (.after id)) = .error .invalidIntent := by
+  have hz : (page.or q.limit).getD defaultPage ≠ 0 := by omega
+  have hb' : ¬ maxPage < (page.or q.limit).getD defaultPage := by omega
+  unfold queryPage
+  rw [hq]
+  dsimp only
+  rw [if_neg (by rw [hp]; decide), if_neg hz, if_neg hb']
+
+theorem query_scan_limit (t : Tenant) (spec : ReadSpec) (p : Principal) (qid : QueryId)
+    (params : List (String × Val)) (page : Option Nat) (off : Nat) (q : QueryDef)
+    (hq : spec.queries.lookup qid = some q)
+    (hp : params.any (fun kv => !(q.params.contains kv.1)) = false)
+    (hs : 0 < (page.or q.limit).getD defaultPage)
+    (hb : (page.or q.limit).getD defaultPage ≤ maxPage)
+    (hn : maxScan < ((t.typ? q.ty).map (fun o => o.records.length)).getD 0) :
+    queryPage t spec p qid params page (some (.offset off)) = .error .limitExceeded := by
+  have hz : (page.or q.limit).getD defaultPage ≠ 0 := by omega
+  have hb' : ¬ maxPage < (page.or q.limit).getD defaultPage := by omega
+  unfold queryPage
+  rw [hq]
+  dsimp only
+  rw [if_neg (by rw [hp]; decide), if_neg hz, if_neg hb', if_pos hn]
+
+/-! ### The system -/
+
+/-- The system is refused every record of every type, so a query's result for it is empty. -/
+theorem queryAll_system (t : Tenant) (spec : ReadSpec) (q : QueryDef) :
+    queryAll t spec .system q = [] := by
+  unfold queryAll scanRows
+  have h0 : (t.recordsOf q.ty).filterMap (fun e =>
+      if t.canRead .system q.ty e.2 then
+        (if condHolds (readEnv .system (redact spec.rules .system q.ty e.2)) q.filter = true then
+          some (e.1, redact spec.rules .system q.ty e.2) else none)
+      else none) = [] := by
+    apply List.filterMap_eq_nil_iff.mpr
+    intro e _
+    simp [system_never_visible]
+  rw [h0]
+  simp
+
+end Strata
+
+namespace Strata
+
+/-! ### Distinct rows, hidden fields and the system, for both reads -/
+
+theorem filterMap_fst_sublist {γ α β : Type} (l : List (γ × α)) (f : γ × α → Option (γ × β))
+    (hf : ∀ e b, f e = some b → b.1 = e.1) :
+    ((l.filterMap f).map Prod.fst).Sublist (l.map Prod.fst) := by
+  induction l with
+  | nil => simp
+  | cons e l ih =>
+    rw [List.filterMap_cons]
+    cases h : f e with
+    | none =>
+      simp only [h, List.map_cons]
+      exact ih.trans (List.sublist_cons_self _ _)
+    | some b =>
+      have hb := hf e b h
+      simp only [h, List.map_cons, hb]
+      exact List.Sublist.cons₂ _ ih
+
+theorem scanRows_ids_nodup (t : Tenant) (spec : ReadSpec) (p : Principal) (q : QueryDef)
+    (h : ((t.recordsOf q.ty).map Prod.fst).Nodup) :
+    ((scanRows t spec p q).map Prod.fst).Nodup := by
+  unfold scanRows
+  refine List.Sublist.nodup (filterMap_fst_sublist _ _ ?_) h
+  intro e b hb
+  dsimp only at hb
+  split at hb
+  · split at hb
+    · simp only [Option.some.injEq] at hb
+      rw [← hb]
+    · simp at hb
+  · simp at hb
+
+/-- The rows of a named query name each record once, when the records of its type are distinct. -/
+theorem queryAll_ids_nodup (t : Tenant) (spec : ReadSpec) (p : Principal) (q : QueryDef)
+    (h : ((t.recordsOf q.ty).map Prod.fst).Nodup) :
+    ((queryAll t spec p q).map Prod.fst).Nodup := by
+  unfold queryAll
+  exact ((List.mergeSort_perm _ _).map Prod.fst).nodup_iff.mpr (scanRows_ids_nodup t spec p q h)
+
+/-- The pages of a named query name no record twice: concatenated, they are the result. -/
+theorem query_pages_nodup (t : Tenant) (spec : ReadSpec) (p : Principal) (q : QueryDef)
+    (size : Nat) (hs : 0 < size) (h : ((t.recordsOf q.ty).map Prod.fst).Nodup) :
+    ((walk (queryAll t spec p q) size 0).map Prod.fst).Nodup := by
+  rw [query_pages_concat t spec p q size hs]
+  exact queryAll_ids_nodup t spec p q h
+
+/-- A row of a record read hides no field a read rule hides on the record it was read from; the
+    system reads no row at all, since no record is visible to it. -/
+theorem readRecords_hide (t : Tenant) (spec : ReadSpec) (p : Principal) (ty : TypeId)
+    (ids : List RecordId) (rows : List (RecordId × Record))
+    (h : readRecords t spec p ty ids = .ok rows) :
+    ∀ x ∈ rows, ∃ id r, t.recordAt ty id = some r ∧ x = (id, redact spec.rules p ty r) ∧
+      ∀ f e, spec.rules.rule ty f = some e →
+        condHolds (readEnv p r) (some e) = false →
+        ∀ v, (f, v) ∉ x.2.fields := by
+  intro x hx
+  obtain ⟨_, hrows⟩ := readRecords_rows t spec p ty ids rows h
+  obtain ⟨id, r, hr, hv, hxr⟩ := hrows x hx
+  refine ⟨id, r, hr, hxr, ?_⟩
+  intro f e hf hh v hvm
+  have hp : p ≠ .system := by
+    rintro rfl
+    simp [system_never_visible] at hv
+  rw [hxr] at hvm
+  exact hidden_field_absent spec.rules p ty r f e hp hf hh v hvm
+
+/-- The system's page of a named query is empty, whatever the query and the cursor. -/
+theorem queryPage_system_rows (t : Tenant) (spec : ReadSpec) (qid : QueryId)
+    (params : List (String × Val)) (page : Option Nat) (cursor : Option Cursor)
+    (r : ReadResult) (h : queryPage t spec .system qid params page cursor = .ok r) :
+    r.rows = [] := by
+  unfold queryPage at h
+  rcases hq : spec.queries.lookup qid with _ | q
+  · rw [hq] at h
+    simp at h
+  · rw [hq] at h
+    dsimp only at h
+    repeat' split at h
+    all_goals first
+      | (cases h <;> simp [queryAll_system])
+      | cases h
+
+end Strata
+
+/-! ## Slice 10 axioms -/
+#print axioms Strata.Val.leb_total
+#print axioms Strata.Val.leb_trans
+#print axioms Strata.dirLe_total
+#print axioms Strata.dirLe_trans
+#print axioms Strata.keysLe_total
+#print axioms Strata.keysLe_trans
+#print axioms Strata.system_never_visible
+#print axioms Strata.redact_system
+#print axioms Strata.rowOf_visible
+#print axioms Strata.missing_and_invisible_same
+#print axioms Strata.readRecords_limit_first
+#print axioms Strata.readRecords_unknown_type
+#print axioms Strata.readRecords_rows
+#print axioms Strata.hidden_field_absent
+#print axioms Strata.system_reads_no_record
+#print axioms Strata.scanRows_mem
+#print axioms Strata.queryAll_mem_iff
+#print axioms Strata.query_mem_iff
+#print axioms Strata.query_rows_hide
+#print axioms Strata.orderKey_length
+#print axioms Strata.queryAll_sorted
+#print axioms Strata.walk_eq_drop
+#print axioms Strata.query_pages_concat
+#print axioms Strata.query_unknown
+#print axioms Strata.query_undeclared_param
+#print axioms Strata.query_page_zero
+#print axioms Strata.query_page_over
+#print axioms Strata.query_wrong_cursor
+#print axioms Strata.query_scan_limit
+#print axioms Strata.queryAll_system
+#print axioms Strata.filterMap_fst_sublist
+#print axioms Strata.scanRows_ids_nodup
+#print axioms Strata.queryAll_ids_nodup
+#print axioms Strata.query_pages_nodup
+#print axioms Strata.readRecords_hide
+#print axioms Strata.queryPage_system_rows
