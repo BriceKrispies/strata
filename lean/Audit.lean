@@ -4744,3 +4744,518 @@ end Strata
 #print axioms Strata.no_suspension_without_authority
 #print axioms Strata.null_run_key_declined
 #print axioms Strata.run_key_is_hash_of_value
+
+/-! ## Slice 16: segments (`Strata/Segments.lean`, `Strata/SegmentsStep.lean`)
+
+The refusals of a definition in the kernel's order, the decision of a membership and of its entry and exit events on a
+pair and over a segment's persons, the rebuild, the removal and the triggers on the segment log. The row lemmas use the
+membership of a person in a segment (`memberOf?`) and the events of one decision (`segPair`, `segPairs`). -/
+
+
+namespace Strata
+
+theorem define_unauthorized_without_capability (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (refresh : Option Nat)
+    (h : t.holdsSegDefine p = false) :
+    segDefine t p id name subject pf predicate refresh = .error .unauthorized := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h]
+
+theorem define_blank_name_refused (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (refresh : Option Nat)
+    (h : t.holdsSegDefine p = true) (hb : isBlank (trimWs name) = true) :
+    segDefine t p id name subject pf predicate refresh = .error .invalidIntent := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h, hb]
+
+theorem define_long_name_refused (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (refresh : Option Nat)
+    (h : t.holdsSegDefine p = true) (hl : maxNameChars < (trimWs name).length) :
+    segDefine t p id name subject pf predicate refresh = .error .invalidIntent := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h, hl]
+
+theorem define_name_taken_refused (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (refresh : Option Nat)
+    (h : t.holdsSegDefine p = true) (hb : isBlank (trimWs name) = false)
+    (hl : ¬ maxNameChars < (trimWs name).length)
+    (ht : t.segments.any (fun s => s.1 != id && s.2.name == trimWs name) = true) :
+    segDefine t p id name subject pf predicate refresh = .error .invalidIntent := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h, hb, hl, ht]
+
+theorem define_subject_change_refused (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (refresh : Option Nat)
+    (h : t.holdsSegDefine p = true) (hb : isBlank (trimWs name) = false)
+    (hl : ¬ maxNameChars < (trimWs name).length)
+    (ht : t.segments.any (fun s => s.1 != id && s.2.name == trimWs name) = false)
+    (ho : (t.segment? id).any (fun o => o.subject != subject || o.principalField != pf) = true) :
+    segDefine t p id name subject pf predicate refresh = .error .invalidIntent := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h, hb, hl, ht, ho]
+
+theorem define_principal_field_refused (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (refresh : Option Nat) (o : ObjType)
+    (h : t.holdsSegDefine p = true) (hb : isBlank (trimWs name) = false)
+    (hl : ¬ maxNameChars < (trimWs name).length)
+    (ht : t.segments.any (fun s => s.1 != id && s.2.name == trimWs name) = false)
+    (ho : (t.segment? id).any (fun o => o.subject != subject || o.principalField != pf) = false)
+    (hty : t.typ? subject = some o) (hpf : principalFieldOk o pf = false) :
+    segDefine t p id name subject pf predicate refresh = .error .invalidIntent := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h, hb, hl, ht, ho, hty, hpf]
+
+theorem define_predicate_refused (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (refresh : Option Nat) (o : ObjType)
+    (h : t.holdsSegDefine p = true) (hb : isBlank (trimWs name) = false)
+    (hl : ¬ maxNameChars < (trimWs name).length)
+    (ht : t.segments.any (fun s => s.1 != id && s.2.name == trimWs name) = false)
+    (ho : (t.segment? id).any (fun o => o.subject != subject || o.principalField != pf) = false)
+    (hty : t.typ? subject = some o) (hpf : principalFieldOk o pf = true)
+    (hp : predicateOk o.schema predicate = false) :
+    segDefine t p id name subject pf predicate refresh = .error .invalidIntent := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h, hb, hl, ht, ho, hty, hpf, hp]
+
+theorem define_definer_unauthorized (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (refresh : Option Nat) (o : ObjType)
+    (h : t.holdsSegDefine p = true) (hb : isBlank (trimWs name) = false)
+    (hl : ¬ maxNameChars < (trimWs name).length)
+    (ht : t.segments.any (fun s => s.1 != id && s.2.name == trimWs name) = false)
+    (ho : (t.segment? id).any (fun o => o.subject != subject || o.principalField != pf) = false)
+    (hty : t.typ? subject = some o) (hpf : principalFieldOk o pf = true)
+    (hp : predicateOk o.schema predicate = true) (hr : t.holdsRead p subject = false) :
+    segDefine t p id name subject pf predicate refresh = .error .unauthorized := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h, hb, hl, ht, ho, hty, hpf, hp, hr]
+
+theorem define_refresh_refused (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (refresh : Option Nat) (o : ObjType) (r : Nat)
+    (h : t.holdsSegDefine p = true) (hb : isBlank (trimWs name) = false)
+    (hl : ¬ maxNameChars < (trimWs name).length)
+    (ht : t.segments.any (fun s => s.1 != id && s.2.name == trimWs name) = false)
+    (ho : (t.segment? id).any (fun o => o.subject != subject || o.principalField != pf) = false)
+    (hty : t.typ? subject = some o) (hpf : principalFieldOk o pf = true)
+    (hp : predicateOk o.schema predicate = true) (hr : t.holdsRead p subject = true)
+    (hf : refresh = some r) :
+    segDefine t p id name subject pf predicate refresh = .error .invalidIntent := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h, hb, hl, ht, ho, hty, hpf, hp, hr, hf]
+
+theorem define_segment_limit_refused (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (o : ObjType)
+    (h : t.holdsSegDefine p = true) (hb : isBlank (trimWs name) = false)
+    (hl : ¬ maxNameChars < (trimWs name).length)
+    (ht : t.segments.any (fun s => s.1 != id && s.2.name == trimWs name) = false)
+    (ho : (t.segment? id).any (fun o => o.subject != subject || o.principalField != pf) = false)
+    (hty : t.typ? subject = some o) (hpf : principalFieldOk o pf = true)
+    (hp : predicateOk o.schema predicate = true) (hr : t.holdsRead p subject = true)
+    (hc : maxSegments < (t.segments.filter (fun s => s.1 != id)).length + 1) :
+    segDefine t p id name subject pf predicate none = .error .limitExceeded := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h, hb, hl, ht, ho, hty, hpf, hp, hr, hc]
+
+theorem define_object_limit_refused (t : Tenant) (p : Principal) (id : SegmentId) (name : String)
+    (subject : TypeId) (pf : FieldId) (predicate : Expr) (o : ObjType)
+    (h : t.holdsSegDefine p = true) (hb : isBlank (trimWs name) = false)
+    (hl : ¬ maxNameChars < (trimWs name).length)
+    (ht : t.segments.any (fun s => s.1 != id && s.2.name == trimWs name) = false)
+    (ho : (t.segment? id).any (fun o => o.subject != subject || o.principalField != pf) = false)
+    (hty : t.typ? subject = some o) (hpf : principalFieldOk o pf = true)
+    (hp : predicateOk o.schema predicate = true) (hr : t.holdsRead p subject = true)
+    (hc : ¬ maxSegments < (t.segments.filter (fun s => s.1 != id)).length + 1)
+    (hk : maxSegmentsPerObject < (t.segments.filter (fun s => s.1 != id && s.2.subject == subject)).length + 1) :
+    segDefine t p id name subject pf predicate none = .error .limitExceeded := by
+  unfold segDefine segDefineSegs
+  simp [Except.map, h, hb, hl, ht, ho, hty, hpf, hp, hr, hc, hk]
+
+end Strata
+
+namespace Strata
+
+theorem memberOf_dropMember_self (ms : List Membership) (s : SegmentId) (P : PrincipalId) :
+    memberOf? (dropMember ms s P) s P = none := by
+  unfold memberOf? dropMember
+  induction ms with
+  | nil => rfl
+  | cons m ms ih => grind [List.filter_cons, List.find?_cons]
+
+theorem memberOf_setMember_self (ms : List Membership) (m : Membership) :
+    memberOf? (setMember ms m) m.segment m.person = some m := by
+  unfold memberOf? setMember
+  grind [List.find?_cons]
+
+theorem memberOf_dropMember_other (ms : List Membership) (s s' : SegmentId) (P P' : PrincipalId)
+    (h : ¬ (s = s' ∧ P = P')) :
+    memberOf? (dropMember ms s' P') s P = memberOf? ms s P := by
+  unfold memberOf? dropMember
+  induction ms with
+  | nil => rfl
+  | cons m ms ih => grind [List.filter_cons, List.find?_cons]
+
+theorem memberOf_setMember_other (ms : List Membership) (s : SegmentId) (P : PrincipalId) (m : Membership)
+    (h : ¬ (m.segment = s ∧ m.person = P)) :
+    memberOf? (setMember ms m) s P = memberOf? ms s P := by
+  unfold setMember
+  have := memberOf_dropMember_other ms s m.segment P m.person (fun hh => h ⟨hh.1.symm, hh.2.symm⟩)
+  unfold memberOf? at this ⊢
+  grind [List.find?_cons]
+
+
+namespace Strata
+
+theorem memberOf_some_key (ms : List Membership) (s : SegmentId) (P : PrincipalId) (w : Membership)
+    (h : memberOf? ms s P = some w) : w.segment = s && w.person = P := by
+  unfold memberOf? at h
+  have := List.find?_some h
+  simpa using this
+
+theorem segPair_member (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (P : PrincipalId) (acc : List Membership × List SegEvent) (b : Bool)
+    (hd : segDecide t s P = some b) :
+    (memberOf? (segPair t rev hop r p s P acc).1 s.id P).isSome = b := by
+  unfold segPair
+  rw [hd]
+  rcases hm : memberOf? acc.1 s.id P with _ | w <;> cases b <;> grind [memberOf_setMember_self, memberOf_dropMember_self, setMember, dropMember, memberOf_some_key]
+
+theorem segPair_other (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (Q P : PrincipalId) (s' : SegmentId) (acc : List Membership × List SegEvent)
+    (h : ¬ (s.id = s' ∧ Q = P)) :
+    memberOf? (segPair t rev hop r p s Q acc).1 s' P = memberOf? acc.1 s' P := by
+  unfold segPair
+  rcases hd : segDecide t s Q with _ | b
+  · rfl
+  · rcases hm : memberOf? acc.1 s.id Q with _ | w
+    · cases b <;> grind [memberOf_setMember_other, memberOf_dropMember_other, setMember, dropMember]
+    · have hk := memberOf_some_key _ _ _ _ hm
+      cases b <;> grind [memberOf_setMember_other, memberOf_dropMember_other, setMember, dropMember]
+
+theorem segPairs_other (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (P : PrincipalId) (L : List PrincipalId) (acc : List Membership × List SegEvent)
+    (h : ∀ Q ∈ L, Q ≠ P) :
+    memberOf? (segPairs t rev hop r p s L acc).1 s.id P = memberOf? acc.1 s.id P := by
+  induction L generalizing acc with
+  | nil => rfl
+  | cons Q L ih =>
+    unfold segPairs at *
+    simp only [List.foldl_cons] at *
+    have hQ : Q ≠ P := h Q (by simp)
+    rw [ih (segPair t rev hop r p s Q acc) (fun X hX => h X (by simp [hX]))]
+    exact segPair_other t rev hop r p s Q P s.id acc (fun hh => hQ hh.2)
+
+theorem segPairs_cons (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (Q : PrincipalId) (L : List PrincipalId) (acc : List Membership × List SegEvent) :
+    segPairs t rev hop r p s (Q :: L) acc = segPairs t rev hop r p s L (segPair t rev hop r p s Q acc) := rfl
+
+theorem segPairs_member (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (P : PrincipalId) (L : List PrincipalId) (acc : List Membership × List SegEvent) (b : Bool)
+    (hnd : L.Nodup) (hP : P ∈ L) (hd : segDecide t s P = some b) :
+    (memberOf? (segPairs t rev hop r p s L acc).1 s.id P).isSome = b := by
+  induction L generalizing acc with
+  | nil => simp at hP
+  | cons Q L ih =>
+    rw [segPairs_cons]
+    rw [List.nodup_cons] at hnd
+    by_cases hQP : Q = P
+    · subst hQP
+      rw [segPairs_other t rev hop r p s Q L _ (fun X hX hh => hnd.1 (hh ▸ hX))]
+      exact segPair_member t rev hop r p s Q acc b hd
+    · have hPL : P ∈ L := by
+        rcases List.mem_cons.1 hP with hh | hh
+        · exact absurd hh.symm hQP
+        · exact hh
+      exact ih (segPair t rev hop r p s Q acc) hnd.2 hPL
+
+theorem segPair_events_mem (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (Q : PrincipalId) (acc : List Membership × List SegEvent) :
+    ∀ e ∈ (segPair t rev hop r p s Q acc).2, e ∈ acc.2 ∨ e.person = Q := by
+  intro e he
+  unfold segPair at he
+  rcases hd : segDecide t s Q with _ | b
+  · rw [hd] at he; exact Or.inl he
+  · rw [hd] at he
+    cases b <;> rcases hm : memberOf? acc.1 s.id Q with _ | w <;> grind [segEvent]
+
+theorem segPairs_events_mem (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (L : List PrincipalId) (acc : List Membership × List SegEvent) :
+    ∀ e ∈ (segPairs t rev hop r p s L acc).2, e ∈ acc.2 ∨ e.person ∈ L := by
+  induction L generalizing acc with
+  | nil => intro e he; exact Or.inl he
+  | cons Q L ih =>
+    intro e he
+    rw [segPairs_cons] at he
+    rcases ih _ e he with h1 | h1
+    · rcases segPair_events_mem t rev hop r p s Q acc e h1 with h2 | h2
+      · exact Or.inl h2
+      · exact Or.inr (by simp [h2])
+    · exact Or.inr (by simp [h1])
+
+/-- A decided pair appends an entry exactly when it makes the person a member (the kernel's entry event). -/
+theorem segPair_entered_iff (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (P : PrincipalId) (acc : List Membership × List SegEvent)
+    (hacc : ∀ e ∈ acc.2, ¬ (e.segment = s.id ∧ e.person = P)) :
+    (∃ e ∈ (segPair t rev hop r p s P acc).2,
+        e.segment = s.id ∧ e.person = P ∧ e.direction = .entered) ↔
+      (segDecide t s P = some true ∧ (memberOf? acc.1 s.id P).isNone = true) := by
+  unfold segPair
+  rcases hd : segDecide t s P with _ | b
+  · constructor
+    · rintro ⟨e, he, h1, h2, -⟩
+      exact absurd ⟨h1, h2⟩ (hacc e he)
+    · intro h; simp at h
+  · rcases hm : memberOf? acc.1 s.id P with _ | w <;> cases b <;> simp only [hm] <;>
+      simp [segEvent, hd] <;> (intro x hx h1 h2; first | exact absurd ⟨h1, h2⟩ (hacc x hx) | (split at hx <;> first | exact absurd ⟨h1, h2⟩ (hacc x hx) | simp_all [segEvent]))
+
+
+namespace Strata
+
+theorem segPair_exited_iff (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (P : PrincipalId) (acc : List Membership × List SegEvent)
+    (hacc : ∀ e ∈ acc.2, ¬ (e.segment = s.id ∧ e.person = P)) :
+    (∃ e ∈ (segPair t rev hop r p s P acc).2,
+        e.segment = s.id ∧ e.person = P ∧ e.direction = .exited) ↔
+      (segDecide t s P = some false ∧ (memberOf? acc.1 s.id P).isSome = true) := by
+  unfold segPair
+  rcases hd : segDecide t s P with _ | b
+  · constructor
+    · rintro ⟨e, he, h1, h2, -⟩
+      exact absurd ⟨h1, h2⟩ (hacc e he)
+    · intro h; simp at h
+  · rcases hm : memberOf? acc.1 s.id P with _ | w <;> cases b <;> simp only [hm] <;>
+      simp [segEvent, hd] <;> (intro x hx h1 h2; first | exact absurd ⟨h1, h2⟩ (hacc x hx) | (split at hx <;> first | exact absurd ⟨h1, h2⟩ (hacc x hx) | simp_all [segEvent]))
+
+theorem segPair_events_super (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (Q : PrincipalId) (acc : List Membership × List SegEvent) :
+    ∀ e ∈ acc.2, e ∈ (segPair t rev hop r p s Q acc).2 := by
+  intro e he
+  unfold segPair
+  rcases hd : segDecide t s Q with _ | b
+  · simpa [hd] using he
+  · cases b <;> rcases hm : memberOf? acc.1 s.id Q with _ | w <;> simp only [hm, hd] <;>
+      (try split) <;> simp_all [List.mem_append, segEvent]
+
+theorem segPairs_events_super (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (L : List PrincipalId) (acc : List Membership × List SegEvent) :
+    ∀ e ∈ acc.2, e ∈ (segPairs t rev hop r p s L acc).2 := by
+  induction L generalizing acc with
+  | nil => intro e he; exact he
+  | cons Q L ih =>
+    intro e he
+    rw [segPairs_cons]
+    exact ih _ e (segPair_events_super t rev hop r p s Q acc e he)
+
+/-- Events of the rest of a segment's persons do not add an entry of a person not among them. -/
+theorem segPairs_entered_absent (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (P : PrincipalId) (L : List PrincipalId) (acc : List Membership × List SegEvent) (hPL : P ∉ L) :
+    (∃ e ∈ (segPairs t rev hop r p s L acc).2,
+        e.segment = s.id ∧ e.person = P ∧ e.direction = .entered) ↔
+    (∃ e ∈ acc.2, e.segment = s.id ∧ e.person = P ∧ e.direction = .entered) := by
+  induction L generalizing acc with
+  | nil => exact Iff.rfl
+  | cons Q L ih =>
+    have hPL' : P ∉ L := fun h => hPL (List.mem_cons_of_mem _ h)
+    rw [segPairs_cons, ih (segPair t rev hop r p s Q acc) hPL']
+    constructor
+    · rintro ⟨e, he, hk⟩
+      rcases segPair_events_mem t rev hop r p s Q acc e he with h | h
+      · exact ⟨e, h, hk⟩
+      · exact absurd (hk.2.1.symm.trans h) (fun hPQ => hPL (by simp [hPQ]))
+    · rintro ⟨e, he, hk⟩
+      exact ⟨e, segPair_events_super t rev hop r p s Q acc e he, hk⟩
+
+/-- Over the persons of a segment, in order and with no repeats, the entry event of a person appears exactly when the
+    decision makes it a member and it was not one before (the kernel's `decide_targets`, SEG-008). -/
+theorem fold_entered_iff (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (P : PrincipalId) (L : List PrincipalId) (acc : List Membership × List SegEvent)
+    (hnd : L.Nodup) (hP : P ∈ L)
+    (hacc : ∀ e ∈ acc.2, ¬ (e.segment = s.id ∧ e.person = P)) :
+    (∃ e ∈ (segPairs t rev hop r p s L acc).2,
+        e.segment = s.id ∧ e.person = P ∧ e.direction = .entered) ↔
+      (segDecide t s P = some true ∧ (memberOf? acc.1 s.id P).isNone = true) := by
+  induction L generalizing acc with
+  | nil => simp at hP
+  | cons Q L ih =>
+    rw [segPairs_cons]
+    rw [List.nodup_cons] at hnd
+    by_cases hQP : Q = P
+    · subst hQP
+      rw [segPairs_entered_absent t rev hop r p s Q L _ hnd.1]
+      exact segPair_entered_iff t rev hop r p s Q acc hacc
+    · have hPL : P ∈ L := by
+        rcases List.mem_cons.1 hP with hh | hh
+        · exact absurd hh.symm hQP
+        · exact hh
+      have hacc' : ∀ e ∈ (segPair t rev hop r p s Q acc).2, ¬ (e.segment = s.id ∧ e.person = P) := by
+        intro e he hk
+        rcases segPair_events_mem t rev hop r p s Q acc e he with h | h
+        · exact hacc e h hk
+        · exact hQP (h ▸ hk.2 ▸ rfl)
+      rw [ih (segPair t rev hop r p s Q acc) hnd.2 hPL hacc']
+      rw [segPair_other t rev hop r p s Q P s.id acc (fun hh => hQP hh.2)]
+
+/-- Events of the rest of a segment's persons do not add an entry of a person not among them. -/
+theorem segPairs_exited_absent (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (P : PrincipalId) (L : List PrincipalId) (acc : List Membership × List SegEvent) (hPL : P ∉ L) :
+    (∃ e ∈ (segPairs t rev hop r p s L acc).2,
+        e.segment = s.id ∧ e.person = P ∧ e.direction = .exited) ↔
+    (∃ e ∈ acc.2, e.segment = s.id ∧ e.person = P ∧ e.direction = .exited) := by
+  induction L generalizing acc with
+  | nil => exact Iff.rfl
+  | cons Q L ih =>
+    have hPL' : P ∉ L := fun h => hPL (List.mem_cons_of_mem _ h)
+    rw [segPairs_cons, ih (segPair t rev hop r p s Q acc) hPL']
+    constructor
+    · rintro ⟨e, he, hk⟩
+      rcases segPair_events_mem t rev hop r p s Q acc e he with h | h
+      · exact ⟨e, h, hk⟩
+      · exact absurd (hk.2.1.symm.trans h) (fun hPQ => hPL (by simp [hPQ]))
+    · rintro ⟨e, he, hk⟩
+      exact ⟨e, segPair_events_super t rev hop r p s Q acc e he, hk⟩
+
+/-- Over the persons of a segment, in order and with no repeats, the entry event of a person appears exactly when the
+    decision makes it a member and it was not one before (the kernel's `decide_targets`, SEG-008). -/
+theorem fold_exited_iff (t : Tenant) (rev hop : Nat) (r : SegReason) (p : Principal) (s : SegmentDef)
+    (P : PrincipalId) (L : List PrincipalId) (acc : List Membership × List SegEvent)
+    (hnd : L.Nodup) (hP : P ∈ L)
+    (hacc : ∀ e ∈ acc.2, ¬ (e.segment = s.id ∧ e.person = P)) :
+    (∃ e ∈ (segPairs t rev hop r p s L acc).2,
+        e.segment = s.id ∧ e.person = P ∧ e.direction = .exited) ↔
+      (segDecide t s P = some false ∧ (memberOf? acc.1 s.id P).isSome = true) := by
+  induction L generalizing acc with
+  | nil => simp at hP
+  | cons Q L ih =>
+    rw [segPairs_cons]
+    rw [List.nodup_cons] at hnd
+    by_cases hQP : Q = P
+    · subst hQP
+      rw [segPairs_exited_absent t rev hop r p s Q L _ hnd.1]
+      exact segPair_exited_iff t rev hop r p s Q acc hacc
+    · have hPL : P ∈ L := by
+        rcases List.mem_cons.1 hP with hh | hh
+        · exact absurd hh.symm hQP
+        · exact hh
+      have hacc' : ∀ e ∈ (segPair t rev hop r p s Q acc).2, ¬ (e.segment = s.id ∧ e.person = P) := by
+        intro e he hk
+        rcases segPair_events_mem t rev hop r p s Q acc e he with h | h
+        · exact hacc e h hk
+        · exact hQP (h ▸ hk.2 ▸ rfl)
+      rw [ih (segPair t rev hop r p s Q acc) hnd.2 hPL hacc']
+      rw [segPair_other t rev hop r p s Q P s.id acc (fun hh => hQP hh.2)]
+
+theorem eraseDups_loop_nodup {α : Type} [BEq α] [LawfulBEq α] (as bs : List α) (h : bs.Nodup) :
+    (List.eraseDupsBy.loop (fun x1 x2 => x1 == x2) as bs).Nodup := by
+  induction as generalizing bs with
+  | nil => simpa [List.eraseDupsBy.loop] using (List.reverse_perm bs).nodup_iff.2 h
+  | cons a as ih =>
+    rw [List.eraseDupsBy.loop]
+    split
+    · exact ih _ h
+    · rename_i hany
+      apply ih
+      apply List.nodup_cons.2
+      refine ⟨?_, h⟩
+      intro hm
+      have := List.any_eq_false.1 hany a hm
+      simp at this
+
+theorem eraseDups_nodup' {α : Type} [BEq α] [LawfulBEq α] (l : List α) : l.eraseDups.Nodup :=
+  eraseDups_loop_nodup l [] (List.nodup_nil)
+
+/-- After a rebuild, a person with a subject record is a member exactly when the predicate holds on that record (SEG-022):
+    the rows of a rebuild decide every person of the subject type, and the person's record is the one the kernel locates. -/
+theorem rebuild_member_iff (t : Tenant) (p : Principal) (id : SegmentId) (hop : Nat) (s : SegmentDef)
+    (hs : t.segment? id = some s) (hsid : s.id = id) (o : ObjType) (hty : t.typ? s.subject = some o)
+    (rid : RecordId) (r : Record) (hrec : (rid, r) ∈ o.records) (P : PrincipalId)
+    (hP : recordPerson s.principalField r = some P)
+    (hsel : segPersonRecord t s P = some r) (hev : ∃ b, segHolds s r P = some b) :
+    (memberOf? (segRebuildPass t p id hop).1 id P).isSome = true ↔ segHolds s r P = some true := by
+  obtain ⟨b, hb⟩ := hev
+  have hd : segDecide t s P = some b := by
+    unfold segDecide; rw [hsel]; exact hb
+  have hq : (rid, r) ∈ o.records.mergeSort (fun a b => decide (a.1 ≤ b.1)) :=
+    List.mem_mergeSort.2 hrec
+  have hmem : P ∈ ((o.records.mergeSort (fun a b => decide (a.1 ≤ b.1))).filterMap
+      (fun q => recordPerson s.principalField q.2)).eraseDups := by
+    rw [List.mem_eraseDups, List.mem_filterMap]
+    exact ⟨(rid, r), hq, hP⟩
+  unfold segRebuildPass
+  rw [hs]
+  dsimp only
+  rw [hty]
+  dsimp only
+  rw [← hsid, segPairs_member t t.revision hop .predicateChange p s P _ _ _ (eraseDups_nodup' _) hmem hd]
+  cases b <;> simp [hb]
+
+/-- Removing a segment writes no event, and leaves no membership of it (SEG-026). -/
+theorem segTransition_remove_quiet (w : World) (id : SegmentId) (c : Ctx) (r : SegTransition)
+    (h : segTransition w (.remove id) c = .ok r) :
+    r.segEvents = [] ∧ r.effects = [] := by
+  unfold segTransition at h
+  split at h
+  · cases h
+  · rename_i t _
+    cases hd : segRemove t c.principal id with
+    | error e => simp [hd, Except.map] at h
+    | ok t' => simp [hd, Except.map] at h; subst h; simp
+
+theorem segRemove_memberships (t t' : Tenant) (p : Principal) (id : SegmentId)
+    (h : segRemove t p id = .ok t') : ∀ m ∈ t'.memberships, m.segment ≠ id := by
+  unfold segRemove at h
+  split at h
+  · cases h
+  · split at h
+    · cases h
+    · cases h
+      intro x hx
+      have := (List.mem_filter.1 hx).2
+      simpa using this
+
+/-- A trigger that is paused decides nothing for a segment event (`segment_flow::decide`). -/
+theorem segTrigger_paused_no_effect (t : Tenant) (pos : Nat) (e : SegEvent) (tr : TriggerDef)
+    (h : tr.paused = true) : decideSegTrigger t pos e tr = none := by
+  simp [decideSegTrigger, h]
+
+/-- A trigger whose automation is gone declines `automationRemoved` for a segment event. -/
+theorem segTrigger_missing_automation_declined (t : Tenant) (pos : Nat) (e : SegEvent) (tr : TriggerDef)
+    (hp : tr.paused = false) (ha : t.automationDef? tr.automation = none) :
+    decideSegTrigger t pos e tr = some (.declineAutomation { trigger := tr.id, automation := tr.automation, eventSeq := pos, hop := e.hop, reason := .automationRemoved }) := by
+  simp [decideSegTrigger, hp, ha]
+
+/-- A trigger whose automation is suspended declines `runAsSuspended` for a segment event. -/
+theorem segTrigger_suspended_declined (t : Tenant) (pos : Nat) (e : SegEvent) (tr : TriggerDef) (a : AutomationDef)
+    (hp : tr.paused = false) (ha : t.automationDef? tr.automation = some a) (hs : a.suspendedFor.isSome = true) :
+    decideSegTrigger t pos e tr = some (.declineAutomation { trigger := tr.id, automation := tr.automation, eventSeq := pos, hop := e.hop, reason := .runAsSuspended }) := by
+  simp [decideSegTrigger, hp, ha, hs]
+
+/-- A trigger on segment entries matches exactly the entries into its segment (`segment_flow::matches`). -/
+theorem segment_trigger_matches_entries (s : SegmentId) (e : SegEvent) :
+    TriggerOn.matchesSeg (.segmentEntered s) e = true ↔ e.direction = .entered ∧ s = e.segment := by
+  simp [TriggerOn.matchesSeg]
+
+end Strata
+
+-- Slice 16: segments.
+#print axioms Strata.define_unauthorized_without_capability
+#print axioms Strata.define_blank_name_refused
+#print axioms Strata.define_long_name_refused
+#print axioms Strata.define_name_taken_refused
+#print axioms Strata.define_subject_change_refused
+#print axioms Strata.define_principal_field_refused
+#print axioms Strata.define_predicate_refused
+#print axioms Strata.define_definer_unauthorized
+#print axioms Strata.define_refresh_refused
+#print axioms Strata.define_segment_limit_refused
+#print axioms Strata.define_object_limit_refused
+#print axioms Strata.segPair_member
+#print axioms Strata.segPairs_member
+#print axioms Strata.segPair_entered_iff
+#print axioms Strata.segPair_exited_iff
+#print axioms Strata.fold_entered_iff
+#print axioms Strata.fold_exited_iff
+#print axioms Strata.rebuild_member_iff
+#print axioms Strata.segTransition_remove_quiet
+#print axioms Strata.segRemove_memberships
+#print axioms Strata.segTrigger_paused_no_effect
+#print axioms Strata.segTrigger_missing_automation_declined
+#print axioms Strata.segTrigger_suspended_declined
+#print axioms Strata.segment_trigger_matches_entries

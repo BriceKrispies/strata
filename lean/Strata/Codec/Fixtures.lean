@@ -319,4 +319,17 @@ theorem boundary_codecs :
     fun x => decodeBytes_encodeBytes lawful_change x,
     fun b x h => encodeBytes_of_decodeBytes lawful_change b x h⟩
 
+
+/-! ## Segments (slice 16) -/
+
+/-- The fixture tenant with one segment (id 1, predicate `score >= 10` on its field 1 reads, principal field 1, defined by
+    7 at version 2), one membership of person 7 at that version and one entry event in the log. -/
+def fxTenantSeg : Tenant :=
+  { fxTenant with
+    segments := [(1, { id := 1, name := "a", subject := 1, predicate := .cmp .ge (.field .record 2) (.lit (.int 10)),
+                       version := 2, principalField := 1, definedBy := some 7 })]
+    memberships := [{ segment := 1, person := 7, version := 2 }]
+    segLog := [{ segment := 1, person := 7, direction := .entered, reason := .change, version := 2, revision := 3,
+                 hop := 1, principal := .user 7 }] }
+
 end Strata.Codec

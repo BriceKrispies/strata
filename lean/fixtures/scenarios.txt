@@ -2885,3 +2885,44 @@ op 1 100 revoke 100 0
 op 1 102 create 1=s:after
 op 1 101 type 2 create 4=i:5
 end
+scenario h-segment-entry-on-create
+op 1 100 type 20 create 1=s:p200 2=i:12
+op 1 100 type 20 create 1=s:p201 2=i:9
+end
+scenario h-segment-exit-on-update-and-entry-on-delete-of-a-member
+op 1 100 type 20 create 1=s:p200 2=i:12
+op 1 100 type 20 update 1 1=s:p200 2=i:3
+op 1 100 type 20 update 1 1=s:p200 2=i:11
+op 1 100 type 20 delete 1
+end
+scenario h-segment-hop-limit-declines-the-trigger
+op 1 100 hop=9 type 20 create 1=s:p202 2=i:20
+end
+scenario h-segment-define-refusals
+op 1 102 segment define 2 low_scorers 20 1 - lt f2 i:5
+op 1 101 segment define 2 low_scorers 20 1 - lt f2 i:5
+op 1 100 segment define 2 _ 20 1 - lt f2 i:5
+op 1 100 segment define 2 high_scorers 20 1 - lt f2 i:5
+op 1 100 segment define 2 low_scorers 20 2 - lt f2 i:5
+op 1 100 segment define 2 low_scorers 20 1 - lt f9 i:5
+op 1 100 segment define 2 low_scorers 20 1 - lt o2 i:5
+op 1 100 segment define 2 low_scorers 20 1 - eq p:x i:5
+op 1 100 segment define 2 low_scorers 20 1 - f2
+op 1 100 segment define 2 low_scorers 20 1 60 lt f2 i:5
+op 1 100 segment define 1 high_scorers 20 2 - ge f2 i:10
+op 1 100 segment define 2 low_scorers 20 1 - lt f2 i:5
+op 1 100 segment define 2 low_scorers 20 1 - lt f2 i:5
+end
+scenario h-segment-rebuild-after-a-predicate-change
+op 1 100 type 20 create 1=s:p200 2=i:7
+op 1 100 type 20 create 1=s:p201 2=i:4
+op 1 100 segment define 1 high_scorers 20 1 - ge f2 i:5
+op 1 100 segment rebuild 1
+op 1 100 segment rebuild 1
+end
+scenario h-segment-remove-drops-memberships-without-events
+op 1 100 type 20 create 1=s:p200 2=i:12
+op 1 100 segment remove 1
+op 1 100 type 20 update 1 1=s:p200 2=i:1
+op 1 100 segment remove 1
+end

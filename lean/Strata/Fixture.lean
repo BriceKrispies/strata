@@ -52,6 +52,17 @@ def partConstraints : List Expr :=
             (.not (.isNull (.field .record 4))))
        (.cmp .eq (.field .record 5) (.lit (.bool true)))]
 
+/-- The profiles of a tenant (slice 16): the people a segment groups. Field `1` is the principal field, a required unique
+    string holding the person's `p<n>`; field `2` is a score. -/
+def profileSchema : Schema :=
+  [(1, { ty := .str, required := true, unique := true }), (2, { ty := .int, required := false })]
+
+/-- The segment every scenario's tenant defines (slice 16): `high_scorers`, the profiles whose score is at least 10, defined by
+    the owner. -/
+def fixtureSegments (owner : PrincipalId) : List (SegmentId × SegmentDef) :=
+  [(1, { id := 1, name := "high scorers", subject := 20, predicate := .cmp .ge (.field .record 2) (.lit (.int 10)),
+         version := 1, principalField := 1, definedBy := some owner })]
+
 /-- The second object type, "part" (id `2`), whose references point into items and back:
     `1` a reference to an item that restricts its delete; `2` a reference to an item cleared when
     it is deleted (`set-null`); `3` a list of item references, each cleared (`set-null`);
@@ -192,7 +203,8 @@ def fixtureAutomations (owner : PrincipalId) : List (Nat × AutomationDef) :=
   [(1, { id := 1, runAs := [writerRole], definedBy := some owner }),
    (2, { id := 2, runAs := [editorRole], definedBy := some owner, runKey := some (.param "seq") }),
    (3, { id := 3, runAs := [editorRole], definedBy := some owner, runKey := some (.param "transition") }),
-   (4, { id := 4, runAs := [writerRole], definedBy := some owner, state := .draft })]
+   (4, { id := 4, runAs := [writerRole], definedBy := some owner, state := .draft }),
+   (5, { id := 5, runAs := [ownerRole], definedBy := some owner })]
 
 /-- The triggers every scenario's tenants define (slice 15): on an item created (`1`, the writers' automation), on a
     part created whose hop is positive (`2`, condition on `param.hop`), on an item updated (`3`), on an item deleted
@@ -208,17 +220,20 @@ def fixtureTriggers : List (Nat × TriggerDef) :=
    (5, { id := 5, on := .ledgerPosted 1, automation := 3 }),
    (6, { id := 6, on := .recordCreated 4, automation := 4 }),
    (7, { id := 7, on := .recordUpdated 2 none, automation := 2, paused := true }),
-   (8, { id := 8, on := .recordCreated 1, condition := some (.isNull (.field .new 3)), automation := 2 })]
+   (8, { id := 8, on := .recordCreated 1, condition := some (.isNull (.field .new 3)), automation := 2 }),
+   (9, { id := 9, on := .segmentEntered 1, automation := 5 }),
+   (10, { id := 10, on := .segmentExited 1, automation := 5 })]
 
 /-- The object types every scenario starts from, each tenant with an owner, an editor and two writers.
     Type `4` (the tickets, with the workflow) is part of the fixture too. The size limits are the kernel's. -/
 def initialTenant (n : Nat) : Tenant :=
   { types := [(1, { schema := itemSchema, constraints := itemConstraints }),
                (2, { schema := partSchema, constraints := partConstraints }),
-               (4, { schema := ticketSchema, workflows := [ticketWorkflow] })],
+               (4, { schema := ticketSchema, workflows := [ticketWorkflow] }),
+               (20, { schema := profileSchema })],
     members := [(n * 100, [ownerRole]), (n * 100 + 1, [editorRole]),
                 (n * 100 + 2, [writerRole]), (n * 100 + 3, [writerRole])],
-    grants := [],
+    grants := [(editorRole, .capability capSegmentsDefine)],
     policies := fixturePolicies,
     nextId := 1,
     limits := Limits.kernel,
@@ -230,7 +245,7 @@ def initialTenant (n : Nat) : Tenant :=
     revision := 6, eventSeq := 11, schemaVersion := 3, settingDefs := fixtureSettings,
     settingRevs := fixtureSettings.map (fun d => (d.name, 1)), ledgerDecls := some fixtureLedgerDecls,
     operations := fixtureOperations, triggers := fixtureTriggers,
-    automations := fixtureAutomations (n * 100) }
+    automations := fixtureAutomations (n * 100), segments := fixtureSegments (n * 100) }
 
 /-- The fields an `update` line names for each object type: the item's fields, or the part's.
     A line that does not name one of them gives it `null`, so it replaces the record (`patch`
@@ -249,9 +264,9 @@ theorem initialWorld_records (x : TenantId) (t : Tenant) (h : initialWorld x = s
     ∀ e ∈ t.types, e.2.records = [] := by
   unfold initialWorld initialTenant at h
   split at h
-  · cases h; intro e he; simp at he; rcases he with rfl | rfl | rfl <;> rfl
+  · cases h; intro e he; simp at he; rcases he with rfl | rfl | rfl | rfl <;> rfl
   · split at h
-    · cases h; intro e he; simp at he; rcases he with rfl | rfl | rfl <;> rfl
+    · cases h; intro e he; simp at he; rcases he with rfl | rfl | rfl | rfl <;> rfl
     · cases h
 
 

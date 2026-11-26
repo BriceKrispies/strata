@@ -19,6 +19,7 @@ import Strata.Impl.Transition
 import Strata.Impl.Read
 import Strata.Impl.Search
 import Strata.Impl.Aggregates
+import Strata.Impl.SegTransition
 import Strata.Bench
 
 open Strata
@@ -547,6 +548,13 @@ def settingLines (id : Nat) (t : Tenant) : List String :=
   ((t.settingRevs.mergeSort (fun a b => decide (a.1 ≤ b.1))).filter (fun e => e.2 > 1)).map
     (fun e => s!"setting-revision {id} {e.1} {e.2}")
 
+/-- The memberships of segments (slice 16), one line each, sorted by segment and then by the person's string. They are
+    printed only when there are some, so the state of every scenario without a member is printed as before. -/
+def segmentMemberLines (id : Nat) (t : Tenant) : List String :=
+  (t.memberships.mergeSort (fun a b =>
+    decide (a.segment < b.segment) || (a.segment == b.segment && !decide (personStr b.person < personStr a.person)))).map
+    (fun m => s!"segment-member {id} seg={m.segment} person={personStr m.person} version={m.version}")
+
 /-- The tenant: its counter and the default type's required fields and records, then each other
     object type's required fields and records, marked with its id. Then its membership, when it is
     not the one the fixture starts a tenant with (always for tenant 3, which only a creation makes),
@@ -556,12 +564,12 @@ def showTenant (id : Nat) (t : Tenant) : List String :=
   let d : ObjType := (t.typ? 1).getD { schema := [] }
   let header := s!"tenant {id} next={t.nextId} required={requiredOf d}"
   let others := sortBy (fun (e : TypeId × ObjType) => e.1)
-    (t.types.filter (fun e => e.1 != 1 && (e.1 != 4 || !e.2.records.isEmpty)))
+    (t.types.filter (fun e => e.1 != 1 && ((e.1 != 4 && e.1 != 20) || !e.2.records.isEmpty)))
   header :: recordLines "" d ++
     (others.flatMap fun e => s!"type {e.1} required={requiredOf e.2}" :: recordLines s!"type {e.1} " e.2) ++
     (if id == 3 || membershipLines id t != membershipLines id (initialTenant id) then membershipLines id t
      else []) ++
-    settingLines id t ++ ledgerLines id t
+    settingLines id t ++ ledgerLines id t ++ segmentMemberLines id t
 
 def showWorld (w : World) : List String :=
   [1, 2].flatMap (fun id =>
@@ -643,6 +651,98 @@ def showEvent (e : DomainEvent) : String :=
       s!"ledger-posted owner={showOwner e.owner} unit={e.unit} scope={ledgerScopeText e.scope} amount={e.amount} balance={e.balance} before={e.balanceBefore} seq={e.entrySequence} reason={ledgerScopeText e.reason}"
   s!"event {e.seq} rev={e.revision} by={showPrincipal e.principal} {body}"
 
+
+/-- One entry or exit event of the segment log (slice 16): the tenant, the position in the log, the segment, the person,
+    the direction, the reason, the version that decided it, the revision of the change, the hop and the principal. -/
+def showSegEvent (tenant pos : Nat) (e : SegEvent) : String :=
+  let dir := match e.direction with
+    | .entered => "entered"
+    | .exited => "exited"
+  let reason := match e.reason with
+    | .change => "change"
+    | .predicateChange => "predicate-change"
+  s!"segment-event {tenant} seq={pos} seg={e.segment} person={personStr e.person} direction={dir} reason={reason} version={e.version} revision={e.revision} hop={e.hop} by={showPrincipal e.principal}"
+
+/-- The entries and exits an accepted step appended to a tenant's log: the log after it holds the log before it as a
+    prefix, and the new events follow at their positions. -/
+def segEventLines (tenant : Nat) (before after : List SegEvent) : List String :=
+  (numberFrom before.length (after.drop before.length)).map (fun (p : Nat × SegEvent) => showSegEvent tenant p.1 p.2)
+
+/-- A segment expression in prefix form (slice 16): `f<n>` reads field `n` of the record, `o<n>` and `w<n>` read it of
+    the old and the new record, `c` is the record's creator, `prin` the principal, `p:<name>` a parameter; a literal is
+    a value token (`i:<n>`, `s:<text>`, `b:1`, `b:0`, `n`); `eq ne lt le gt ge and or` take two operands, `not isnull`
+    one. -/
+partial def parseSegExpr : List String → Option (Expr × List String)
+  | [] => none
+  | tok :: rest =>
+    match tok with
+    | "prin" => some (.principal, rest)
+    | "c" => some (.createdBy .record, rest)
+    | "not" => do
+      let (a, r1) ← parseSegExpr rest
+      pure (.not a, r1)
+    | "isnull" => do
+      let (a, r1) ← parseSegExpr rest
+      pure (.isNull a, r1)
+    | "and" => do
+      let (a, r1) ← parseSegExpr rest
+      let (b, r2) ← parseSegExpr r1
+      pure (.and a b, r2)
+    | "or" => do
+      let (a, r1) ← parseSegExpr rest
+      let (b, r2) ← parseSegExpr r1
+      pure (.or a b, r2)
+    | "eq" => do
+      let (a, r1) ← parseSegExpr rest
+      let (b, r2) ← parseSegExpr r1
+      pure (.cmp .eq a b, r2)
+    | "ne" => do
+      let (a, r1) ← parseSegExpr rest
+      let (b, r2) ← parseSegExpr r1
+      pure (.cmp .ne a b, r2)
+    | "lt" => do
+      let (a, r1) ← parseSegExpr rest
+      let (b, r2) ← parseSegExpr r1
+      pure (.cmp .lt a b, r2)
+    | "le" => do
+      let (a, r1) ← parseSegExpr rest
+      let (b, r2) ← parseSegExpr r1
+      pure (.cmp .le a b, r2)
+    | "gt" => do
+      let (a, r1) ← parseSegExpr rest
+      let (b, r2) ← parseSegExpr r1
+      pure (.cmp .gt a b, r2)
+    | "ge" => do
+      let (a, r1) ← parseSegExpr rest
+      let (b, r2) ← parseSegExpr r1
+      pure (.cmp .ge a b, r2)
+    | _ =>
+      if tok.startsWith "f" then (dropChars tok 1).toNat?.map (fun n => (.field .record n, rest))
+      else if tok.startsWith "o" then (dropChars tok 1).toNat?.map (fun n => (.field .old n, rest))
+      else if tok.startsWith "w" then (dropChars tok 1).toNat?.map (fun n => (.field .new n, rest))
+      else if tok.startsWith "p:" then some (.param (dropChars tok 2), rest)
+      else (parseVal tok).map (fun v => (.lit v, rest))
+
+/-- A segment intent (slice 16): `op <t> <p> [hop=<n>] segment define <id> <name> <subject> <principal field> <refresh|->
+    <expression>`, where a name's spaces are `_`; `op <t> <p> segment remove <id>`; `op <t> <p> segment rebuild <id>`. -/
+def parseSegOp (tokens : List String) : Option (Ctx × SegIntent) :=
+  match tokens with
+  | "op" :: t :: p :: rest00 => do
+    let (hop, rest0) ← match rest00 with
+      | h :: more => if h.startsWith "hop=" then (do pure ((← (h.drop 4).toNat?), more)) else pure (0, rest00)
+      | [] => pure (0, rest00)
+    let c : Ctx := { tenant := ← t.toNat?, principal := ← parsePrincipal p, hop := hop }
+    match rest0 with
+    | "segment" :: "define" :: idTok :: nameTok :: subjTok :: pfTok :: refreshTok :: exprToks => do
+      let refresh ← (if refreshTok == "-" then some none else (refreshTok.toNat?).map some)
+      let (e, rest) ← parseSegExpr exprToks
+      guard rest.isEmpty
+      pure (c, .define (← idTok.toNat?) (nameTok.map (fun ch => if ch == '_' then ' ' else ch))
+        (← subjTok.toNat?) (← pfTok.toNat?) e refresh)
+    | ["segment", "remove", idTok] => do pure (c, .remove (← idTok.toNat?))
+    | ["segment", "rebuild", idTok] => do pure (c, .rebuild (← idTok.toNat?))
+    | _ => none
+  | _ => none
 
 /-! ## Reads
 
@@ -815,11 +915,17 @@ structure Kernel (W : Type) where
   /-- The resolution of a setting for a principal on a tenant (slice 12). -/
   setting : W → TenantId → Principal → String → Option (Except Err SettingResolution)
   ledgerRead : W → TenantId → Principal → Nat → LedgerOwner → String → Bool → Option (Except Err (Int × Nat))
+  /-- A segment intent (slice 16): the world after it and its effects; the entries and exits are read from the log. -/
+  segStep : W → SegIntent → Ctx → Except Err (W × List Effect)
+  /-- The segment log of a tenant (empty for an absent tenant). -/
+  segLog : W → TenantId → List SegEvent
 
 /-- The spec's kernel: the model as written, with its transition. -/
 def specKernel : Kernel World :=
   { init := initialWorld,
     step := fun w i c => (transition w i c).map (fun tr => (tr.world, tr.events, tr.effects)),
+    segStep := fun w i c => (segTransition w i c).map (fun r => (r.world, r.effects)),
+    segLog := fun w x => ((w x).map (fun t => t.segLog)).getD [],
     revision := fun w x => (w x).map (fun t => t.revision),
     render := showWorld,
     read := fun w x p req => (w x).map (fun t => read t (readSpecOf x) p req),
@@ -831,6 +937,8 @@ def specKernel : Kernel World :=
 /-- The executable kernel: the slots, printed through the abstraction. -/
 def implKernel : Kernel IWorld :=
   { init := implInitial, step := fun w i c => transitionI w i c,
+    segStep := fun w i c => (transitionSegI w i c).map (fun p => (p.1, p.2.2)),
+    segLog := fun w x => ((w x).map (fun t => t.segLog)).getD [],
     revision := fun w x => (w x).map (fun t => t.revision), render := fun w => showWorld (absW w),
     read := fun w x p req => (w x).map (fun t => readI t (readSpecOf x) p req),
     search := fun w x p req => (w x).map (fun t => searchI t (readSpecOf x) p req),
@@ -841,6 +949,8 @@ def implKernel : Kernel IWorld :=
 /-- The indexed kernel: slots and indexes, printed through the abstraction. -/
 def xKernel : Kernel XWorld :=
   { init := xInitial, step := fun w i c => transitionX w i c,
+    segStep := fun w i c => (transitionSegX w i c).map (fun p => (p.1, p.2.2)),
+    segLog := fun w x => ((w x).map (fun t => t.core.segLog)).getD [],
     revision := fun w x => (w x).map (fun t => t.core.revision), render := fun w => showWorld (absX w),
     read := fun w x p req => (w x).map (fun t => readX t (readSpecOf x) p req),
     search := fun w x p req => (w x).map (fun t => searchX t (readSpecOf x) p req),
@@ -885,14 +995,27 @@ partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (ou
       | none => runLines K rest w (out.push s!"unparsed {line}")
       | some lines => runLines K rest w (lines.foldl (fun a l => a.push l) out)
     | _ =>
+      match parseSegOp tokens with
+      | some (c, i) =>
+        match K.segStep w i c with
+        | .ok (w', effs) =>
+          -- An accepted segment intent: `ok`, the tenant's revision, its entries and exits, then its effects.
+          let rev := (K.revision w' c.tenant).getD 0
+          let lines := ["ok", s!"revision {rev}"] ++
+            segEventLines c.tenant (K.segLog w c.tenant) (K.segLog w' c.tenant) ++ effs.map showEffect
+          runLines K rest w' (lines.foldl (fun a l => a.push l) out)
+        | .error e => runLines K rest w (out.push s!"err {showErr e}")
+      | none =>
       match parseOp tokens with
       | none => runLines K rest w (out.push s!"unparsed {line}")
       | some (c, i) =>
         match K.step w i c with
         | .ok (w', evs, effs) =>
-          -- An accepted step: `ok`, the tenant's revision after it, then each event and its `Publish` effect.
+          -- An accepted step: `ok`, the tenant's revision after it, then each event and its `Publish` effect, then
+          -- the entries and exits of the segments it changed (slice 16), then the effects of the triggers.
           let rev := (K.revision w' c.tenant).getD 0
           let lines := ["ok", s!"revision {rev}"] ++ evs.map showEvent ++
+            segEventLines c.tenant (K.segLog w c.tenant) (K.segLog w' c.tenant) ++
             effs.map showEffect
           runLines K rest w' (lines.foldl (fun a l => a.push l) out)
         | .error e => runLines K rest w (out.push s!"err {showErr e}")
