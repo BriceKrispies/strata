@@ -89,12 +89,14 @@ fn fixture_tenant() -> Tenant {
         ledger: LedgerState::default(),
         ledger_policies: vec![],
         operations: vec![],
+        triggers: vec![],
+        automations: vec![],
     }
 }
 
 const FIXTURE_TENANT: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
-    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 /// The fixture tenant with a role `2`, a team and an invitation (`fxTenantM` in
@@ -122,6 +124,8 @@ fn fixture_tenant_members() -> Tenant {
                 revoked_by: Some(7),
             },
         )],
+        triggers: vec![],
+        automations: vec![],
         ..fixture_tenant()
     }
 }
@@ -129,7 +133,7 @@ fn fixture_tenant_members() -> Tenant {
 const FIXTURE_TENANT_MEMBERS: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
     128, 16, 3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1,
-    7, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    7, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 /// The fixture tenant with one workflow on its object type `1` (slice 9): id `""`, field 1, initial
@@ -167,7 +171,7 @@ const FIXTURE_TENANT_WORKFLOW: &[u8] = &[
     6, 99, 108, 111, 115, 101, 100, // to "closed"
     0, 0, // no guard, no assignments
     1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0,
-    0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 #[test]
@@ -399,23 +403,26 @@ fn codec_fixtures_match_the_lean_encoder() {
     assert_eq!(
         encode_ctx(&Ctx {
             tenant: 3,
-            principal: Principal::User(9)
+            principal: Principal::User(9),
+            hop: 0
         }),
-        vec![3, 0, 9]
+        vec![3, 0, 9, 0]
     );
     assert_eq!(
         encode_ctx(&Ctx {
             tenant: 3,
-            principal: Principal::System
+            principal: Principal::System,
+            hop: 0
         }),
-        vec![3, 1]
+        vec![3, 1, 0]
     );
     assert_eq!(
         encode_ctx(&Ctx {
             tenant: 3,
-            principal: Principal::Anonymous
+            principal: Principal::Anonymous,
+            hop: 0
         }),
-        vec![3, 2]
+        vec![3, 2, 0]
     );
     assert_eq!(
         encode_intent(&Intent::SetRequired {
@@ -472,10 +479,11 @@ fn codec_fixtures_match_the_lean_encoder() {
         Some(Ty::Ref(300, OnDelete::Restrict))
     );
     assert_eq!(
-        decode_ctx(&[3, 0, 9]),
+        decode_ctx(&[3, 0, 9, 0]),
         Some(Ctx {
             tenant: 3,
-            principal: Principal::User(9)
+            principal: Principal::User(9),
+            hop: 0
         })
     );
     assert_eq!(
@@ -822,6 +830,8 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
         ledger: LedgerState::default(),
         ledger_policies: vec![],
         operations: vec![],
+        triggers: vec![],
+        automations: vec![],
     }
 }
 
@@ -1095,6 +1105,7 @@ fn generated_values_round_trip_and_decode_only_canonically() {
         let c = Ctx {
             tenant: gen_nat(&mut rng),
             principal: gen_principal(&mut rng),
+            hop: 0,
         };
         check_round_trip(&c, encode_ctx, decode_ctx);
         let i = gen_intent(&mut rng);
@@ -1265,6 +1276,8 @@ fn operations_and_invocations_round_trip() {
     };
     let tenant = Tenant {
         operations: vec![("note".into(), op)],
+        triggers: vec![],
+        automations: vec![],
         ..fixture_tenant()
     };
     assert_eq!(decode_tenant(&encode_tenant(&tenant)), Some(tenant));

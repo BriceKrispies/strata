@@ -49,6 +49,14 @@
 //! ends, after its schema version, with three lists: its setting definitions, its overrides and its
 //! setting revisions, each entry as its encoder describes.
 //!
+//! Slice 15 adds the triggers and automations of a tenant. After its operations a tenant ends with two lists:
+//! its triggers, each entry the id and then the trigger (its event, an optional condition, its automation, a
+//! paused flag and an optional definer), and its automations, each entry the id and then its run-as roles, an
+//! optional run key, an optional definer, an optional suspension role and its state (`0` active, `1` draft).
+//! A trigger's event is tag `0` to `3` (created, updated, deleted, ledger posted). A context ends with its hop,
+//! a natural, zero when no automation caused the intent. A principal has no automation form here: Lean's tag
+//! `3` (an automation principal) is refused by the decoder.
+//!
 //! Every value has one encoding and the decoders accept nothing else: [`decode_all`] requires the
 //! input to be consumed exactly.
 //!
@@ -592,13 +600,62 @@ pub struct Tenant {
     pub ledger_policies: Vec<LedgerPolicy>,
     /// The operations of the schema (slice 14), each with its name.
     pub operations: Vec<(String, OpDef)>,
+    /// The triggers, by id (slice 15).
+    pub triggers: Vec<(u64, TriggerDef)>,
+    /// The automations, by id (slice 15).
+    pub automations: Vec<(u64, AutomationDef)>,
 }
 
-/// The acting context of a step: which tenant, and who is acting.
+/// The event a trigger listens for (slice 15), Lean's `TriggerOn`: a record of an object type created (`0`),
+/// updated (`1`, with the transition it names, if any), or deleted (`2`), or a ledger unit posted (`3`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TriggerOn {
+    RecordCreated(u64),
+    RecordUpdated(u64, Option<String>),
+    RecordDeleted(u64),
+    LedgerPosted(u64),
+}
+
+/// A trigger (slice 15), Lean's `TriggerDef`: its id, its event, its condition (none for every event), the
+/// automation it starts, whether it is paused, and its definer (none for the system). The Rust harness maps
+/// trigger `n` to `TriggerId` `t<n>`; the codec carries only the number `n`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TriggerDef {
+    pub id: u64,
+    pub on: TriggerOn,
+    pub condition: Option<Expr>,
+    pub automation: u64,
+    pub paused: bool,
+    pub defined_by: Option<u64>,
+}
+
+/// The state of an automation (slice 15), Lean's `AutoState`: active (`0`) or draft (`1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutoState {
+    Active,
+    Draft,
+}
+
+/// An automation (slice 15), Lean's `AutomationDef` without its steps: its id, its run-as roles, its run key
+/// (none for one run per event), its definer (none for the system), the role it is suspended for, and its
+/// state. The Rust harness maps automation `n` to `WorkflowId` `w<n>`; the codec carries only the number `n`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutomationDef {
+    pub id: u64,
+    pub run_as: Vec<u64>,
+    pub run_key: Option<Expr>,
+    pub defined_by: Option<u64>,
+    pub suspended_for: Option<u64>,
+    pub state: AutoState,
+}
+
+/// The acting context of a step: which tenant, who is acting, and the hop of the event that caused the intent
+/// (zero for an intent no automation caused). Lean's `Ctx`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ctx {
     pub tenant: u64,
     pub principal: Principal,
+    pub hop: u64,
 }
 
 /// Why a step was refused: the kernel's refusals of the model, `Err` in Lean.
@@ -1196,6 +1253,74 @@ fn put_tenant(out: &mut Vec<u8>, t: &Tenant) {
     put_ledger_state(out, &t.ledger);
     put_list(out, t.ledger_policies.as_slice(), put_ledger_policy);
     put_list(out, t.operations.as_slice(), put_op_entry);
+    put_list(out, t.triggers.as_slice(), put_trigger_entry);
+    put_list(out, t.automations.as_slice(), put_automation_entry);
+}
+
+/// A trigger's event (`encTriggerOn`): tag `0` created, `1` updated (its type, then its transition if any),
+/// `2` deleted, `3` ledger posted; each names a natural (an object type, or a ledger unit).
+fn put_trigger_on(out: &mut Vec<u8>, t: &TriggerOn) {
+    match t {
+        TriggerOn::RecordCreated(ty) => {
+            out.push(0);
+            put_nat(out, *ty);
+        }
+        TriggerOn::RecordUpdated(ty, transition) => {
+            out.push(1);
+            put_nat(out, *ty);
+            put_opt(out, transition, put_string);
+        }
+        TriggerOn::RecordDeleted(ty) => {
+            out.push(2);
+            put_nat(out, *ty);
+        }
+        TriggerOn::LedgerPosted(unit) => {
+            out.push(3);
+            put_nat(out, *unit);
+        }
+    }
+}
+
+/// An automation state (`encAutoState`): active `0`, draft `1`.
+fn put_auto_state(out: &mut Vec<u8>, s: &AutoState) {
+    out.push(match s {
+        AutoState::Active => 0,
+        AutoState::Draft => 1,
+    });
+}
+
+/// A trigger (`encTriggerDef`): its id, its event, its optional condition, its automation, its paused flag
+/// and its optional definer.
+fn put_trigger_def(out: &mut Vec<u8>, t: &TriggerDef) {
+    put_nat(out, t.id);
+    put_trigger_on(out, &t.on);
+    put_opt_expr(out, &t.condition);
+    put_nat(out, t.automation);
+    put_bool(out, t.paused);
+    put_opt(out, &t.defined_by, put_u64);
+}
+
+/// A trigger entry (`encTriggerEntry`): its id, then the trigger.
+fn put_trigger_entry(out: &mut Vec<u8>, e: &(u64, TriggerDef)) {
+    put_nat(out, e.0);
+    put_trigger_def(out, &e.1);
+}
+
+/// An automation (`encAutomationDef`): its id, its run-as roles, its optional run key, its optional definer,
+/// its optional suspension role and its state.
+fn put_automation_def(out: &mut Vec<u8>, a: &AutomationDef) {
+    put_nat(out, a.id);
+    put_u64_list(out, &a.run_as);
+    put_opt_expr(out, &a.run_key);
+    put_opt(out, &a.defined_by, put_u64);
+    put_opt(out, &a.suspended_for, put_u64);
+    put_auto_state(out, &a.state);
+}
+
+/// An automation entry (`encAutomationEntry`): its id, then the automation.
+fn put_automation_entry(out: &mut Vec<u8>, e: &(u64, AutomationDef)) {
+    put_nat(out, e.0);
+    put_automation_def(out, &e.1);
 }
 
 /// An input of an operation (`encOpInput`).
@@ -1652,6 +1777,7 @@ fn put_ledger_tx(out: &mut Vec<u8>, t: &LedgerTx) {
 fn put_ctx(out: &mut Vec<u8>, c: &Ctx) {
     put_nat(out, c.tenant);
     put_principal(out, &c.principal);
+    put_nat(out, c.hop);
 }
 
 fn put_intent(out: &mut Vec<u8>, i: &Intent) {
@@ -2360,6 +2486,8 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
     let ledger = get_ledger_state(r)?;
     let ledger_policies = get_list(r, get_ledger_policy)?;
     let operations = get_list(r, get_op_entry)?;
+    let triggers = get_list(r, get_trigger_entry)?;
+    let automations = get_list(r, get_automation_entry)?;
     Some(Tenant {
         types,
         members,
@@ -2380,7 +2508,83 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
         ledger,
         ledger_policies,
         operations,
+        triggers,
+        automations,
     })
+}
+
+/// A trigger's event (`decTriggerOn`): tags `0` to `3`, each with its natural (and the transition for `1`).
+fn get_trigger_on(r: &mut Reader<'_>) -> Option<TriggerOn> {
+    match r.byte()? {
+        0 => Some(TriggerOn::RecordCreated(get_nat(r)?)),
+        1 => {
+            let ty = get_nat(r)?;
+            let transition = get_opt(r, get_str)?;
+            Some(TriggerOn::RecordUpdated(ty, transition))
+        }
+        2 => Some(TriggerOn::RecordDeleted(get_nat(r)?)),
+        3 => Some(TriggerOn::LedgerPosted(get_nat(r)?)),
+        _ => None,
+    }
+}
+
+/// An automation state (`decAutoState`): active `0`, draft `1`.
+fn get_auto_state(r: &mut Reader<'_>) -> Option<AutoState> {
+    match r.byte()? {
+        0 => Some(AutoState::Active),
+        1 => Some(AutoState::Draft),
+        _ => None,
+    }
+}
+
+/// A trigger (`decTriggerDef`).
+fn get_trigger_def(r: &mut Reader<'_>) -> Option<TriggerDef> {
+    let id = get_nat(r)?;
+    let on = get_trigger_on(r)?;
+    let condition = get_opt_expr(r)?;
+    let automation = get_nat(r)?;
+    let paused = get_bool(r)?;
+    let defined_by = get_opt(r, get_u64)?;
+    Some(TriggerDef {
+        id,
+        on,
+        condition,
+        automation,
+        paused,
+        defined_by,
+    })
+}
+
+/// A trigger entry (`decTriggerEntry`).
+fn get_trigger_entry(r: &mut Reader<'_>) -> Option<(u64, TriggerDef)> {
+    let id = get_nat(r)?;
+    let def = get_trigger_def(r)?;
+    Some((id, def))
+}
+
+/// An automation (`decAutomationDef`).
+fn get_automation_def(r: &mut Reader<'_>) -> Option<AutomationDef> {
+    let id = get_nat(r)?;
+    let run_as = get_u64_list(r)?;
+    let run_key = get_opt_expr(r)?;
+    let defined_by = get_opt(r, get_u64)?;
+    let suspended_for = get_opt(r, get_u64)?;
+    let state = get_auto_state(r)?;
+    Some(AutomationDef {
+        id,
+        run_as,
+        run_key,
+        defined_by,
+        suspended_for,
+        state,
+    })
+}
+
+/// An automation entry (`decAutomationEntry`).
+fn get_automation_entry(r: &mut Reader<'_>) -> Option<(u64, AutomationDef)> {
+    let id = get_nat(r)?;
+    let def = get_automation_def(r)?;
+    Some((id, def))
 }
 
 fn get_op_input(r: &mut Reader<'_>) -> Option<OpInput> {
@@ -2871,7 +3075,12 @@ fn get_ledger_tx(r: &mut Reader<'_>) -> Option<LedgerTx> {
 fn get_ctx(r: &mut Reader<'_>) -> Option<Ctx> {
     let tenant = get_nat(r)?;
     let principal = get_principal(r)?;
-    Some(Ctx { tenant, principal })
+    let hop = get_nat(r)?;
+    Some(Ctx {
+        tenant,
+        principal,
+        hop,
+    })
 }
 
 fn get_intent(r: &mut Reader<'_>) -> Option<Intent> {
