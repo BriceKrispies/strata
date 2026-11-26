@@ -28,10 +28,11 @@ the system and the anonymous principal). Slice 7 adds members, teams and invitat
 workflows: a workflow over a string field of an object type, with its initial states, its transitions
 and their guards and assignments, decided by the same `step`. Slice 9 adds events and revisions: `transition`
 returns the world with the tenant's revision, event sequence and schema version committed, the domain events
-the step emits, and one `Publish` effect per event; `step` itself is unchanged. Slice 10, in part, adds reads
+the step emits, and one `Publish` effect per event; `step` itself is unchanged. Slice 10 adds reads
 (`lean/Strata/Reads.lean`): field read rules, the visibility of a record, record reads and named queries, as the total
-function `read`. The model has no search, aggregates or scopes, and its events are only those listed in the slice 9
-review note: the assumptions below list each
+function `read`; and, in its second half, text search and aggregates (`lean/Strata/Search.lean`,
+`lean/Strata/Aggregates.lean`). The model has no scopes, its searches take no cursor, and its events are only those
+listed in the slice 9 review note: the assumptions below list each
 omission, and the gap analysis further down says which slice will add each. The theorems are
 about this model. The Rust kernel is compared with it on generated scenarios, which is evidence and
 not a proof.
@@ -148,6 +149,24 @@ are in `Reads.lean`; the theorems below are in `lean/Audit.lean`, which `lake en
 | Executable read | `Impl.readI_refines`, `Impl.readX_refines`, `Impl.readRecordsI_abs`, `Impl.queryPageI_abs`, `Impl.ITenant.scanRowsI_abs`, `Impl.ITenant.queryAllI_abs`, `Impl.ITenant.rowOfI_abs`, `Impl.ITenant.canRead_abs`, `Impl.ITenant.countI_abs`, `Impl.slotRows_eq` | The read on the slots of a stage 1 tenant (and on the core of an indexed one) is the spec's `read` on the abstraction, for every tenant: the same rows, the same cursor, the same refusal |
 | Named queries: pages | `walk_eq_drop`, `query_pages_concat`, `query_pages_nodup`, `queryAll_ids_nodup`, `scanRows_ids_nodup`, `filterMap_fst_sublist` | Concatenating the pages from offset 0 gives the whole result, in order; when the records of the type have distinct ids, no record is in two pages |
 | Named queries: refusals | `query_unknown`, `query_undeclared_param`, `query_page_zero`, `query_page_over`, `query_wrong_cursor`, `query_scan_limit` | An unknown query is `unknownQuery`; an undeclared parameter, a page size of 0 and a cursor that is not an offset are `invalidIntent`; a page size over 200 and a type of more than 10,000 records are `limitExceeded` |
+
+Slice 10, second half: search and aggregates (`search`, `aggregate`, `lean/Strata/Search.lean`,
+`lean/Strata/Aggregates.lean`, the executable versions in `lean/Strata/Impl/Search.lean` and `Impl/Aggregates.lean`).
+The theorems are in `lean/Audit.lean` (the last section, after the first half's `#print` lines).
+
+| Property | Theorems | Statement |
+|---|---|---|
+| Search: hits are readable | `search_sound`, `SoundHit`, `decideCand_sound`, `searchOn_sound` | Every hit is a stored record of its type that the reader may read, given as the reader receives it (redacted); its matched fields are shown ones and match every query word. With `hidden_field_absent`, no field a read rule hides is in a hit |
+| Search: order | `search_order`, `search_no_repeat`, `searchOn_order`, `searchTypes_order`, `probeType_order`, `decideRun_order`, `candidatesOf_sorted`, `searchPlan_sorted` | Hits are in ascending type id, then record id; no record is a hit twice. Needs distinct type ids and distinct record ids per type (the hypotheses `hkeys` and `hids`, as the query theorems assume) |
+| Search: refusals | `search_query_too_long`, `search_query_no_word`, `search_query_too_many_words`, `search_page_out_of_range`, `search_unknown_object` | A query over 200 bytes, with no word, or with more than 8 words, a page size of 0 or over 200, and an unknown object type are refused, in the kernel's order |
+| Search: candidates | `search_examined_le`, `probeType_examined_le`, `searchTypes_examined_le`, `decideRun_consumed_le` | A search examines at most 1,000 candidates, whatever the reader may read of them |
+| Aggregates: refusals | `aggregate_unknown_query`, `aggregate_unknown_aggregate`, `aggregate_undeclared_param`, `aggregate_unknown_object`, `aggregate_undeclared_filter`, `aggregate_unknown_field`, `aggregate_scan_window` | An unknown query or aggregate is `unknownQuery`; an undeclared parameter or filter field is `invalidIntent`; an unknown object type is `unknownObject`, an unknown named field `unknownField`; a type of more than 10,000 records is `limitExceeded` (rule `scan-bound-exceeded`) |
+| Aggregates: count over the rows | `aggregate_count_queryAll`, `queryAll_length_eq`, `plainSelected`, `aggregateOn_count_form`, `condHolds_redact`, `evalExpr_redact`, `fields_get_redact`, `lookup_filter`, `length_filterMap_eq_filter` | An ungrouped count with no request filter and no field is the number of rows of `queryAll` (the records the reader may read in whole that the query filter selects), when the query filter reads no field a read rule covers |
+
+Not proven (the statements are in the review note, not in the audit): the sum, minimum, maximum and top list over the
+rows of `queryAll` (`aggregate` folds the selected records, which a read rule can leave out, so the equation needs
+the rule check on the stored record); the scan bound of an aggregate's selection; the group bound; the cursor of a
+search, and that a resumed search continues where the first page stopped.
 
 `lake env lean Audit.lean` prints the axioms of each: only `propext`, `Classical.choice` and `Quot.sound` (the
 `#print axioms` lines at the end of `Audit.lean`). The slice 10 proofs use no `sorry`, `admit`, axiom or `native_decide`.
@@ -504,12 +523,15 @@ order:
 
 ### Reads (`read::read`, `query_plan`, `search`, `aggregates`)
 
-Slice 10 is partly done. Covered in the model (`lean/Strata/Reads.lean`, theorems in `lean/Audit.lean`, see the
-slice 10 review note): record visibility, field read rules and redaction, record reads, and named queries in their scan
-form (filter, order keys, parameters, page size, cursor). The executable read (stage 1 and the indexed tenant) refines it,
-and the harness, the h- scenarios and the generator compare its answers with the Rust kernel's. Not covered yet: the
-codec and Rust mirror of the read declarations (they sit beside the write model, see the review note), search and
-aggregates. The bullets below say which is which.
+Slice 10 is done in the model, the executable versions, the harness and the generator, with the proof gaps listed in
+the slice 10 review notes. Covered in the model (`lean/Strata/Reads.lean`, `Search.lean`, `Aggregates.lean`; theorems
+in `lean/Audit.lean`): record visibility, field read rules and redaction, record reads, named queries in their scan
+form, text search over the ASCII tokeniser, and aggregates (count, sum, minimum, maximum, top; one group field). The
+executable reads, searches and aggregates (stage 1 and the indexed tenant) refine them, and the harness, the h-
+scenarios and the generator compare their answers with the Rust kernel's. Not covered: the codec and Rust mirror of
+the read declarations (they sit beside the write model, see the review note); the proofs of the sum, minimum, maximum
+and top list over rows; the average and the second group field; the search cursor. The bullets below say which is
+which.
 
 - Visibility of a record: the authorization above for `Read` on the stored record; a field read
   rule hides a present field unless it is exactly `true`. `redact` gives the system records
@@ -527,11 +549,14 @@ aggregates. The bullets below say which is which.
   form; the kernel's window and index plans, and their cursors, are not.**
 - Search: a query over 200 bytes, with no word, or with more than 8 words, or a page size of 0 or
   over 200 (`InvalidIntent`); unknown type (`UnknownObject`); at most 1,000 candidates examined.
-  Hits in type then id order, with only the matched fields the reader may read. **Not covered (open).**
+  Hits in type then id order, with only the matched fields the reader may read. **Modelled (slice 10, second half);
+  the refusals, the bound and the order are proved; the cursor is not an input of the model.**
 - Aggregates: unknown query or aggregate (`UnknownQuery`); an undeclared parameter or filter field
   (`InvalidIntent`); unknown type or field (`UnknownObject`, `UnknownField`); scan, selection,
   group and sum bounds (`LimitExceeded`). Count, sum, min, max and top over the visible, filtered
-  records whose named fields the reader may read. **Not covered (open).**
+  records whose named fields the reader may read. **Modelled (slice 10, second half), with the count proved over
+  the rows of `queryAll`; the sum, minimum, maximum and top list over the rows are not proved; the kernel's index
+  plan for an equality filter is not modelled (the model always scans; the selected records are the same).**
 
 - Visibility of a record: the authorization above for `Read` on the stored record; a field read
   rule hides a present field unless it is exactly `true`. `redact` gives the system records
@@ -642,7 +667,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **7 (done)** | Tenants, members, teams, invitations, conferring, the owner rule, reserved principal ids. The decisions are in `Strata/Members.lean`, the theorems in `Strata/MembersProofs.lean`, and the intents are in `Intent` and decided by `step`; the executable kernels, the working set, the codec of tenants (Lean and Rust) and the differential harness, scenarios and generator cover them (see the slice 7 review note) | 6 |
 | **8 (done)** | Workflows: the workflow of an object type (field, initial states, transitions with guards and assignments), the create and update decisions, the state check and the invariant (`lean/Strata/Workflows.lean`); the executable kernels, the codec (Lean and Rust), the harness with the ticket type (id 4), the h- scenarios and the generator cover them (see the slice 8 review note). Approvals are not in this slice: they decide automation steps, which slice 15 adds | 5, 6 |
 | **9 (done)** | Events and revisions: event bodies, sequence numbers, the revision, `Publish` effects, the grandfathered count (`lean/Strata/EventProofs.lean`, see the slice 9 review note) | 1 to 8, for their content |
-| 10 (partly done) | Reads: visibility, field read rules, record reads, named queries (filter, order, pages) are in the model (`lean/Strata/Reads.lean`, the slice 10 review note), with the executable read (`lean/Strata/Impl/Read.lean`) and the harness for reads; search, aggregates and the codec of the read declarations are not | 5, 6 |
+| 10 (done, with the proof gaps of the slice 10 review notes) | Reads: visibility, field read rules, record reads, named queries (filter, order, pages) (`lean/Strata/Reads.lean`), text search (`lean/Strata/Search.lean`) and aggregates (`lean/Strata/Aggregates.lean`) are in the model, with the executable versions (`lean/Strata/Impl/Read.lean`, `Impl/Search.lean`, `Impl/Aggregates.lean`), the harness and the generator; the codec of the read declarations is not, and the sum, minimum, maximum and top-list equations over rows are not proved | 5, 6 |
 | 11 | Schema change in general: the change kinds, `SchemaConflict`, the abstract validity predicate, `Reject` and `Grandfather`, object and role removal, and the evolution model's acceptance as the rule for breaking changes | 3 to 8 |
 | 12 | Settings | 6, 7 |
 | 13 | Ledger | 6 |
@@ -1137,7 +1162,7 @@ transitions in `lean/Strata/Impl/Transition.lean`, the codec of the tenant and o
 ### Slice 10 review note (records and queries): what was abstracted
 
 Slice 10 is reads, in two halves. This note covers the first: record visibility, field read rules, record reads and
-named queries. Search and aggregates are the second half and are not started. The model is `lean/Strata/Reads.lean`
+named queries. Search and aggregates are the second half, in the note after this one. The model is `lean/Strata/Reads.lean`
 (`read`, `readRecords`, `queryPage`, `queryAll`, `rowOf`, `redact`, `Tenant.canRead`, `walk`); the theorems are in
 `lean/Audit.lean`. The Rust side is `crates/kernel/src/read.rs` and `query_plan.rs` (`read_named`, `scan`, `keyed`),
 `rules.rs` (`visible_in`, `redact`).
@@ -1212,6 +1237,89 @@ named queries. Search and aggregates are the second half and are not started. Th
 - **Not covered.** The codec and the Rust mirror of the read declarations and requests (see above). Also not covered: search; aggregates; the descendants read
   (the `tree` form of a named query); scoped roles and the reads that follow references (`audience_needs`); the snapshot
   that `read_missing` names (the model has no snapshot); and the revision in the result.
+
+### Slice 10 review note (search and aggregates): what was abstracted
+
+This is the second half of slice 10. The model is `lean/Strata/Search.lean` (`search`, `searchPlan`, `searchOn`,
+`probeType`, `decideCand`) and `lean/Strata/Aggregates.lean` (`aggregate`, `aggregateOn`, `finish`, `selectedBy`), on
+the read declarations of `lean/Strata/Reads.lean`: `ReadSpec.searchable` (the fields each type's index holds) and, on
+`QueryDef`, `declared` (the fields a request may filter or aggregate on) and `aggregates` (the declared aggregates, an
+`AggDef` each). The shared record source `Src` (the records of each type and who may read them) is in `Reads.lean`, so
+the spec and the executable versions run the same loops over different records (`Strata/Impl/Search.lean`,
+`Impl/Aggregates.lean`; `searchI_refines`, `aggregateI_refines`, `searchX_refines`, `aggregateX_refines`). The Rust side
+is `crates/kernel/src/search.rs` and `aggregates.rs`, with `World::search` and `World::aggregate` (`world.rs`).
+
+- **Tokens (ASCII).** A word is a maximal run of ASCII letters and digits, lowercased in ASCII and cut to 64 characters;
+  a field's tokens are the distinct words in order, at most 1,000. The kernel uses the Unicode alphanumerics and the
+  Unicode lowercase mapping. The model and the generator agree only on ASCII text, so the generator's words (`oak`,
+  `ash`, `elm`, `fir`, `yew`, and the long word of a too-long query) are ASCII. A list field's tokens are those of
+  its string items joined by newlines, as the kernel joins them.
+- **Matching.** A query word matches a field when it is the start of one of the field's tokens; a field matches when
+  every query word matches it; a record is a hit when a probed field that matched is one the reader may read and still
+  matches in the redacted copy (the kernel's `decide`). Tokens of two fields never combine.
+- **Probed fields.** A searchable field is probed unless its read rule does not look at the record and is not `true`
+  for the reader (`barredField`, the kernel's `record_independent` plus the empty-record evaluation). The model's
+  expressions read a record through `field` and `createdBy`, which is the kernel's `Var` and `Through` (`exprReadsRecord`).
+  The fixture has no barred field, so the case is in the model and not in any scenario.
+- **Candidates, bound and cursor.** Candidates are the stored records that match in a probed field, in type order then
+  id order; a probe asks for at most 200 and the search examines at most 1,000 of them, whatever the reader may read
+  (`maxCandidates`, `search_examined_le`). The model has no cursor input: a search starts at the first candidate. Its
+  `next` is the kernel's cursor (the last candidate examined), printed `next <type> <id>` or `next -`, with the
+  kernel's rule for when a next page exists (a page full of hits, or the bound reached with a probe pending). A resumed
+  search is not modelled, so the cursor's use (no record twice across pages) is not proved.
+- **Check order.** Search: the query's bytes (over 200), its words (none, or over 8 distinct), the page size (0, or over
+  200; the default is 50), then the object types named (`unknownObject`). Aggregate: the query, the aggregate, the
+  parameters (undeclared), the object type, the filter fields (undeclared), the named fields (`unknownField`), the scan
+  window (more than 10,000 records of the type), the selected records against the aggregate's bound, and the groups
+  against the group bound (1,000). A sum that does not fit an integer is `limitExceeded` with rule `sum-overflow`.
+- **Aggregates always scan.** The kernel reads a filter's equality or list on an indexed field through the record index
+  (`filter_access`, `Values`), and the window it then bounds is the matching records, not the type. The selected records,
+  and so every answer, are the same; only the window refusal differs, and only past 10,000 matching records, which no
+  fixture reaches. The index plan is not modelled.
+- **Aggregate kinds.** Count, sum, minimum, maximum and top, with one group field. The kernel's average and its second
+  group field are not modelled; no fixture declares either. The definition-time checks (`problems`) are the kernel's and
+  not modelled, so the model takes the declarations as given (a declared field is in the declared list, a sum is over an
+  integer, a top list is 1 to 100 records).
+- **Values.** A group key is the field's value on the stored record, or absent (sorted last) when the record has none or a
+  value of another type (`valueIn`, the kernel's `value_in`). A minimum, maximum and top list order values by the
+  model's order on values, which is the kernel's derived order (`Val.leb`). A top list is ordered by value (descending
+  when asked) then by ascending record id.
+- **Read rules in aggregates.** A record is selected only when the reader may read it, the query filter holds on the
+  stored record, the request's filter holds, and each named field's read rule holds on the stored record (not for the
+  system). So a count does not count the records a rule hides, and a sum, minimum or top list does not use their values.
+- **Personal fields and the system.** The model has no personal fields, so `searchable` is not checked against D-6585.
+  The system holds no role, so a search or an aggregate by the system finds nothing (as the first half's record reads
+  do; the open question of the first half applies here too).
+- **Proofs.** Proved (`lean/Audit.lean`): the soundness of every hit (`search_sound`), the refusals of a search and of an
+  aggregate (listed in the slice 10 table), the examined bound, the order and no repetition of hits (`search_order`,
+  `search_no_repeat`, from distinct type ids and distinct record ids per type), and the count of an aggregate as the
+  number of rows of `queryAll` (`aggregate_count_queryAll`), under the hypothesis that the query filter reads no field a
+  read rule covers. Not proved: the sum, minimum, maximum and top list as folds over the rows of `queryAll` (the
+  selection of an aggregate and the rows of a query differ in the rule check on a stored record, which the equation has
+  to state), the scan bound of an aggregate's selection (`aggregateOn` refuses it, but no theorem says so), the group
+  bound, and the search cursor.
+- **The harness.** Lines `read <t> <p> search <type|*> <words..> [page=<n>]` and `read <t> <p> aggregate <query> <aggregate>
+  [filter.<n>=<v> ..] [<param>=<v> ..]` (`parseSearch`, `parseAggregate`) are run by `Main.lean` on the spec, `--impl` and
+  `--indexed` kernels, and by `kernel_output` on the Rust kernel (`World::search`, `World::aggregate`). A search prints
+  `err <kind>` or `ok`, `examined <n>`, `next <type> <id>` or `next -`, and `hit <type> <id> matched=<fields> <record>`
+  per hit; an aggregate prints `err <kind>` (a limit with its rule) or `ok`, `scanned <n>`, and per group
+  `group <key|-> <value|->` with its `top <id> <value>` rows. The fixture declares them in the schema change that
+  installs the rest: `SetSearchable` for the item type (fields `1`, `7`, `9`, `10`) and the ticket type (`1`, `3`), and the
+  declared fields and aggregates of the four named queries (`with_aggregates` in `crates/verification/src/lean.rs`).
+  The schema change is one batch, so the revision and the schema version after the fixture's install do not move, and
+  the existing outcome lines of the h- scenarios are unchanged: the Lean program prints the same lines for every scenario
+  that existed before (checked, all three modes), and the new h- scenarios (`h-search-*`, `h-aggregate-*`) print the same
+  in all three modes.
+- **The generator.** `lean_diff::search_op` and `aggregate_op` place searches and aggregates among the operations
+  (`with_queries`, `generate_reads`), from a stream of their own; `generate` (which the fixture scenarios come from) is
+  unchanged, so `lean/fixtures/scenarios.txt` keeps its generated part and `expected.txt` is not edited.
+- **Not reached by the fixture or the generator.** An aggregate's unknown field (the kernel's definition checks refuse a
+  declared field the object type lacks), its sum overflow (no fixture integer is near the limit), and its group bound
+  (no fixture field has a thousand values). `READ_KINDS` does not list them. The scan bound of an aggregate (10,000
+  records) is not reached either; `bounded_count` tests the aggregate's own bound instead (scan bound 2).
+- **Not covered.** The codec and the Rust mirror of the search and aggregate declarations (a schema change of them, slice
+  11); the sum, minimum, maximum and top-list equations over the rows; the search cursor across pages; the average and the
+  second group field; the personal fields of the search index.
 
 ### Slice 6 review note: what was abstracted
 
