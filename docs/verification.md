@@ -86,9 +86,11 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `fixture_owner_permits`, `fixture_editor_permits`, `fixture_stranger_refused_item`, `fixture_anonymous_refused_item`, `fixture_anonymous_creates_part`, `fixture_stranger_refused_part`, `fixture_editor_creates_item`, `fixture_writer_updates_own`, `fixture_writer_refused_other`, `fixture_editor_updates_other`, `fixture_writer_missing_record_hidden`, `fixture_editor_missing_record`, `fixture_system_refused_item` | The fixture's roles decide as the tiers of slices 0 to 5 did (owner, editor, writers who may change only the records they created), and the anonymous caller creates only parts; checked by evaluation on tenant `1` and on a tenant of two items |
 | | `step_ok_authorized`, `unauthorized_cannot_update`, `unauthorized_cannot_delete`, `missing_record_hidden_on_update`, `missing_record_hidden_on_delete`, `version_conflict_on_update`, `version_conflict_on_delete`, `delete_refused_while_referenced`, `update_duplicate_refused`, `create_duplicate_refused` | Restated over the generalised decision: the permission is that of the record as it would be written (for an update, the patched record), and a record-free check for a missing record asks the type and the action; the statements keep their meaning (no statement weakened) |
 | Membership, teams and invitations (slice 7, `lean/Strata/MembersProofs.lean`) | `effective_roles`, `system_holds_no_role`, `anonymous_holds_public`, `system_cannot_manage_members` | A user holds `public`, its direct roles and the roles of its teams, and nothing else; the system holds no role; an anonymous caller holds `public` |
-| | `hasOwner_iff`, `genesis_hasOwner`, `changeRole_owner`, `defineTeam_owner`, `teamRole_owner`, `teamMember_owner`, `redeemInvitation_owner`, `stepMember_owner_kept`, `owner_kept_world` | An accepted membership step keeps an owner in every tenant that had one, a revocation or removal only when one remains; a created tenant has one (given distinct team ids, `stepMember_teamsNodup`, `stepWorld_nodup`) |
+| | `hasOwner_iff`, `genesis_hasOwner`, `changeRole_owner`, `defineTeam_owner`, `teamRole_owner`, `teamMember_owner`, `redeemInvitation_owner`, `stepMember_owner_kept`, `owner_kept_world` | An accepted membership step keeps an owner in every tenant that had one, a revocation or removal only when one remains; a created tenant has one (given distinct team ids, `stepMember_teamsNodup`, `step_nodup`), whatever the intent: a record or schema intent keeps the membership (`stepTenant_data_mt`, `step_data_mt`) |
 | | `assign_only_conferrable`, `teamRole_only_conferrable`, `teamMember_only_conferrable`, `redeem_only_conferrable` | An accepted assignment, team role grant, team membership or invitation redemption gives no principal a role it did not hold that the conferrer (the issuer, for a redemption) could not confer in the state before |
-| | `create_invitation_expiry` | An accepted invitation is recorded for its issuer, expiring fourteen days after the context's time |
+| | `step_member_form`, `stepMember_manage`, `member_authorized`, `stepTenant_member_eq`, `step_cases` | The membership intents are decided by `step`: an accepted one changes the addressed tenant by a membership step and no other, only a manager makes one (a redemption only a person), and an accepted step is a decision of `stepTenant` or a creation |
+| | `reserved_refused`, `reserved_caller_refused`, `create_genesis`, `create_blank_refused`, `create_world_form`, `genesisTenant_wf` | A reserved id is refused first, whatever the intent; only the system creates a tenant, once, with a name, and the tenant it makes is well-formed and has an owner |
+| | `create_invitation_expiry` | An accepted invitation is recorded for its issuer, expiring fourteen days after the intent's time |
 | | `redeem_sets_redeemed`, `redeem_twice_refused`, `redeem_not_expired`, `redeem_not_closed`, `redeem_issuer_authority` | An accepted redemption is of an invitation unredeemed, unrevoked and unexpired, while the issuer may still manage and confer the roles, and afterwards the invitation is redeemed, so a second redemption is refused for any caller |
 | | `revoked_not_redeemable` | A revoked invitation is refused every redemption |
 | | `reserved_refused`, `assign_reserved_refused`, `add_member_reserved_refused`, `create_reserved_refused` | A step that names a reserved principal, or whose caller is reserved, is refused `invalidIntent` before the tenant is looked at |
@@ -113,7 +115,7 @@ and no added axiom; a test fails if the sources contain one or the audit reports
 3. Its authorization is roles and policies as data (slice 6): principals hold roles directly, roles
    grant actions on object types and capabilities, and policies grant actions under conditions of the
    slice 5 expressions. Scopes, role and policy definitions by intent, and automation principals
-   are not modelled (slices 11 and 15, and the gap analysis); teams are in the membership layer of slice 7. Policy ids are left out: they name a policy in
+   are not modelled (slices 11 and 15, and the gap analysis); a team gives its members its roles (slice 7). Policy ids are left out: they name a policy in
    a refusal and decide nothing.
 4. Its size limits are the kernel's numbers over an abstract measure, not over the kernel's
    encodings (slice 2's review note): a string's bytes and a list's length are exact, a record's
@@ -412,9 +414,9 @@ From `transition::change_schema`, `plan_migration`, `apply_change` and `schema::
 
 From `transition::change_member`, `define_team`, `team_role`, `team_member`,
 `create_invitation`, `revoke_invitation`, `redeem_invitation`. Covered as decisions of the membership
-layer (`lean/Strata/Members.lean`, slice 7, see its review note): the refusals below, the accepted
-effects, and the owner rule. Not covered: the `Intent` constructors, the executable kernels and the
-differential run, so the Rust behaviour is not compared with these decisions yet. Refusals in check
+layer (`lean/Strata/Members.lean`, slice 7, see its review note), as `Intent` constructors decided
+by `step`, run by both executable kernels and compared with the Rust kernel by the differential run
+and the `h-` scenarios: the refusals below, the accepted effects, and the owner rule. Refusals in check
 order:
 
 - `AssignRole`, `RevokeRole`: may not manage members (`Unauthorized`); unknown role
@@ -546,7 +548,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **4 (done)** | Several object types: `UnknownObject` with its hiding rule, references and referrers across types | 1 |
 | **5 (done)** | Expressions: literals, field reads of the record, the old record and the new record, the principal, comparisons, the three-valued connectives, `isNull`, evaluation errors; constraints (checked last, state-only); expression defaults | 2, 4 |
 | **6 (done)** | Roles and policies as data, replacing the fixed tiers: the owner role, role permissions, policies with conditions, capabilities, the system and anonymous principals | 5 |
-| **7 (partly done: the specification layer)** | Tenants, members, teams, invitations, conferring, the owner rule, reserved principal ids. The model side is in `Strata/Members.lean` and `Strata/MembersProofs.lean`; the `Intent` type, the executable kernels, the codec of tenants, the differential harness and the scenarios are not extended (see the slice 7 review note) | 6 |
+| **7 (done)** | Tenants, members, teams, invitations, conferring, the owner rule, reserved principal ids. The decisions are in `Strata/Members.lean`, the theorems in `Strata/MembersProofs.lean`, and the intents are in `Intent` and decided by `step`; the executable kernels, the working set, the codec of tenants (Lean and Rust) and the differential harness, scenarios and generator cover them (see the slice 7 review note) | 6 |
 | 8 | Workflows: initial states, transitions with guards and assignments, re-authorization, state validity; approvals | 5, 6 |
 | 9 | Events and revisions: event bodies, sequence numbers, the revision, `Publish` effects, the grandfathered count | 1 to 8, for their content |
 | 10 | Reads: visibility, field read rules, record reads, named queries (filter, order, pages), search, aggregates | 5, 6 |
@@ -818,25 +820,57 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 
 ### Slice 7 review note: what was abstracted
 
-Slice 7 is the membership layer, in `lean/Strata/Members.lean` (decisions) and
-`lean/Strata/MembersProofs.lean` (theorems). It is a layer over the tenant of the earlier slices, not an
-extension of `Intent` or `step`: `Tenant`, `step` and the executable kernels are unchanged, so every
-earlier theorem keeps its statement and its proof. What is in place and what is not is listed below.
+Slice 7 is the membership layer: the decisions are in `lean/Strata/Members.lean`, the theorems in
+`lean/Strata/MembersProofs.lean`, and the intents are constructors of the model's `Intent`, decided by
+the model's one `step` (`lean/Strata/Model.lean`). The state is in `lean/Strata/ModelBase.lean`.
 
-- **State.** `MTenant` holds the tenant (`base`, whose members hold the direct roles), the roles the
-  schema defines (`owner` and `public` built in), the teams and the invitations. A user's effective roles
-  are `public`, its direct roles and the roles of each team it belongs to (`MTenant.rolesOf`). The
-  system holds none; an anonymous caller holds `public`.
-- **Tenants.** `stepWorld` works on `MWorld`, a function from tenant ids to membership-layer tenants. A
-  `CreateTenant` is refused `tenantExists` when the tenant exists, and otherwise made by the system only
-  (`unauthorized`), with a name that is not blank (`invalidIntent`). The genesis tenant has the owner
-  holding `owner`, the two built-in roles, no object types, no teams, no invitations, and record counter
-  1. The genesis schema's object types are empty, as the kernel's are.
-- **Reserved ids.** Principal ids are numbers, so the kernel's `team:` prefix and its automation ids are
-  one predicate, `reserved`, given to the step. A reserved named principal (of `CreateTenant`,
-  `AssignRole`, `AddTeamMember`) or a reserved caller is refused `invalidIntent` before the tenant is
-  looked at. Agents, which the kernel refuses as tenant owners with its own kind (`AgentAdminPower`), are
-  folded into `reserved` and get `invalidIntent`.
+- **State.** A tenant holds, besides what it held before, the roles its schema defines (`Tenant.roles`,
+  with `owner` and `public` built in), its teams (`Tenant.teams`) and its invitations
+  (`Tenant.invitations`). The membership intents see only `MTenant`, the part of a tenant they read and
+  write: its members (who hold the direct roles), its grants and policies, its roles, teams and
+  invitations (`Tenant.mt`; `Tenant.withM` writes one back and keeps the object types, the records, the
+  counter and the limits). A user's effective roles are `public`, its direct roles and the roles of
+  each team it belongs to (`MTenant.rolesOf`); `Tenant.rolesOf` is that, so a team's role gives its
+  members permissions on records too. The system holds none; an anonymous caller holds `public`.
+- **Integration (one `step`).** `Intent` has `createTenant owner name` and `member j` (a
+  `MemberIntent`: assign and revoke a role, define a team, give a team a role and take one away, add a
+  team member and remove one, create, revoke and redeem an invitation). `stepTenant` decides them
+  (`createTenant` against a tenant that exists is `tenantExists`; `member j` is `stepMemberT`, which
+  decides on `Tenant.mt` and writes back). `step` first asks `reservedRefused` of the caller and the
+  intent, then makes a tenant that does not exist from a system `createTenant` (`createdTenant`) and
+  otherwise says `noTenant`, and an intent against a tenant that exists is `stepTenant`'s. The executable
+  kernels (`stepI`, `stepX`), the working set (`decideOn`, whose delta is `Delta.members` or
+  `Delta.genesis`) and the differential harness all run this `step`.
+- **Statements that changed shape.** The meaning of every earlier theorem is kept. `Tenant.rolesOf` now
+  includes team roles, so `rolesOf_user` states them; `rolesOf_user_no_teams` is the earlier statement,
+  for a tenant with no teams. A refusal theorem about a record or schema intent at the world level
+  (`unauthorized_cannot_update`, `unauthorized_cannot_delete`, `missing_record_hidden_on_update`,
+  `missing_record_hidden_on_delete`, `version_conflict_on_update`, `version_conflict_on_delete`,
+  `create_duplicate_refused`, `update_duplicate_refused`, `define_unique_refused_over_duplicates`,
+  `set_unique_refused_over_duplicates`) gains the hypothesis that the caller's id is not reserved
+  (`callerReserved c.principal = false`), because `step` refuses a reserved caller before anything else,
+  as the kernel does. The world theorems (`step_preserves_wf`, `step_preserves_refs`,
+  `step_preserves_satisfied`, `step_isolated`, `step_local`, `step_ok_authorized`) have a case for the
+  creation of a tenant (the tenant it makes has no object types, `genesisTenant_wf`); the tenant-level
+  ones have a case for the membership intents, which write back `Tenant.withM` and so keep the object
+  types, the records and the counter (`stepTenant_member_eq`). `Err` gained `invalidIntent`,
+  `unknownRole`, `lastOwner` and `tenantExists`. The fixture's editor holds a policy `manage` on the
+  members resource and the fixture's roles are defined (`initialTenant.roles`), so a manager who is not
+  the owner is in the fixture.
+- **Intents carry the request's time and address.** An invitation's creation and redemption read the
+  time of the request, and a redemption the verified address of the caller. The model's `Ctx` is the
+  tenant and the principal, so `createInvitation` carries `now` and `redeemInvitation` carries `now` and
+  the verified address: the scenario format writes them (`@<now>`, `verified=<address>`) and the
+  harness puts them in the kernel's context.
+- **Tenants.** A `CreateTenant` is refused `tenantExists` when the tenant exists, and otherwise made by
+  the system only (`unauthorized`), with a name that is not blank (`invalidIntent`). The genesis tenant
+  has the owner holding `owner`, the two built-in roles, no object types, no teams, no invitations,
+  and record counter 1. The name is checked and not stored.
+- **Reserved ids.** Principal ids are numbers; the kernel's `team:` prefix and its automation ids are
+  one predicate, `reservedId` (ids from `reservedFrom` = 1,000,000 up; the harness writes such a user
+  `team:p<n>`). A reserved named principal (of `CreateTenant`, `AssignRole`, `AddTeamMember`) or a
+  reserved caller is refused `invalidIntent` before the tenant is looked at, for every intent. Agents,
+  which the kernel refuses as tenant owners with its own kind (`AgentAdminPower`), are not generated.
 - **Check order.** Each decision follows `transition.rs`: the permission to manage members, then the
   team or invitation, then the role (`unknownRole`, then `public`), then conferring, then the owner rule
   (asked of the state after the change, for removals only). `manageMembers` is the owner, or a policy on
@@ -846,22 +880,46 @@ earlier theorem keeps its statement and its proof. What is in place and what is 
   and every policy power of it (`powerHeld`, the kernel's `holds_policy_power`).
 - **The owner rule** asks whether some user holds `owner` directly or through a team after the change,
   as the kernel's `effective_owners` does; a tenant with no owner before is not held to it.
-- **Invitations.** The address is trimmed and lowercased and must contain `@`. Expiry is the context's
+- **Invitations.** The address is trimmed and lowercased and must contain `@`. Expiry is the intent's
   time plus fourteen days in milliseconds. Redemption asks the verified address of the caller (the
   kernel's `verified_address`), that the invitation is unredeemed, unrevoked and unexpired, and that the
   issuer still manages members and confers every role offered; the redeemer gains the roles.
+- **The executable kernels** decide a membership intent with the same decision as the model on the
+  tenant's membership (`ITenant.mt`, `ITenant.withM`), which is not indexed by record, so their
+  indexes are untouched (`member_good`); the refinement theorems (`stepTenantI_refines`,
+  `stepTenantX_refines`, `stepI_refines`, `stepX_refines`, `stepI_inv`, `stepX_ok`) cover every intent.
+  A creation makes the genesis tenant with empty slots and empty indexes (`createdTenantI_abs`,
+  `createdTenantX_abs`, `genesis_ok`).
+- **The working set** carries the membership in its header (`Header.roles`, `teams`, `invitations`), decides
+  a membership intent from the header alone, and commits it as `Delta.members`; a creation is
+  `Delta.genesis`. `touchedIn` invalidates the header for both (and the counter and the tables for a
+  creation), and `touchedIn_sound` covers them (`sound_members`, `sound_genesis`).
+- **The codec** carries a tenant's roles, teams and invitations after its limits, the intents `createTenant`
+  (tag 6) and `member` (tag 7, with its own tag), and four more refusals (tags 14 to 17). The Rust
+  mirror (`crates/lean-kernel-ffi/src/codec.rs`) reads and writes the same bytes; the fixtures
+  `fix_tenant`, `fix_tenant_members`, `fix_policy_members`, `fix_intent_*` and `fix_err_*` are checked on
+  both sides.
+- **The harness.** `lean/Main.lean` reads `create-tenant`, `assign`, `revoke`, `team`, `team-assign`,
+  `team-revoke`, `team-add`, `team-remove`, `invite`, `invite-revoke` and `redeem` lines;
+  `crates/verification/src/lean.rs` maps each to the kernel's intent (role numbers 0 to 3 are
+  `owner`, `public`, `editor`, `writer`, any other number an undefined role; teams are `team<n>`,
+  invitations `inv<n>`), and a tenant's state ends with its membership lines when it is not the
+  fixture's (always for tenant 3, which is printed only when it exists). The generator
+  (`lean_diff::generate`) mixes random membership operations with scripted lifecycles, and writes the
+  roles of an invitation in the kernel's order (by role id text), so the model's order-given rule
+  names the same bad role. Eighteen `h-` scenarios cover each decision.
 - **Abstractions.** Whitespace is the ASCII space, tab, line feed and carriage return (`trimWs`,
   `isBlank`), where the kernel trims Unicode whitespace. A role list is taken in the order given; the
-  kernel's set is ordered, so with two bad roles the model may name a different one of them. The
-  tenant's name is checked and not stored. A removal's sessions are not modelled. Separations of duties,
-  scoped roles (D-8403), staging roles and products are not modelled. An invitation's expiry is a number
-  rather than an optional timestamp, so a legacy invitation with no expiry is not represented.
-- **Not done.** The intents are not added to `Intent` and `step`; the executable kernel (`Strata/Impl`)
-  does not implement them, and the refinement theorems do not cover them; the codec and its Rust mirror
-  do not carry teams or invitations; the differential harness (`crates/verification/src/lean.rs`,
-  `lean_diff.rs`) has no scenario format or generator for them, and no `h-` scenarios exist. The
-  `Resource.members` constructor has a codec tag (3) that the Rust mirror does not yet read. None of these
-  was attempted in this slice; each is a separate change.
+  kernel's set is ordered, so the generator writes roles in that order. The tenant's name is checked and
+  not stored. A removal's sessions are not modelled. Separations of duties, scoped roles (D-8403),
+  staging roles and products are not modelled. An invitation's expiry is a number rather than an
+  optional timestamp, so a legacy invitation with no expiry is not represented.
+- **What was checked.** The model builds with no `sorry`; the axiom audit lists only `propext`,
+  `Classical.choice` and `Quot.sound`; the existing fixtures print the same text from the specification
+  (`strata_model`), the executable kernel (`--impl`) and the indexed kernel (`--indexed`), and that text
+  is `lean/fixtures/expected.txt`. The Rust sides (codec mirror, scenario mapping, generator) were
+  written by reading and are compared with the model by `cargo test -p strata-verification` and the
+  differential run.
 
 ### Slice 6 review note: what was abstracted
 
@@ -911,7 +969,7 @@ earlier theorem keeps its statement and its proof. What is in place and what is 
   and, for a create, for every candidate record. No statement was weakened.
 - **The executable kernel** takes the header (members, grants, policies) and calls the model's
   decisions on it, so its permission tests are the model's, and its refinement theorems are as before.
-- **Not modelled.** Teams and conferring roles are in the membership layer (slice 7), not in `Tenant`; scoped
+- **Not modelled.** Scoped
   roles (D-8403, unassigned); automation principals and their run-as roles (slice 15); defining roles,
   permissions and policies by a schema change (slice 11); `hasRole`, the clock, a condition that reads
   through a reference, and the capability-gated changes (slices 11 to 13); reads, whose visibility uses
