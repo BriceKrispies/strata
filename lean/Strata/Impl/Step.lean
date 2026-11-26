@@ -176,6 +176,9 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
     changeSchemaI (schemaRulesOk t.policies) (canManage t.header p) t strict ev cs
   | .createTenant _ _ => .error .tenantExists
   | .member j => (stepMember t.mt (j.ctxOf p) j).map t.withM
+  | .writeSetting n lvl team v ev =>
+    (writeSettingT t.abs p n lvl team v ev).map (fun s =>
+      { t with overrides := s.overrides, settingRevs := s.settingRevs })
 
 /-- The tenant a `CreateTenant` makes, as the implementation holds it: no object types, the genesis
     membership, a counter that starts at 1, and the revision and event sequence of its one event (slice 9). -/
@@ -307,6 +310,13 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
     cases stepMember t.mt (j.ctxOf p) j with
     | error e => rfl
     | ok m => rfl
+  | writeSetting n lvl team v ev =>
+    simp only [stepTenantI, stepTenant]
+    cases h : writeSettingT t.abs p n lvl team v ev with
+    | error e => rfl
+    | ok s =>
+      obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h
+      rfl
   | create ty fs =>
     cases hty : t.typ? ty with
     | none =>

@@ -38,6 +38,10 @@ structure ITenant where
   roles : List RoleId := [ownerRole, publicRole]
   teams : List (TeamId × TeamDef) := []
   invitations : List (InvitationId × InvitationDef) := []
+  /-- The settings of slice 12, held as the spec holds them (they are not indexed by record). -/
+  settingDefs : List SettingDef := []
+  overrides : List SettingOverride := []
+  settingRevs : List (String × Nat) := []
   /-- The revision, the event sequence and the schema version, as the spec holds them (slice 9). -/
   revision : Nat := 0
   eventSeq : Nat := 0
@@ -65,7 +69,8 @@ def ITenant.abs (t : ITenant) : Tenant :=
   { types := t.types.map absEntry, members := t.members, grants := t.grants, policies := t.policies,
     nextId := t.nextId, limits := t.limits, roles := t.roles, teams := t.teams,
     invitations := t.invitations, revision := t.revision, eventSeq := t.eventSeq,
-    schemaVersion := t.schemaVersion }
+    schemaVersion := t.schemaVersion, settingDefs := t.settingDefs, overrides := t.overrides,
+    settingRevs := t.settingRevs }
 
 /-- The part of an implementation tenant the membership intents see. -/
 def ITenant.mt (t : ITenant) : MTenant :=

@@ -949,6 +949,7 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
     exact changeSchema_refs hrefs hs h
   | createTenant owner name => simp [stepTenant] at h
   | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact hrefs
+  | writeSetting n lvl team v ev => obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h; exact hrefs
   | create ty fs =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h

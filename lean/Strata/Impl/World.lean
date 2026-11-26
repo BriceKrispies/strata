@@ -34,6 +34,14 @@ theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant
       simp only [hs, Except.map, Except.ok.injEq] at h
       subst h
       exact hinv
+  | writeSetting n lvl team v ev =>
+    simp only [stepTenantI] at h
+    cases hs : writeSettingT t.abs p n lvl team v ev with
+    | error e => simp [hs, Except.map] at h
+    | ok s =>
+      simp only [hs, Except.map, Except.ok.injEq] at h
+      subst h
+      exact hinv
   | create ty fs =>
     simp only [stepTenantI] at h
     cases hty : t.typ? ty with
@@ -271,12 +279,14 @@ def ITenant.ofEmpty (t : Tenant) : ITenant :=
   { types := t.types.map (fun e => (e.1, IObj.ofEmpty e.2)), members := t.members,
     grants := t.grants, policies := t.policies, nextId := t.nextId, limits := t.limits,
     roles := t.roles, teams := t.teams, invitations := t.invitations, revision := t.revision,
-    eventSeq := t.eventSeq, schemaVersion := t.schemaVersion }
+    eventSeq := t.eventSeq, schemaVersion := t.schemaVersion, settingDefs := t.settingDefs,
+    overrides := t.overrides, settingRevs := t.settingRevs }
 
 theorem ofEmpty_abs (t : Tenant) (h : ∀ e ∈ t.types, e.2.records = []) :
     (ITenant.ofEmpty t).abs = t := by
   cases t with
-  | mk types members grants policies nextId limits roles revision eventSeq schemaVersion teams invitations =>
+  | mk types members grants policies nextId limits roles revision eventSeq schemaVersion teams invitations
+      settingDefs overrides settingRevs =>
     simp only [ITenant.abs, ITenant.ofEmpty, List.map_map]
     congr 1
     conv => rhs; rw [← List.map_id types]

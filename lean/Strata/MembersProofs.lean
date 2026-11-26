@@ -1009,6 +1009,7 @@ theorem stepTenant_data_mt (t t' : Tenant) (p : Principal) (i : Intent)
   cases i with
   | createTenant owner name => exact absurd rfl (hc owner name)
   | member j => exact absurd rfl (hm j)
+  | writeSetting n lvl team v ev => obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h; rfl
   | changeSchema ev strict cs =>
     obtain ⟨types1, -, -, ht', -, -⟩ := stepTenant_changeSchema_parts h
     subst ht'; rfl

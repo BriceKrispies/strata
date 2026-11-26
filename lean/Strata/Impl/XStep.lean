@@ -227,6 +227,11 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     match stepMember core.mt (j.ctxOf p) j with
     | .error e => .error (e, ⟨core, ux, cx, rx⟩)
     | .ok m => .ok ⟨core.withM m, ux, cx, rx⟩
+  | .writeSetting n lvl team v ev =>
+    -- A setting changes no record, so the indexes are as they were.
+    match stepTenantI core p (.writeSetting n lvl team v ev) with
+    | .error e => .error (e, ⟨core, ux, cx, rx⟩)
+    | .ok core' => .ok ⟨core', ux, cx, rx⟩
 
 /-- One intent against one indexed tenant; a refusal hands the tenant back. -/
 def stepTenantXL (x : XTenant) (p : Principal) (i : Intent) : Except (Err × XTenant) XTenant :=

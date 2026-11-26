@@ -837,6 +837,77 @@ structure InvitationDef where
   revokedBy : Option PrincipalId := none
   deriving Repr
 
+/-- A level of a setting (slice 12, the kernel's `SettingLevel`), from the least to the most specific. -/
+inductive SettingLevel where
+  | platform
+  | tenant
+  | team
+  | person
+  deriving DecidableEq, Repr
+
+/-- The place of a level from the least to the most specific (the kernel's `rank`). -/
+def SettingLevel.rank : SettingLevel → Nat
+  | .platform => 0
+  | .tenant => 1
+  | .team => 2
+  | .person => 3
+
+/-- A setting's type: a flag, a whole number or text. The kernel's timestamps and declared types are not
+    modelled (slice 12 review note). -/
+inductive SettingType where
+  | bool
+  | int
+  | str
+  deriving DecidableEq, Repr
+
+/-- Whether a value is of a setting's type; `null` is of none. -/
+def SettingType.admits : SettingType → Val → Bool
+  | .bool, .bool _ => true
+  | .int, .int _ => true
+  | .str, .str _ => true
+  | _, _ => false
+
+/-- What a setting definition allows beyond its type: a closed set of values, or a range of whole numbers
+    (the kernel's `SettingAllowed`, without the reference form). -/
+inductive SettingAllowed where
+  | closed (vs : List Val)
+  | range (lo hi : Int)
+  deriving DecidableEq, Repr
+
+/-- A setting definition (the kernel's `SettingDef`): its name, its type, the levels that may hold an
+    override, the level a lock closes from (every level more specific than it is closed), its default and
+    what it allows. The kernel's label and description are not modelled. -/
+structure SettingDef where
+  name : String
+  ty : SettingType
+  levels : List SettingLevel
+  locked : Option SettingLevel := none
+  default : Val
+  allowed : Option SettingAllowed := none
+  deriving DecidableEq, Repr
+
+/-- What an override is of: the tenant itself, a team, or a person (the kernel's override key names the
+    level and the subject). -/
+inductive SettingSubject where
+  | tenant
+  | team (t : TeamId)
+  | person (p : PrincipalId)
+  deriving DecidableEq, Repr
+
+/-- The level of a subject. -/
+def SettingSubject.level : SettingSubject → SettingLevel
+  | .tenant => .tenant
+  | .team _ => .team
+  | .person _ => .person
+
+/-- An override of a setting at a subject: its value and the revision of the setting it was written at. -/
+structure SettingOverride where
+  name : String
+  subject : SettingSubject
+  value : Val
+  revision : Nat
+  deriving DecidableEq, Repr
+
 /-- What the membership intents see of a tenant: its members (who hold direct roles), the grants and
     policies that decide who may manage members and confer a role, the roles its schema defines (the
     built-in `owner` and `public` included), its teams and its invitations. -/
@@ -892,6 +963,12 @@ structure Tenant where
   teams : List (TeamId × TeamDef) := []
   /-- The invitations, by id (slice 7). -/
   invitations : List (InvitationId × InvitationDef) := []
+  /-- The setting definitions the tenant's schema holds (slice 12; the platform's are added by lookup). -/
+  settingDefs : List SettingDef := []
+  /-- The overrides of settings, at most one for each setting and subject (slice 12). -/
+  overrides : List SettingOverride := []
+  /-- The revision of each setting, by name, raised by each change of it (slice 12, never reused). -/
+  settingRevs : List (String × Nat) := []
   deriving Repr
 
 /-- The part of a tenant the membership intents see. -/

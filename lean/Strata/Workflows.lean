@@ -642,6 +642,9 @@ theorem stepTenant_preserves_states (t t' : Tenant) (p : Principal) (i : Intent)
   | member j =>
     obtain ⟨m', rfl⟩ := stepTenant_member_eq h
     exact hs
+  | writeSetting n lvl team v ev =>
+    obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape h
+    exact hs
   | create ty fs =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h

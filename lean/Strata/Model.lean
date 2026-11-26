@@ -10,6 +10,7 @@ that decides an outcome, the executable kernels, the working set and the harness
 
 import Strata.Members
 import Strata.SchemaChange
+import Strata.Settings
 
 namespace Strata
 
@@ -40,6 +41,11 @@ inductive Intent where
   | createTenant (owner : PrincipalId) (name : String)
   /-- A membership intent of an existing tenant: roles, teams, invitations (slice 7). -/
   | member (j : MemberIntent)
+  /-- Set one override of a setting, or remove it when `value` is `none` (slice 12). `level` and `team` name the
+      subject (the caller for a person, the tenant, or the team named); `expected` is the revision of the
+      override the caller read, zero for none. -/
+  | writeSetting (name : String) (level : SettingLevel) (team : Option TeamId) (value : Option Val)
+      (expected : Nat)
   deriving Repr
 
 /-- The user an intent names, if it names one: the owner of a new tenant, the user a role is assigned
@@ -172,6 +178,7 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
   -- The tenant exists, so a creation is refused; a membership intent is the layer's decision.
   | .createTenant _ _ => .error .tenantExists
   | .member j => stepMemberT t p j
+  | .writeSetting n lvl team v ev => writeSettingT t p n lvl team v ev
 /-- Whether the acting principal is allowed to make this intent at all: the object type exists,
     and the permission holds on the record (or, for a schema change, the owner). -/
 def authorized (t : Tenant) (p : Principal) : Intent → Bool
@@ -196,6 +203,10 @@ def authorized (t : Tenant) (p : Principal) : Intent → Bool
   -- members.
   | .member (.redeemInvitation _ _ _) => p.userId?.isSome
   | .member _ => manageMembers t.mt p
+  -- A setting at the tenant or team level needs its capability; a person's own needs only a signed-in caller.
+  | .writeSetting _ lvl _ _ _ =>
+    p.userId?.isSome && (lvl == .person || (lvl == .tenant && t.holdsCap p capWriteTenant)
+      || (lvl == .team && t.holdsCap p capWriteTeam))
 
 /-- The object types a schema intent re-validates, as the kernel's `touched_objects` gives them: the
     type it names, and, for a field, the types the field refers to. Other intents touch none. -/
@@ -265,6 +276,9 @@ inductive EventBody where
   | recordDeleted (ty : TypeId) (id : RecordId) (before : Record)
   /-- A principal's effective roles changed: its direct roles and those of its teams (slice 9). -/
   | memberChanged (who : Member) (roles : List RoleId)
+  /-- An override of a setting was set or removed, naming the setting and its subject and carrying no value
+      (slice 12, the kernel's `SettingChanged`: a person's value can be personal data). -/
+  | settingChanged (name : String) (subject : SettingSubject)
   deriving Repr
 
 /-- A domain event: its sequence number (gapless per tenant), the revision it was committed at, the principal
@@ -378,6 +392,7 @@ def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventB
     | some old => referrerEvents t ty id ++ [.recordDeleted ty id old]
     | none => []
   | .member j, t' => memberBodies p j t'.mt
+  | .writeSetting n lvl team _ _, _ => [.settingChanged n (settingSubjectOf p lvl team)]
   | .changeSchema _ _ cs, t' =>
     .schemaChanged (t.schemaVersion + 1) (cs.map Change.line) (changeGrandfathered t.limits t'.types cs) ::
       (rewrittenEvents t t' (cs.flatMap Change.touched) ++ removedEvents t cs)

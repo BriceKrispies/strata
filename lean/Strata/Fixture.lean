@@ -125,6 +125,21 @@ def fixturePolicies : List Policy :=
     { role := writerRole, resource := .object 4, actions := [.update, .delete],
       condition := some (.and ownRecord (.cmp .le (.field .new 2) (.lit (.int 5)))) } ]
 
+/-- The setting definitions of the fixture (slice 12), one for each shape of definition the kernel holds: `notify`
+    a flag open at the tenant and person levels; `density` a whole number from 0 to 9 open at every level;
+    `label` a text open at the team and person levels; `banner` a text open at the tenant level only, locked
+    there (so the person level is closed by the lock); `mode` a text of two values open at the tenant and team
+    levels. None of them has an override in the initial tenants. -/
+def fixtureSettings : List SettingDef :=
+  [ { name := "notify", ty := .bool, levels := [.tenant, .person], default := .bool false },
+    { name := "density", ty := .int, levels := [.tenant, .team, .person], default := .int 3,
+      allowed := some (.range 0 9) },
+    { name := "label", ty := .str, levels := [.team, .person], default := .str "plain" },
+    { name := "banner", ty := .str, levels := [.tenant, .person], locked := some .tenant,
+      default := .str "none" },
+    { name := "mode", ty := .str, levels := [.tenant, .team], default := .str "plain",
+      allowed := some (.closed [.str "plain", .str "bold"]) } ]
+
 /-- The object types every scenario starts from, each tenant with an owner, an editor and two writers.
     Type `4` (the tickets, with the workflow) is part of the fixture too. The size limits are the kernel's. -/
 def initialTenant (n : Nat) : Tenant :=
@@ -140,7 +155,7 @@ def initialTenant (n : Nat) : Tenant :=
     roles := [ownerRole, publicRole, editorRole, writerRole],
     -- The kernel's fixture installs the tenant by six accepted steps: its creation, two schema changes
     -- (one event each, the schema version raised by each), and three role assignments (one event each).
-    revision := 6, eventSeq := 6, schemaVersion := 3 }
+    revision := 6, eventSeq := 6, schemaVersion := 3, settingDefs := fixtureSettings }
 
 /-- The fields an `update` line names for each object type: the item's fields, or the part's.
     A line that does not name one of them gives it `null`, so it replaces the record (`patch`

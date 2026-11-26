@@ -94,6 +94,11 @@ structure Header where
   invitations : List (InvitationId × InvitationDef) := []
   /-- The schema version (slice 11): a schema change names the version it expects. -/
   schemaVersion : Nat := 1
+  /-- The settings (slice 12): a setting write decides from the header, as a membership intent does, and
+      writes the membership part of the header (`Delta.members`). -/
+  settingDefs : List SettingDef := []
+  overrides : List SettingOverride := []
+  settingRevs : List (String × Nat) := []
 
 def TypeHead.ofObj (o : ObjType) : TypeHead :=
   { schema := o.schema, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows }
@@ -106,7 +111,8 @@ def TypeHead.withRecords (hh : TypeHead) (rs : Records) : ObjType :=
 def _root_.Strata.Tenant.header (t : Tenant) : Header :=
   { types := t.types.map (fun e => (e.1, TypeHead.ofObj e.2)), members := t.members,
     grants := t.grants, policies := t.policies, limits := t.limits, roles := t.roles,
-    teams := t.teams, invitations := t.invitations, schemaVersion := t.schemaVersion }
+    teams := t.teams, invitations := t.invitations, schemaVersion := t.schemaVersion,
+    settingDefs := t.settingDefs, overrides := t.overrides, settingRevs := t.settingRevs }
 
 /-- A header as a tenant with no records, so the model's permission functions apply to it. They
     read neither records nor the counter. -/
@@ -114,7 +120,8 @@ def Header.asTenant (h : Header) : Tenant :=
   { types := h.types.map (fun e => (e.1, TypeHead.withRecords e.2 [])),
     members := h.members, grants := h.grants, policies := h.policies, nextId := 0,
     limits := h.limits, roles := h.roles, teams := h.teams, invitations := h.invitations,
-    schemaVersion := h.schemaVersion }
+    schemaVersion := h.schemaVersion, settingDefs := h.settingDefs, overrides := h.overrides,
+    settingRevs := h.settingRevs }
 
 /-- The records of each object type of a tenant, in the tenant's type order. -/
 def _root_.Strata.Tenant.tables (t : Tenant) : List (TypeId × Records) :=
@@ -224,6 +231,9 @@ inductive Delta where
   /-- Replace the tenant's membership: its members, grants, policies, roles, teams and invitations
       (slice 7). The record tables, the counter and the limits are not touched. -/
   | members (m : MTenant)
+  /-- Replace the tenant's overrides of settings and the revisions of its settings (slice 12). The header
+      carries them, and no record, counter or table is touched. -/
+  | settings (ov : List SettingOverride) (rv : List (String × Nat))
   /-- Make the tenant that a system `CreateTenant` creates, the genesis tenant of this owner, when it
       does not exist (slice 7). Against a tenant that exists it changes nothing. -/
   | genesis (owner : PrincipalId)
@@ -260,6 +270,7 @@ def Delta.apply (t : Tenant) : Delta → Tenant
   | .schema ty h => t.modType ty (fun o => { o with schema := h.schema, uniques := h.uniques })
   | .types ts => { t with types := ts }
   | .members m => t.withM m
+  | .settings ov rv => { t with overrides := ov, settingRevs := rv }
   | .genesis _ => t
 
 /-! ### Validity read through single records
@@ -346,6 +357,7 @@ def applyWorld (w : World) (x : TenantId) (d : Delta) : World :=
   | .schema ty h => upd w x ((w x).map (fun t => (Delta.schema ty h).apply t))
   | .types ts => upd w x ((w x).map (fun t => (Delta.types ts).apply t))
   | .members m => upd w x ((w x).map (fun t => (Delta.members m).apply t))
+  | .settings ov rv => upd w x ((w x).map (fun t => (Delta.settings ov rv).apply t))
 
 def Store.applyDelta (s : Store) (x : TenantId) (d : Delta) : Store :=
   { world := applyWorld s.world x d, gen := upd s.gen x (s.gen x + 1) }
@@ -471,6 +483,10 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
     match stepMember h.asTenant.mt (j.ctxOf p) j with
     | .error e => .error e
     | .ok m => .ok (.members m)
+  | .writeSetting n lvl team v ev =>
+    match writeSettingT h.asTenant p n lvl team v ev with
+    | .error e => .error e
+    | .ok t' => .ok (.settings t'.overrides t'.settingRevs)
 
 /-- A decision made through any source of key values. It reads keys of tenant `x` only. -/
 def decideOn (get : Key → Payload) (x : TenantId) (p : Principal) (i : Intent) :
@@ -625,6 +641,20 @@ theorem clearBreaks_fold (t : Tenant) (ty : TypeId) (id : RecordId) :
         (constraintProblem (storedEnv (clearRef e.2.schema ty id q.2)) e.2.constraints).isSome))) =
       t.clearBreaks ty id := rfl
 
+/-- A setting decision on the header of a tenant is the decision on the tenant, up to the object types and the
+    counter, which the settings decision does not read (slice 12). -/
+theorem writeSettingT_header (t : Tenant) (p : Principal) (n : String) (lvl : SettingLevel)
+    (team : Option TeamId) (v : Option Val) (e : Nat) :
+    writeSettingT t.header.asTenant p n lvl team v e =
+      (writeSettingT t p n lvl team v e).map
+        (fun a => { a with types := t.header.asTenant.types, nextId := 0, revision := 0, eventSeq := 0 }) := by
+  have hv : t.header.asTenant.decisionView = t.decisionView := rfl
+  unfold writeSettingT
+  rw [hv]
+  cases hc : writeSettingCore t.decisionView p n lvl team v e with
+  | error x => rfl
+  | ok a => rfl
+
 /-- A decision from the header, the counter, the tenant's own lookup and record tables, applied as
     a delta, is the kernel's step. -/
 theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
@@ -670,6 +700,14 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
     cases stepMember t.mt (j.ctxOf p) j with
     | error e => rfl
     | ok m => rfl
+  | writeSetting n lvl team v ev =>
+    simp only [decideTenant, stepTenant]
+    rw [writeSettingT_header]
+    cases hW : writeSettingT t p n lvl team v ev with
+    | error e => simp [hW, Except.map]
+    | ok a =>
+      obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape hW
+      simp [Except.map, Delta.apply, Tenant.withM, Tenant.mt]
   | create ty fs =>
     simp only [TypeHead.ofObj, decideTenant, stepTenant, header_types_lookup, tables_lookup, unknownType_header,
       canCreate_header, canAttemptCreate_header, hhas, problem_eq_via]
@@ -886,6 +924,7 @@ def touchedIn : Delta → Key → Bool
   | .types _, _ => true
   | .schema _ _, .header _ => true
   | .members _, .header _ => true
+  | .settings _ _, .header _ => true
   | .genesis _, .header _ => true
   | _, .header _ => false
   | .create _ _ _, .counters _ => true
@@ -896,12 +935,15 @@ def touchedIn : Delta → Key → Bool
   | .remove ty' id' cl, .record _ ty id => (ty == ty' && id == id') || cl.contains (ty, id)
   | .schema _ _, .record _ _ _ => false
   | .members _, .record _ _ _ => false
+  | .settings _ _, .record _ _ _ => false
   | .genesis _, .record _ _ _ => false
   | .schema _ _, .all _ => false
   | .members _, .all _ => false
+  | .settings _ _, .all _ => false
   | _, .all _ => true
   | .schema _ _, .answer _ _ _ _ => false
   | .members _, .answer _ _ _ _ => false
+  | .settings _ _, .answer _ _ _ _ => false
   | .genesis _, .answer _ _ _ _ => false
   | .create _ _ _, .answer _ _ _ _ => true
   | .replace _ _ _, .answer _ _ _ _ => true
@@ -1327,6 +1369,33 @@ theorem sound_members (w : World) (x : TenantId) (m : MTenant) (k : Key) (hx : k
     simp only [fetch, applyWorld, upd_same]
     cases hw : w t <;> rfl
 
+/-- A change of the settings changes the header and nothing else a key reads (slice 12). -/
+theorem sound_settings (w : World) (x : TenantId) (ov : List SettingOverride) (rv : List (String × Nat))
+    (k : Key) (hx : k.tenant = x) (hin : touchedIn (.settings ov rv) k = false) :
+    fetch (applyWorld w x (.settings ov rv)) k = fetch w k := by
+  cases k with
+  | header t => simp [touchedIn] at hin
+  | counters t =>
+    simp only [Key.tenant] at hx; subst hx
+    simp only [fetch, applyWorld, upd_same]
+    cases hw : w t <;> rfl
+  | record t ty id =>
+    simp only [Key.tenant] at hx; subst hx
+    simp only [fetch, applyWorld, upd_same]
+    cases hw : w t <;> rfl
+  | all t =>
+    simp only [Key.tenant] at hx; subst hx
+    simp only [fetch, applyWorld, upd_same]
+    cases hw : w t <;> rfl
+  | answer t ty f v =>
+    simp only [Key.tenant] at hx; subst hx
+    simp only [fetch, applyWorld, upd_same]
+    cases hw : w t <;> rfl
+  | page t ty a l =>
+    simp only [Key.tenant] at hx; subst hx
+    simp only [fetch, applyWorld, upd_same]
+    cases hw : w t <;> rfl
+
 /-- A creation changes the header and the counter, and the lists of tables; no record, answer or page
     of a tenant with no object types differs from that of a tenant that does not exist. -/
 theorem sound_genesis (w : World) (x : TenantId) (o : PrincipalId) (k : Key) (hx : k.tenant = x)
@@ -1359,11 +1428,14 @@ theorem touchedIn_sound : InvSound touchedIn := by
   intro w x d k hx hin
   by_cases hnm : ∃ m, d = .members m
   · obtain ⟨m, rfl⟩ := hnm; exact sound_members w x m k hx hin
+  by_cases hns : ∃ ov rv, d = .settings ov rv
+  · obtain ⟨ov, rv, rfl⟩ := hns; exact sound_settings w x ov rv k hx hin
   by_cases hng : ∃ o, d = .genesis o
   · obtain ⟨o, rfl⟩ := hng; exact sound_genesis w x o k hx hin
   by_cases hnt : ∃ ts, d = .types ts
   · obtain ⟨ts, rfl⟩ := hnt; simp [touchedIn] at hin
   have hnm' : ∀ m, d ≠ .members m := fun m h => hnm ⟨m, h⟩
+  have hns' : ∀ ov rv, d ≠ .settings ov rv := fun ov rv h => hns ⟨ov, rv, h⟩
   have hng' : ∀ o, d ≠ .genesis o := fun o h => hng ⟨o, h⟩
   have hnt' : ∀ ts, d ≠ .types ts := fun ts h => hnt ⟨ts, h⟩
   cases k with
@@ -1371,6 +1443,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     simp only [Key.tenant] at hx; subst hx
     cases d with
     | members m => exact absurd rfl (hnm' m)
+    | settings ov rv => exact absurd rfl (hns' ov rv)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | schema ty' h' => simp [touchedIn] at hin
@@ -1393,6 +1466,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     simp only [Key.tenant] at hx; subst hx
     cases d with
     | members m => exact absurd rfl (hnm' m)
+    | settings ov rv => exact absurd rfl (hns' ov rv)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | create ty' id' r => simp [touchedIn] at hin
@@ -1417,6 +1491,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     simp only [Key.tenant] at hx; subst hx
     cases d with
     | members m => exact absurd rfl (hnm' m)
+    | settings ov rv => exact absurd rfl (hns' ov rv)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | create ty' id' r =>
@@ -1459,6 +1534,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     simp only [Key.tenant] at hx; subst hx
     cases d with
     | members m => exact absurd rfl (hnm' m)
+    | settings ov rv => exact absurd rfl (hns' ov rv)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | schema ty' h' =>
@@ -1476,6 +1552,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     simp only [Key.tenant] at hx; subst hx
     cases d with
     | members m => exact absurd rfl (hnm' m)
+    | settings ov rv => exact absurd rfl (hns' ov rv)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | schema ty' h' =>
@@ -1493,6 +1570,7 @@ theorem touchedIn_sound : InvSound touchedIn := by
     simp only [Key.tenant] at hx; subst hx
     cases d with
     | members m => exact absurd rfl (hnm' m)
+    | settings ov rv => exact absurd rfl (hns' ov rv)
     | genesis o => exact absurd rfl (hng' o)
     | types ts => exact absurd rfl (hnt' ts)
     | create ty' id' r =>

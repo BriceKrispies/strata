@@ -1293,12 +1293,260 @@ def decInvitationEntry : Dec (InvitationId × InvitationDef) := decPair decNat d
 theorem lawful_invitationEntry : Lawful encInvitationEntry decInvitationEntry :=
   lawful_pair lawful_nat lawful_invitationDef
 
+/-! ## Settings (slice 12)
+
+A level, a type and a subject are one tag byte, or a tag and a number; a definition and an override are
+nested products of their fields, as the tenant's. -/
+
+/-- A setting level: `platform` 0, `tenant` 1, `team` 2, `person` 3, one byte. -/
+def encLevel : SettingLevel → Bytes
+  | .platform => [tag 0]
+  | .tenant => [tag 1]
+  | .team => [tag 2]
+  | .person => [tag 3]
+
+def decLevel : Dec SettingLevel := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.platform, r)
+    | 1 => some (.tenant, r)
+    | 2 => some (.team, r)
+    | 3 => some (.person, r)
+    | _ => none
+
+theorem lawful_level : Lawful encLevel decLevel := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x <;> simp [encLevel, decLevel, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decLevel] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ 4 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk
+      · simp only [decLevel, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encLevel, byte_eq_tag b 0 hk]
+      · simp only [decLevel, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encLevel, byte_eq_tag b 1 hk]
+      · simp only [decLevel, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encLevel, byte_eq_tag b 2 hk]
+      · simp only [decLevel, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encLevel, byte_eq_tag b 3 hk]
+      · simp only [decLevel] at h
+        exfalso
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+/-- A setting's type: the flag (tag 0), the whole number (tag 1), the text (tag 2), one byte. -/
+def encSettingType : SettingType → Bytes
+  | .bool => [tag 0]
+  | .int => [tag 1]
+  | .str => [tag 2]
+
+def decSettingType : Dec SettingType := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.bool, r)
+    | 1 => some (.int, r)
+    | 2 => some (.str, r)
+    | _ => none
+
+theorem lawful_settingType : Lawful encSettingType decSettingType := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x <;> simp [encSettingType, decSettingType, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decSettingType] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ 3 ≤ b.toNat by omega)
+        with hk | hk | hk | hk
+      · simp only [decSettingType, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encSettingType, byte_eq_tag b 0 hk]
+      · simp only [decSettingType, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encSettingType, byte_eq_tag b 1 hk]
+      · simp only [decSettingType, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encSettingType, byte_eq_tag b 2 hk]
+      · simp only [decSettingType] at h
+        exfalso
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+/-- A subject: the tenant (tag 0), a team (tag 1, its number), a person (tag 2, its number). -/
+def encSubject : SettingSubject → Bytes
+  | .tenant => [tag 0]
+  | .team t => tag 1 :: encNat t
+  | .person p => tag 2 :: encNat p
+
+def decSubject : Dec SettingSubject := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.tenant, r)
+    | 1 => match decNat r with
+      | some (t, r') => some (.team t, r')
+      | none => none
+    | 2 => match decNat r with
+      | some (p, r') => some (.person p, r')
+      | none => none
+    | _ => none
+
+theorem lawful_subject : Lawful encSubject decSubject := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | tenant => simp [encSubject, decSubject, tag]
+    | team t => simp [encSubject, decSubject, tag, lawful_nat.1 t rest]
+    | person p => simp [encSubject, decSubject, tag, lawful_nat.1 p rest]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decSubject] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ 3 ≤ b.toNat by omega)
+        with hk | hk | hk | hk
+      · simp only [decSubject, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encSubject, byte_eq_tag b 0 hk]
+      · simp only [decSubject, hk] at h
+        cases hn : decNat r with
+        | none => simp [hn] at h
+        | some q =>
+          obtain ⟨t, r'⟩ := q
+          simp only [hn, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hr := lawful_nat.2 r t r' hn
+          simp [encSubject, byte_eq_tag b 1 hk, hr]
+      · simp only [decSubject, hk] at h
+        cases hn : decNat r with
+        | none => simp [hn] at h
+        | some q =>
+          obtain ⟨p, r'⟩ := q
+          simp only [hn, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hr := lawful_nat.2 r p r' hn
+          simp [encSubject, byte_eq_tag b 2 hk, hr]
+      · simp only [decSubject] at h
+        exfalso
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+/-- A setting's allowed values: a closed set (tag 0), or a range of whole numbers (tag 1). -/
+def encAllowed : SettingAllowed → Bytes
+  | .closed vs => tag 0 :: encList encVal vs
+  | .range lo hi => tag 1 :: (encInt lo ++ encInt hi)
+
+def decAllowed : Dec SettingAllowed := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => match decList decVal r with
+      | some (vs, r') => some (.closed vs, r')
+      | none => none
+    | 1 => match decInt r with
+      | some (lo, r1) => match decInt r1 with
+        | some (hi, r2) => some (.range lo hi, r2)
+        | none => none
+      | none => none
+    | _ => none
+
+theorem lawful_allowed : Lawful encAllowed decAllowed := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | closed vs => simp [encAllowed, decAllowed, tag, (lawful_list lawful_val).1]
+    | range lo hi => simp [encAllowed, decAllowed, tag, lawful_int.1 lo, lawful_int.1 hi, List.append_assoc]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decAllowed] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ 2 ≤ b.toNat by omega) with hk | hk | hk
+      · simp only [decAllowed, hk] at h
+        cases hn : decList decVal r with
+        | none => simp [hn] at h
+        | some q =>
+          obtain ⟨vs, r'⟩ := q
+          simp only [hn, Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hr := (lawful_list lawful_val).2 r vs r' hn
+          simp [encAllowed, byte_eq_tag b 0 hk, hr]
+      · simp only [decAllowed, hk] at h
+        cases hl : decInt r with
+        | none => simp [hl] at h
+        | some q =>
+          obtain ⟨lo, r1⟩ := q
+          simp only [hl] at h
+          cases hh : decInt r1 with
+          | none => simp [hh] at h
+          | some q2 =>
+            obtain ⟨hi, r2⟩ := q2
+            simp only [hh, Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            have h1 := lawful_int.2 r lo r1 hl
+            have h2 := lawful_int.2 r1 hi r2 hh
+            simp [encAllowed, byte_eq_tag b 1 hk, h1, h2, List.append_assoc]
+      · simp only [decAllowed] at h
+        exfalso
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+/-- A setting definition: its name, its type, the levels it opens, its lock, its default and what it allows. -/
+def encSettingDef : SettingDef → Bytes :=
+  encIso (encPair encStr (encPair encSettingType (encPair (encList encLevel)
+      (encPair (encOpt encLevel) (encPair encVal (encOpt encAllowed)))))) (fun d =>
+    (d.name, d.ty, d.levels, d.locked, d.default, d.allowed))
+
+def decSettingDef : Dec SettingDef :=
+  decIso (decPair decStr (decPair decSettingType (decPair (decList decLevel)
+      (decPair (decOpt decLevel) (decPair decVal (decOpt decAllowed)))))) (fun p =>
+    { name := p.1, ty := p.2.1, levels := p.2.2.1, locked := p.2.2.2.1, default := p.2.2.2.2.1,
+      allowed := p.2.2.2.2.2 })
+
+theorem lawful_settingDef : Lawful encSettingDef decSettingDef :=
+  lawful_iso (lawful_pair lawful_str (lawful_pair lawful_settingType (lawful_pair (lawful_list lawful_level)
+      (lawful_pair (lawful_opt lawful_level) (lawful_pair lawful_val (lawful_opt lawful_allowed))))))
+    (fun d => by cases d; rfl) (fun _ => rfl)
+
+/-- An override: its setting, its subject, its value and its revision. -/
+def encOverride : SettingOverride → Bytes :=
+  encIso (encPair encStr (encPair encSubject (encPair encVal encNat)))
+    (fun o => (o.name, o.subject, o.value, o.revision))
+
+def decOverride : Dec SettingOverride :=
+  decIso (decPair decStr (decPair decSubject (decPair decVal decNat)))
+    (fun p => { name := p.1, subject := p.2.1, value := p.2.2.1, revision := p.2.2.2 })
+
+theorem lawful_override : Lawful encOverride decOverride :=
+  lawful_iso (lawful_pair lawful_str (lawful_pair lawful_subject (lawful_pair lawful_val lawful_nat)))
+    (fun o => by cases o; rfl) (fun _ => rfl)
+
+/-- A setting's revision at the tenant: its name and its revision. -/
+def encSettingRev : String × Nat → Bytes := encPair encStr encNat
+
+def decSettingRev : Dec (String × Nat) := decPair decStr decNat
+
+theorem lawful_settingRev : Lawful encSettingRev decSettingRev :=
+  lawful_pair lawful_str lawful_nat
+
 /-- The tenant's fields as one nested product: its object types, members, grants, policies, next id,
     limits, the roles its schema defines (slice 7), its teams and its invitations, then (slice 9) its
     revision, its event sequence and its schema version. -/
 def encTenantBody : List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
     List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
-    List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat → Bytes :=
+    List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat ×
+    List SettingDef × List SettingOverride × List (String × Nat) → Bytes :=
   encPair (encList encTypeEntry)
     (encPair (encList encMember)
       (encPair (encList encGrantEntry)
@@ -1308,12 +1556,17 @@ def encTenantBody : List (TypeId × ObjType) × List (PrincipalId × List RoleId
               (encPair (encList encNat)
                 (encPair (encList encTeamEntry)
                   (encPair (encList encInvitationEntry)
-                    (encPair encNat (encPair encNat encNat))))))))))
+                    (encPair encNat
+                      (encPair encNat
+                        (encPair encNat
+                          (encPair (encList encSettingDef)
+                            (encPair (encList encOverride) (encList encSettingRev))))))))))))))
 
 def decTenantBody :
     Dec (List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
       List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
-      List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat) :=
+      List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat ×
+      List SettingDef × List SettingOverride × List (String × Nat)) :=
   decPair (decList decTypeEntry)
     (decPair (decList decMember)
       (decPair (decList decGrantEntry)
@@ -1323,7 +1576,11 @@ def decTenantBody :
               (decPair (decList decNat)
                 (decPair (decList decTeamEntry)
                   (decPair (decList decInvitationEntry)
-                    (decPair decNat (decPair decNat decNat))))))))))
+                    (decPair decNat
+                      (decPair decNat
+                        (decPair decNat
+                          (decPair (decList decSettingDef)
+                            (decPair (decList decOverride) (decList decSettingRev))))))))))))))
 
 theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
   lawful_pair (lawful_list lawful_typeEntry)
@@ -1335,19 +1592,25 @@ theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
               (lawful_pair (lawful_list lawful_nat)
                 (lawful_pair (lawful_list lawful_teamEntry)
                   (lawful_pair (lawful_list lawful_invitationEntry)
-                    (lawful_pair lawful_nat (lawful_pair lawful_nat lawful_nat))))))))))
+                    (lawful_pair lawful_nat
+                      (lawful_pair lawful_nat
+                        (lawful_pair lawful_nat
+                          (lawful_pair (lawful_list lawful_settingDef)
+                            (lawful_pair (lawful_list lawful_override) (lawful_list lawful_settingRev))))))))))))))
 
 def encTenant : Tenant → Bytes :=
   encIso encTenantBody
     (fun t => (t.types, t.members, t.grants, t.policies, t.nextId, t.limits, t.roles, t.teams,
-      t.invitations, t.revision, t.eventSeq, t.schemaVersion))
+      t.invitations, t.revision, t.eventSeq, t.schemaVersion, t.settingDefs, t.overrides, t.settingRevs))
 
 def decTenant : Dec Tenant :=
   decIso decTenantBody fun p =>
     { types := p.1, members := p.2.1, grants := p.2.2.1, policies := p.2.2.2.1, nextId := p.2.2.2.2.1,
       limits := p.2.2.2.2.2.1, roles := p.2.2.2.2.2.2.1, teams := p.2.2.2.2.2.2.2.1,
       invitations := p.2.2.2.2.2.2.2.2.1, revision := p.2.2.2.2.2.2.2.2.2.1,
-      eventSeq := p.2.2.2.2.2.2.2.2.2.2.1, schemaVersion := p.2.2.2.2.2.2.2.2.2.2.2 }
+      eventSeq := p.2.2.2.2.2.2.2.2.2.2.1, schemaVersion := p.2.2.2.2.2.2.2.2.2.2.2.1,
+      settingDefs := p.2.2.2.2.2.2.2.2.2.2.2.2.1, overrides := p.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
+      settingRevs := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2 }
 
 theorem lawful_tenant : Lawful encTenant decTenant :=
   lawful_iso lawful_tenantBody (fun t => by cases t; rfl) (fun _ => rfl)
@@ -1543,6 +1806,8 @@ def encIntent : Intent → Bytes
   | .createTenant owner name => tag 6 :: (encNat owner ++ encStr name)
   | .member j => tag 7 :: encMemberIntent j
   | .changeSchema ev s cs => tag 8 :: (encOpt encNat ev ++ encBool s ++ encList encChange cs)
+  | .writeSetting n lvl team v ev =>
+    tag 9 :: (encStr n ++ encLevel lvl ++ encOpt encNat team ++ encOpt encVal v ++ encNat ev)
 
 def decIntent : Dec Intent := fun bs =>
   match bs with
@@ -1604,6 +1869,17 @@ def decIntent : Dec Intent := fun bs =>
           | none => none
         | none => none
       | none => none
+    | 9 => match decStr r with
+      | some (n, r1) => match decLevel r1 with
+        | some (lvl, r2) => match decOpt decNat r2 with
+          | some (team, r3) => match decOpt decVal r3 with
+            | some (v, r4) => match decNat r4 with
+              | some (ev, r5) => some (.writeSetting n lvl team v ev, r5)
+              | none => none
+            | none => none
+          | none => none
+        | none => none
+      | none => none
     | _ => none
 
 theorem lawful_intent : Lawful encIntent decIntent := by
@@ -1630,13 +1906,16 @@ theorem lawful_intent : Lawful encIntent decIntent := by
     | changeSchema ev s cs =>
       simp [encIntent, decIntent, tag, (lawful_opt lawful_nat).1, lawful_bool.1,
         (lawful_list lawful_change).1, List.append_assoc]
+    | writeSetting n lvl team v ev =>
+      simp [encIntent, decIntent, tag, lawful_str.1, lawful_level.1, (lawful_opt lawful_nat).1,
+        (lawful_opt lawful_val).1, lawful_nat.1, List.append_assoc]
   · intro bs x rest h
     cases bs with
     | nil => simp [decIntent] at h
     | cons b r =>
       rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ b.toNat = 4 ∨
-          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ 9 ≤ b.toNat by omega)
-        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
+          b.toNat = 5 ∨ b.toNat = 6 ∨ b.toNat = 7 ∨ b.toNat = 8 ∨ b.toNat = 9 ∨ 10 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk | hk | hk | hk | hk | hk | hk
       · simp only [decIntent, hk] at h
         cases hd1 : decNat r with
         | none => simp [hd1] at h
@@ -1788,6 +2067,35 @@ theorem lawful_intent : Lawful encIntent decIntent := by
               have e2 := lawful_bool.2 r1 s r2 hd2
               have e3 := (lawful_list lawful_change).2 r2 cs r3 hd3
               simp [encIntent, byte_eq_tag b 8 hk, e1, e2, e3, List.append_assoc]
+      · simp only [decIntent, hk] at h
+        cases hd1 : decStr r with
+        | none => simp [hd1] at h
+        | some p1 =>
+          obtain ⟨n, r1⟩ := p1
+          cases hd2 : decLevel r1 with
+          | none => simp [hd1, hd2] at h
+          | some p2 =>
+            obtain ⟨lvl, r2⟩ := p2
+            cases hd3 : decOpt decNat r2 with
+            | none => simp [hd1, hd2, hd3] at h
+            | some p3 =>
+              obtain ⟨team, r3⟩ := p3
+              cases hd4 : decOpt decVal r3 with
+              | none => simp [hd1, hd2, hd3, hd4] at h
+              | some p4 =>
+                obtain ⟨v, r4⟩ := p4
+                cases hd5 : decNat r4 with
+                | none => simp [hd1, hd2, hd3, hd4, hd5] at h
+                | some p5 =>
+                  obtain ⟨ev, r5⟩ := p5
+                  simp only [hd1, hd2, hd3, hd4, hd5, Option.some.injEq, Prod.mk.injEq] at h
+                  obtain ⟨rfl, rfl⟩ := h
+                  have e1 := lawful_str.2 r n r1 hd1
+                  have e2 := lawful_level.2 r1 lvl r2 hd2
+                  have e3 := (lawful_opt lawful_nat).2 r2 team r3 hd3
+                  have e4 := (lawful_opt lawful_val).2 r3 v r4 hd4
+                  have e5 := lawful_nat.2 r4 ev r5 hd5
+                  simp [encIntent, byte_eq_tag b 9 hk, e1, e2, e3, e4, e5, List.append_assoc]
       · simp only [decIntent] at h
         exfalso
         repeat' split at h

@@ -46,6 +46,37 @@ theorem member_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     exact hok
 
 
+/-- A setting write changes only the settings of the tenant, so its result is the tenant with those replaced. -/
+theorem stepTenantI_writeSetting_shape {core c' : ITenant} {p : Principal} {n : String}
+    {lvl : SettingLevel} {team : Option TeamId} {v : Option Val} {ev : Nat}
+    (h : stepTenantI core p (.writeSetting n lvl team v ev) = .ok c') :
+    ∃ ov rv, c' = { core with overrides := ov, settingRevs := rv } := by
+  simp only [stepTenantI] at h
+  cases hs : writeSettingT core.abs p n lvl team v ev with
+  | error e => simp [hs, Except.map] at h
+  | ok s =>
+    simp only [hs, Except.map, Except.ok.injEq] at h
+    obtain ⟨ov, rv, rfl⟩ := writeSettingT_ok_shape hs
+    exact ⟨ov, rv, h.symm⟩
+
+/-- A setting write changes no record, so the indexes stay consistent. -/
+theorem setting_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
+    (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
+    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (n : String) (lvl : SettingLevel)
+    (team : Option TeamId) (v : Option Val) (ev : Nat) :
+    Good ⟨core, ux, cx, rx⟩ (stepParts core ux cx rx p (.writeSetting n lvl team v ev))
+      (stepTenantI core p (.writeSetting n lvl team v ev)) := by
+  simp only [stepParts]
+  cases hs : stepTenantI core p (.writeSetting n lvl team v ev) with
+  | error e => exact good_error _ _
+  | ok c' =>
+    obtain ⟨ov, rv, rfl⟩ := stepTenantI_writeSetting_shape hs
+    refine ⟨rfl, fun e x' h => (by cases h), ?_⟩
+    intro y hy
+    simp only [Except.ok.injEq] at hy
+    subst hy
+    exact hok
+
 /-- The indexes built from every record are consistent. -/
 theorem XTenant.rebuild_ok (core : ITenant) (hinv : core.Inv) (hnd : (core.types.map Prod.fst).Nodup) :
     (XTenant.rebuild core).Ok := by
@@ -143,6 +174,7 @@ theorem stepTenantXL_good (x : XTenant) (hok : x.Ok) (p : Principal) (i : Intent
   | defineUnique ty fs => exact defineUnique_good core ux cx rx hok p ty fs
   | createTenant owner name => exact createTenant_good core ux cx rx p owner name
   | member j => exact member_good core ux cx rx hok p j
+  | writeSetting n lvl team v ev => exact setting_good core ux cx rx hok p n lvl team v ev
   | changeSchema ev strict cs => exact changeSchema_good core ux cx rx hok p ev strict cs
 
 /-- The indexed outcome (refusals without the tenant handed back) agrees with stage 1's, and an

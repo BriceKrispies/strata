@@ -198,6 +198,41 @@ def parseMemberOp (rest : List String) : Option Intent :=
     else none
   | _ => none
 
+/-- A settings level token (slice 12). -/
+def parseSettingLevel : String → Option SettingLevel
+  | "platform" => some .platform
+  | "tenant" => some .tenant
+  | "team" => some .team
+  | "person" => some .person
+  | _ => none
+
+/-- The optional `team=<n>` token of a setting write. -/
+def takeTeam : List String → Option (Option TeamId × List String)
+  | tok :: rest =>
+    if tok.startsWith "team=" then
+      (do let t ← (dropChars tok 5).toNat?; pure (some t, rest))
+    else some (none, tok :: rest)
+  | [] => some (none, [])
+
+/-- The optional `v=<n>` token of a setting write: the expected revision, zero when absent. -/
+def takeRev : List String → Option (Nat × List String)
+  | tok :: rest =>
+    if tok.startsWith "v=" then
+      (do let v ← (dropChars tok 2).toNat?; pure (v, rest))
+    else some (0, tok :: rest)
+  | [] => some (0, [])
+
+/-- A setting write (slice 12): `setting <name> <level> [team=<n>] [v=<rev>] <value|remove>`. -/
+def parseSettingOp (rest : List String) : Option Intent := do
+  let "setting" :: name :: lvl :: more := rest | none
+  let level ← parseSettingLevel lvl
+  let (team, more) ← takeTeam more
+  let (rev, more) ← takeRev more
+  match more with
+  | ["remove"] => pure (.writeSetting name level team none rev)
+  | [v] => pure (.writeSetting name level team (some (← parseVal v)) rev)
+  | _ => none
+
 def parseOp (tokens : List String) : Option (Ctx × Intent) :=
   match tokens with
   | "op" :: t :: p :: rest0 => do
@@ -216,6 +251,7 @@ def parseOp (tokens : List String) : Option (Ctx × Intent) :=
     | "invite-revoke" :: _ => pure (c, ← parseMemberOp rest)
     | "redeem" :: _ => pure (c, ← parseMemberOp rest)
     | "schema" :: more => pure (c, ← parseSchemaOp more)
+    | "setting" :: _ => pure (c, ← parseSettingOp rest)
     | "create" :: fields => pure (c, .create ty (← parseFields fields))
     | "update" :: id :: rest => do
       let (ev, fields) ← parseExpected rest
@@ -264,6 +300,19 @@ def showVal : Val → String
       if decide (100 ≤ vs.length) && es.all (· == e) then s!"l*{vs.length}:{showElem e}"
       else "l:" ++ ",".intercalate (vs.map showElem)
     | [] => "l:"
+
+/-- A settings level as the printed forms name it (slice 12). -/
+def showLevel : SettingLevel → String
+  | .platform => "platform"
+  | .tenant => "tenant"
+  | .team => "team"
+  | .person => "person"
+
+/-- A setting's subject as the printed forms name it: the tenant, `team<n>` or `p<n>`. -/
+def showSubject : SettingSubject → String
+  | .tenant => "tenant"
+  | .team t => s!"team{t}"
+  | .person p => s!"p{p}"
 
 def showErr : Err → String
   | .noTenant => "no_tenant"
@@ -334,11 +383,27 @@ def membershipLines (id : Nat) (t : Tenant) : List String :=
   (sortBy (fun (e : InvitationId × InvitationDef) => e.1) t.invitations).map
     (fun e => s!"invitation {id} {e.1} {showText e.2.address} {showNats e.2.roles} by={e.2.createdBy} expires={e.2.expiresAt} redeemed={showUser e.2.redeemedBy} revoked={showUser e.2.revokedBy}")
 
+/-- The key an override is listed under: its setting, its level and its subject, the tenant's subject being
+    the tenant's id (the kernel's override key). -/
+def overrideKey (id : Nat) (o : SettingOverride) : String :=
+  let subj := match o.subject with
+    | .tenant => toString id
+    | s => showSubject s
+  s!"{o.name}/{showLevel o.subject.level}/{subj}"
+
+/-- The settings of a tenant that hold an override or a revision, in key order (slice 12). They are printed
+    only when there are some, so a tenant with no setting write prints as before. -/
+def settingLines (id : Nat) (t : Tenant) : List String :=
+  (t.overrides.mergeSort (fun a b => decide (overrideKey id a ≤ overrideKey id b))).map
+    (fun o => s!"setting-override {id} {o.name} level={showLevel o.subject.level} subject={showSubject o.subject} value={showVal o.value} rev={o.revision}") ++
+  ((t.settingRevs.mergeSort (fun a b => decide (a.1 ≤ b.1))).filter (fun e => e.2 > 0)).map
+    (fun e => s!"setting-revision {id} {e.1} {e.2}")
+
 /-- The tenant: its counter and the default type's required fields and records, then each other
     object type's required fields and records, marked with its id. Then its membership, when it is
-    not the one the fixture starts a tenant with (always for tenant 3, which only a creation makes).
-    The tickets (type `4`, slice 8) are printed only while they hold a record, so the state of every
-    scenario that does not create one is printed as before. -/
+    not the one the fixture starts a tenant with (always for tenant 3, which only a creation makes),
+    then its setting overrides and revisions (slice 12). The tickets (type `4`, slice 8) are printed only
+    while they hold a record, so the state of every scenario that does not create one is printed as before. -/
 def showTenant (id : Nat) (t : Tenant) : List String :=
   let d : ObjType := (t.typ? 1).getD { schema := [] }
   let header := s!"tenant {id} next={t.nextId} required={requiredOf d}"
@@ -347,7 +412,8 @@ def showTenant (id : Nat) (t : Tenant) : List String :=
   header :: recordLines "" d ++
     (others.flatMap fun e => s!"type {e.1} required={requiredOf e.2}" :: recordLines s!"type {e.1} " e.2) ++
     (if id == 3 || membershipLines id t != membershipLines id (initialTenant id) then membershipLines id t
-     else [])
+     else []) ++
+    settingLines id t
 
 def showWorld (w : World) : List String :=
   [1, 2].flatMap (fun id =>
@@ -397,6 +463,8 @@ def showEvent (e : DomainEvent) : String :=
         | .user n => toString n
         | .team t => s!"team:{t}"
       s!"member-changed who={name} roles={showNats roles}"
+    | .settingChanged name subj =>
+      s!"setting-changed setting={name} level={showLevel subj.level} subject={showSubject subj}"
   s!"event {e.seq} rev={e.revision} by={showPrincipal e.principal} {body}"
 
 
@@ -456,6 +524,26 @@ def showCursor : Option Cursor → String
   | none => "-"
   | some (.offset n) => s!"o{n}"
   | some (.after id) => s!"a{id}"
+
+/-- A setting read (slice 12): `read <tenant> <principal> setting <name>`. -/
+def parseSettingRead : List String → Option (TenantId × Principal × String)
+  | ["read", t, p, "setting", n] => do pure (← t.toNat?, ← parsePrincipal p, n)
+  | _ => none
+
+def showSource : SettingSource → String
+  | .person => "person"
+  | .team => "team"
+  | .tenant => "tenant"
+  | .platform => "platform"
+  | .default => "default"
+
+/-- The lines a setting read prints: `err <kind>`, or `ok`, the source, the team (`-` for none), the value and
+    the setting's revision at the tenant. -/
+def showSettingRead : Except Err SettingResolution → List String
+  | .error e => [s!"err {showErr e}"]
+  | .ok r => ["ok", s!"source {showSource r.source}",
+      s!"team {match r.team with | some t => toString t | none => "-"}", s!"value {showVal r.value}",
+      s!"tenant-rev {r.tenantRevision}"]
 
 /-- The lines a read prints. -/
 def showRead : Except ReadErr ReadResult → List String
@@ -548,6 +636,8 @@ structure Kernel (W : Type) where
   search : W → TenantId → Principal → SearchReq → Option (Except ReadErr SearchResult)
   /-- An aggregate of a named query on a tenant for a principal (slice 10, second half). -/
   aggregate : W → TenantId → Principal → AggReq → Option (Except AggErr AggResult)
+  /-- The resolution of a setting for a principal on a tenant (slice 12). -/
+  setting : W → TenantId → Principal → String → Option (Except Err SettingResolution)
 
 /-- The spec's kernel: the model as written, with its transition. -/
 def specKernel : Kernel World :=
@@ -557,7 +647,8 @@ def specKernel : Kernel World :=
     render := showWorld,
     read := fun w x p req => (w x).map (fun t => read t (readSpecOf x) p req),
     search := fun w x p req => (w x).map (fun t => search t (readSpecOf x) p req),
-    aggregate := fun w x p req => (w x).map (fun t => aggregate t (readSpecOf x) p req) }
+    aggregate := fun w x p req => (w x).map (fun t => aggregate t (readSpecOf x) p req),
+    setting := fun w x p n => (w x).map (fun t => resolve t p n) }
 
 /-- The executable kernel: the slots, printed through the abstraction. -/
 def implKernel : Kernel IWorld :=
@@ -565,7 +656,8 @@ def implKernel : Kernel IWorld :=
     revision := fun w x => (w x).map (fun t => t.revision), render := fun w => showWorld (absW w),
     read := fun w x p req => (w x).map (fun t => readI t (readSpecOf x) p req),
     search := fun w x p req => (w x).map (fun t => searchI t (readSpecOf x) p req),
-    aggregate := fun w x p req => (w x).map (fun t => aggregateI t (readSpecOf x) p req) }
+    aggregate := fun w x p req => (w x).map (fun t => aggregateI t (readSpecOf x) p req),
+    setting := fun w x p n => (w x).map (fun t => resolve t.abs p n) }
 
 /-- The indexed kernel: slots and indexes, printed through the abstraction. -/
 def xKernel : Kernel XWorld :=
@@ -573,7 +665,8 @@ def xKernel : Kernel XWorld :=
     revision := fun w x => (w x).map (fun t => t.core.revision), render := fun w => showWorld (absX w),
     read := fun w x p req => (w x).map (fun t => readX t (readSpecOf x) p req),
     search := fun w x p req => (w x).map (fun t => searchX t (readSpecOf x) p req),
-    aggregate := fun w x p req => (w x).map (fun t => aggregateX t (readSpecOf x) p req) }
+    aggregate := fun w x p req => (w x).map (fun t => aggregateX t (readSpecOf x) p req),
+    setting := fun w x p n => (w x).map (fun t => resolve t.core.abs p n) }
 
 partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (out : Array String) :
     Array String :=
@@ -588,6 +681,10 @@ partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (ou
     | "read" :: _ =>
       let answered : Option (List String) :=
         match tokens with
+        | _ :: _ :: _ :: "setting" :: _ => (parseSettingRead tokens).map (fun (x, p, n) =>
+            match K.setting w x p n with
+            | none => ["err no_tenant"]
+            | some r => showSettingRead r)
         | _ :: _ :: _ :: "search" :: _ => (parseSearch tokens).map (fun (x, p, req) =>
             match K.search w x p req with
             | none => ["err no_tenant"]
