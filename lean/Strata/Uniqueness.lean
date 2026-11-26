@@ -702,6 +702,8 @@ theorem schema_step_putType (t t' : Tenant) (p : Principal) (i : Intent)
     (hi : i.isSchema = true) (h : stepTenant t p i = .ok t') :
     ∃ ty o', t' = t.putType ty o' ∧ ty ∈ i.touched t := by
   cases i with
+  | createTenant owner name => simp [Intent.isSchema] at hi
+  | member j => simp [Intent.isSchema] at hi
   | create ty fs => simp [Intent.isSchema] at hi
   | update ty id fs ev => simp [Intent.isSchema] at hi
   | delete ty id ev => simp [Intent.isSchema] at hi
@@ -727,6 +729,8 @@ theorem schemaViolated_of_strict (t t' : Tenant) (p : Principal) (i : Intent)
     (hi : i.isSchema = true) (hs : i.strict = true) (h : stepTenant t p i = .ok t') :
     schemaViolated t.limits (scopedTypes t'.types (i.touched t)) = false := by
   cases i with
+  | createTenant owner name => simp [Intent.isSchema] at hi
+  | member j => simp [Intent.isSchema] at hi
   | create ty fs => simp [Intent.isSchema] at hi
   | update ty id fs ev => simp [Intent.isSchema] at hi
   | delete ty id ev => simp [Intent.isSchema] at hi
@@ -858,6 +862,8 @@ theorem stepTenant_preserves_distinct (t t' : Tenant) (p : Principal) (i : Inten
     (hd : t.Distinct) (h : stepTenant t p i = .ok t') : t'.Distinct := by
   obtain ⟨hkeys, hD⟩ := hd
   cases i with
+  | createTenant owner name => simp [stepTenant] at h
+  | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact ⟨hkeys, hD⟩
   | create ty fs =>
     cases hty : t.typ? ty with
     | none => simp [stepTenant, hty] at h
@@ -1069,6 +1075,8 @@ theorem stepTenant_preserves_unique (t t' : Tenant) (p : Principal) (i : Intent)
     t'.UniqueRecords := by
   obtain ⟨-, hids, -, hd, hu⟩ := hwf
   cases i with
+  | createTenant owner name => simp [stepTenant] at h
+  | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact hu
   | create ty fs =>
     cases hty : t.typ? ty with
     | none => simp [stepTenant, hty] at h
@@ -1140,11 +1148,12 @@ theorem create_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId
     (hclash : (∃ fd ∈ o.schema, fd.2.unique = true ∧ ∃ q ∈ o.records, q.1 ≠ t.nextId ∧
         agreeOn [fd.1] r.fields q.2.fields = true) ∨
       (∃ u ∈ o.uniques, ∃ q ∈ o.records, q.1 ≠ t.nextId ∧
-        agreeOn u r.fields q.2.fields = true)) :
+        agreeOn u r.fields q.2.fields = true))
+    (hr : callerReserved c.principal = false) :
     step w (.create ty fs) c = .error .uniqueViolated ∧
       ∀ w', step w (.create ty fs) c ≠ .ok w' := by
   have hs : step w (.create ty fs) c = .error .uniqueViolated := by
-    simp [step, ht, stepTenant, ho, hN, hc, canCreate_attempt _ _ _ _ hc, problem_uniq_refusal hfree hclash]
+    simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, ho, hN, hc, canCreate_attempt _ _ _ _ hc, problem_uniq_refusal hfree hclash]
   exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
 
 theorem update_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId) (o : ObjType)
@@ -1155,28 +1164,31 @@ theorem update_duplicate_refused (w : World) (t : Tenant) (c : Ctx) (ty : TypeId
     (hclash : (∃ fd ∈ o.schema, fd.2.unique = true ∧ ∃ q ∈ o.records, q.1 ≠ id ∧
         agreeOn [fd.1] (patched old fs).fields q.2.fields = true) ∨
       (∃ u ∈ o.uniques, ∃ q ∈ o.records, q.1 ≠ id ∧
-        agreeOn u (patched old fs).fields q.2.fields = true)) :
+        agreeOn u (patched old fs).fields q.2.fields = true))
+    (hr : callerReserved c.principal = false) :
     step w (.update ty id fs ev) c = .error .uniqueViolated ∧
       ∀ w', step w (.update ty id fs ev) c ≠ .ok w' := by
   have hs : step w (.update ty id fs ev) c = .error .uniqueViolated := by
-    simp [step, ht, stepTenant, ho, hl, hcan, hv, problem_uniq_refusal hfree hclash]
+    simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, ho, hl, hcan, hv, problem_uniq_refusal hfree hclash]
   exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
 
 theorem define_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (ty : TypeId)
     (o : ObjType) (fs : List FieldId) (ht : w c.tenant = some t) (ho : t.typ? ty = some o)
     (hp : canManage t c.principal = true) (hok : uniqueFieldsOk o.schema fs = true)
-    (hdup : dupFields o.records fs = true) :
+    (hdup : dupFields o.records fs = true)
+    (hr : callerReserved c.principal = false) :
     step w (.defineUnique ty fs) c = .error .uniqueViolated ∧
       ∀ w', step w (.defineUnique ty fs) c ≠ .ok w' := by
   have hs : step w (.defineUnique ty fs) c = .error .uniqueViolated := by
-    simp [step, ht, stepTenant, ho, hp, hok, hdup]
+    simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, ho, hp, hok, hdup]
   exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
 
 
 theorem set_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (ty : TypeId)
     (o : ObjType) (f : FieldId) (d : FieldDef) (ht : w c.tenant = some t)
     (ho : t.typ? ty = some o) (hp : canManage t c.principal = true) (hd : o.schema.lookup f = some d)
-    (hl : d.ty.isList = false) (hdup : dupFields o.records [f] = true) :
+    (hl : d.ty.isList = false) (hdup : dupFields o.records [f] = true)
+    (hr : callerReserved c.principal = false) :
     step w (.setUnique ty f true) c = .error .migrationRejected ∧
       ∀ w', step w (.setUnique ty f true) c ≠ .ok w' := by
   have hmem : (ty, { o with schema := makeUnique o.schema f }) ∈
@@ -1198,7 +1210,7 @@ theorem set_unique_refused_over_duplicates (w : World) (t : Tenant) (c : Ctx) (t
     simp only [Bool.true_and, List.any_eq_true]
     exact ⟨_, List.mem_filter.mpr ⟨hmem, by simp⟩, hviol⟩
   have hs : step w (.setUnique ty f true) c = .error .migrationRejected := by
-    simp [step, ht, stepTenant, ho, hp, hd, hl, hv]
+    simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, ho, hp, hd, hl, hv]
   exact ⟨hs, fun w' h => by rw [hs] at h; cases h⟩
 
 /-- A table of one integer field, with two records that agree on it. -/

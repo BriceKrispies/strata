@@ -93,6 +93,9 @@ structure ClearedFrom (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y : 
   grants : y.core.grants = y0.core.grants
   policies : y.core.policies = y0.core.policies
   limits : y.core.limits = y0.core.limits
+  roles : y.core.roles = y0.core.roles
+  teams : y.core.teams = y0.core.teams
+  invitations : y.core.invitations = y0.core.invitations
   isSome : ∀ T, (y.core.typ? T).isSome = (y0.core.typ? T).isSome
   typ : ∀ T o0, y0.core.typ? T = some o0 → ∃ o, y.core.typ? T = some o ∧ o.schema = o0.schema ∧
     o.uniques = o0.uniques ∧ o.constraints = o0.constraints ∧ o.slots.size = o0.slots.size ∧
@@ -101,7 +104,7 @@ structure ClearedFrom (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y : 
 
 theorem ClearedFrom.refl (ty : TypeId) (id : RecordId) (y : XTenant) (h : y.Ok) :
     ClearedFrom ty id (fun _ => False) y y :=
-  ⟨h, rfl, rfl, rfl, rfl, rfl, rfl, fun _ => rfl,
+  ⟨h, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun _ => rfl,
     fun T o0 ho => ⟨o0, ho, rfl, rfl, rfl, rfl, fun i => ⟨fun h => h.elim, fun _ => rfl⟩⟩⟩
 
 theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y : XTenant)
@@ -115,7 +118,7 @@ theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y
   have unchanged : (core.typ? c.1 = none ∨ ∃ o, core.typ? c.1 = some o ∧ getRec o.slots c.2 = none) →
       ClearedFrom ty id (fun c' => S c' ∨ c' = c) y0 ⟨core, ux, cx, rx⟩ := by
     intro hcase
-    refine ⟨h.ok, h.keys, h.nextId, h.members, h.grants, h.policies, h.limits, h.isSome, ?_⟩
+    refine ⟨h.ok, h.keys, h.nextId, h.members, h.grants, h.policies, h.limits, h.roles, h.teams, h.invitations, h.isSome, ?_⟩
     intro T o0 ho0
     obtain ⟨o, hT, hs, hu', hcn, hsz, hi⟩ := h.typ T o0 ho0
     refine ⟨o, hT, hs, hu', hcn, hsz, fun i => ⟨?_, ?_⟩⟩
@@ -176,7 +179,7 @@ theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y
           (fun o' => { o' with slots := setSlot o'.slots c.2 (some (clearRef o.schema ty id r)) }))
         ux cx rx c.1 c.2 o.schema o.uniques (some r) (some (clearRef o.schema ty id r)))
       rw [hmod]
-      refine ⟨hnew, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨hnew, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
       · show (putTypeI core.types c.1 _).map Prod.fst = _
         rw [putTypeI_keys]; exact h.keys
       · exact h.nextId
@@ -184,6 +187,9 @@ theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y
       · exact h.grants
       · exact h.policies
       · exact h.limits
+      · exact h.roles
+      · exact h.teams
+      · exact h.invitations
       · intro T
         by_cases hT : T = c.1
         · subst hT
@@ -246,7 +252,7 @@ theorem clearOne_cleared (ty : TypeId) (id : RecordId) (S : Cell → Prop) (y0 y
 
 theorem ClearedFrom.congr {ty : TypeId} {id : RecordId} {S S' : Cell → Prop} {y0 y : XTenant}
     (hS : ∀ c, S c ↔ S' c) (h : ClearedFrom ty id S y0 y) : ClearedFrom ty id S' y0 y := by
-  refine ⟨h.ok, h.keys, h.nextId, h.members, h.grants, h.policies, h.limits, h.isSome, ?_⟩
+  refine ⟨h.ok, h.keys, h.nextId, h.members, h.grants, h.policies, h.limits, h.roles, h.teams, h.invitations, h.isSome, ?_⟩
   intro T o0 ho0
   obtain ⟨o, hT, hs, hu, hcn, hsz, hi⟩ := h.typ T o0 ho0
   exact ⟨o, hT, hs, hu, hcn, hsz, fun i => ⟨fun h' => (hi i).1 ((hS _).mpr h'),
@@ -335,7 +341,8 @@ theorem IObj.ext' (a b : IObj) (h1 : a.schema = b.schema) (h2 : a.uniques = b.un
 
 theorem ITenant.ext' (a b : ITenant) (h1 : a.types = b.types) (h2 : a.members = b.members)
     (h3 : a.grants = b.grants) (h4 : a.policies = b.policies) (h5 : a.nextId = b.nextId)
-    (h6 : a.limits = b.limits) : a = b := by
+    (h6 : a.limits = b.limits) (h7 : a.roles = b.roles) (h8 : a.teams = b.teams)
+    (h9 : a.invitations = b.invitations) : a = b := by
   cases a; cases b; simp_all
 
 theorem getRec_delObjI (ty : TypeId) (id : RecordId) (j : TypeId) (o : IObj) (i : RecordId)
@@ -481,6 +488,9 @@ theorem deleteX_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
   · exact hcl.policies.trans (by rw [hx1core]; rfl)
   · exact hcl.nextId.trans (by rw [hx1core]; rfl)
   · exact hcl.limits.trans (by rw [hx1core]; rfl)
+  · exact hcl.roles.trans (by rw [hx1core]; rfl)
+  · exact hcl.teams.trans (by rw [hx1core]; rfl)
+  · exact hcl.invitations.trans (by rw [hx1core]; rfl)
 
 theorem delete_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)

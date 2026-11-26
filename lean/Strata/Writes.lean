@@ -181,7 +181,8 @@ theorem delete_raises_referrer_version (t t' : Tenant) (p : Principal) (ty : Typ
 theorem version_conflict_on_update (w : World) (c : Ctx) (t : Tenant) (ty : TypeId) (id : RecordId)
     (old : Record) (ps : Fields) (v : Nat)
     (ht : w c.tenant = some t) (hl : t.recordAt ty id = some old)
-    (hcan : canUpdate t c.principal ty old (patched old ps) = true) (hv : v ≠ old.version) :
+    (hcan : canUpdate t c.principal ty old (patched old ps) = true) (hv : v ≠ old.version)
+    (hr : callerReserved c.principal = false) :
     step w (.update ty id ps (some v)) c = .error .versionConflict ∧
       ∀ w', step w (.update ty id ps (some v)) c ≠ .ok w' := by
   have hc : versionClash (some v) old = true := by simpa [versionClash] using hv
@@ -194,13 +195,14 @@ theorem version_conflict_on_update (w : World) (c : Ctx) (t : Tenant) (ty : Type
       have hL : o.records.lookup id = some old := by simpa using hl
       simp [stepTenant, hT, hL, hcan, hc]
   have : step w (.update ty id ps (some v)) c = .error .versionConflict := by
-    simp [step, ht, hs]
+    simp [step, reservedRefused, Intent.named, hr, ht, hs]
   exact ⟨this, fun w' h => by rw [this] at h; cases h⟩
 
 theorem version_conflict_on_delete (w : World) (c : Ctx) (t : Tenant) (ty : TypeId) (id : RecordId)
     (old : Record) (v : Nat)
     (ht : w c.tenant = some t) (hl : t.recordAt ty id = some old)
-    (hcan : canDelete t c.principal ty old = true) (hv : v ≠ old.version) :
+    (hcan : canDelete t c.principal ty old = true) (hv : v ≠ old.version)
+    (hr : callerReserved c.principal = false) :
     step w (.delete ty id (some v)) c = .error .versionConflict ∧
       ∀ w', step w (.delete ty id (some v)) c ≠ .ok w' := by
   have hc : versionClash (some v) old = true := by simpa [versionClash] using hv
@@ -213,7 +215,7 @@ theorem version_conflict_on_delete (w : World) (c : Ctx) (t : Tenant) (ty : Type
       have hL : o.records.lookup id = some old := by simpa using hl
       simp [stepTenant, hT, hL, hcan, hc]
   have : step w (.delete ty id (some v)) c = .error .versionConflict := by
-    simp [step, ht, hs]
+    simp [step, reservedRefused, Intent.named, hr, ht, hs]
   exact ⟨this, fun w' h => by rw [this] at h; cases h⟩
 
 /-! ## Defaults -/

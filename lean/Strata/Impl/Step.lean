@@ -24,7 +24,8 @@ namespace Impl
     to decide, so they are taken on this header. -/
 def ITenant.header (t : ITenant) : Tenant :=
   { types := [], members := t.members, grants := t.grants, policies := t.policies,
-    nextId := t.nextId, limits := t.limits }
+    nextId := t.nextId, limits := t.limits, roles := t.roles, teams := t.teams,
+    invitations := t.invitations }
 
 /-- May `p` attempt a create on type `ty` (the spec's `canAttemptCreate`, WG-5665). -/
 def canAttemptCreateI (t : ITenant) (p : Principal) (ty : TypeId) : Bool :=
@@ -161,11 +162,32 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
           if schemaChangeRefused t.limits (scopedTypes t'.abs.types [ty]) true then
             .error .migrationRejected
           else .ok t'
+  | .createTenant _ _ => .error .tenantExists
+  | .member j => (stepMember t.mt (j.ctxOf p) j).map t.withM
+
+/-- The tenant a `CreateTenant` makes, as the implementation holds it: no object types, the genesis
+    membership, and a counter that starts at 1. -/
+def ITenant.genesis (owner : PrincipalId) : ITenant :=
+  { types := [], members := [(owner, [ownerRole])], grants := [], policies := [], nextId := 1 }
+
+/-- The tenant a `CreateTenant` makes (the spec's `createdTenant`). -/
+def createdTenantI (p : Principal) (owner : PrincipalId) (name : String) : Except Err ITenant :=
+  if p != .system then .error .unauthorized
+  else if isBlank name then .error .invalidIntent
+  else .ok (ITenant.genesis owner)
 
 /-- The implementation's transition function on the world: one intent, in one context. -/
 def stepI (w : IWorld) (i : Intent) (c : Ctx) : Except Err IWorld :=
+  if reservedRefused c.principal i then .error .invalidIntent
+  else
   match w c.tenant with
-  | none => .error .noTenant
+  | none =>
+    match i with
+    | .createTenant owner name =>
+      match createdTenantI c.principal owner name with
+      | .error e => .error e
+      | .ok t' => .ok (fun x => if x = c.tenant then some t' else w x)
+    | _ => .error .noTenant
   | some t =>
     match stepTenantI t c.principal i with
     | .error e => .error e
@@ -225,7 +247,7 @@ theorem clearBreaks_eq (t : ITenant) (ty : TypeId) (id : RecordId) :
 
 theorem afterDelete_abs (t : ITenant) (ty : TypeId) (id : RecordId) :
     (ITenant.mk (t.types.map (fun e => (e.1, delObjI ty id e.1 e.2))) t.members t.grants t.policies
-      t.nextId t.limits).abs = t.abs.afterDelete ty id := by
+      t.nextId t.limits t.roles t.teams t.invitations).abs = t.abs.afterDelete ty id := by
   unfold ITenant.abs Tenant.afterDelete
   simp only [List.map_map]
   congr 1
@@ -251,6 +273,12 @@ theorem except_map_ite (f : ITenant → Tenant) {c : Prop} [Decidable c] (a b : 
 theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t.Inv) :
     (stepTenantI t p i).map ITenant.abs = stepTenant t.abs p i := by
   cases i with
+  | createTenant owner name => simp [stepTenantI, stepTenant, Except.map]
+  | member j =>
+    simp only [stepTenantI, stepTenant, stepMemberT, ITenant.abs_mt]
+    cases stepMember t.mt (j.ctxOf p) j with
+    | error e => rfl
+    | ok m => rfl
   | create ty fs =>
     cases hty : t.typ? ty with
     | none =>

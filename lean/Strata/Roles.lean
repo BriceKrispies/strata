@@ -26,9 +26,16 @@ theorem rolesOf_system (t : Tenant) : t.rolesOf .system = [] := rfl
 /-- An anonymous caller holds the built-in `public` role and nothing else. -/
 theorem rolesOf_anonymous (t : Tenant) : t.rolesOf .anonymous = [publicRole] := rfl
 
-/-- A user holds the built-in `public` role and its direct roles. -/
+/-- A user holds the built-in `public` role, its direct roles and the roles of the teams it belongs to
+    (slice 7 added the teams: this was `publicRole :: (t.members.lookup p).getD []`, which
+    `rolesOf_user_no_teams` states for a tenant with no teams). -/
 theorem rolesOf_user (t : Tenant) (p : PrincipalId) :
-    t.rolesOf (.user p) = publicRole :: (t.members.lookup p).getD [] := rfl
+    t.rolesOf (.user p) = publicRole :: ((t.members.lookup p).getD [] ++ t.mt.teamRoles p) := rfl
+
+/-- In a tenant with no teams a user holds the built-in `public` role and its direct roles. -/
+theorem rolesOf_user_no_teams (t : Tenant) (p : PrincipalId) (h : t.teams = []) :
+    t.rolesOf (.user p) = publicRole :: (t.members.lookup p).getD [] := by
+  simp [rolesOf_user, MTenant.teamRoles, Tenant.mt, h]
 
 /-- The anonymous caller does not hold the owner role. -/
 theorem anonymous_not_owner (t : Tenant) : ownerRole ∉ t.rolesOf .anonymous := by
@@ -172,7 +179,7 @@ Tenant `n` of the fixture has the owner `n*100`, the editor `n*100+1` and the wr
 /-- The owner of the fixture may do every action on every resource, whatever the record. -/
 theorem fixture_owner_permits (n : Nat) (a : Action) (r : Resource) (env : ExprEnv) :
     (initialTenant n).Permits (.user (n * 100)) a r env :=
-  owner_permits _ _ a r env (by simp [initialTenant, Tenant.rolesOf, ownerRole])
+  owner_permits _ _ a r env (by simp [initialTenant, Tenant.rolesOf, MTenant.rolesOf, MTenant.directOf, MTenant.teamRoles, Tenant.mt, ownerRole])
 
 /-- The editor policy of the fixture on items (`editors_all`): no condition. -/
 def editorPolicy1 : Policy :=
@@ -188,7 +195,7 @@ theorem fixture_editor_permits (n : Nat) (a : Action) (ty : TypeId) (env : ExprE
     (initialTenant n).Permits (.user (n * 100 + 1)) a (.object ty) env := by
   have hbeq : (n * 100 + 1 == n * 100) = false := by simp
   have hmem : editorRole ∈ (initialTenant n).rolesOf (.user (n * 100 + 1)) := by
-    simp [initialTenant, Tenant.rolesOf, List.lookup, hbeq, editorRole]
+    simp [initialTenant, Tenant.rolesOf, MTenant.rolesOf, MTenant.directOf, MTenant.teamRoles, Tenant.mt, List.lookup, hbeq, editorRole]
   have hact : a ∈ [Action.read, .create, .update, .delete] := by
     rcases ha with rfl | rfl | rfl | rfl <;> simp
   rcases hty with rfl | rfl

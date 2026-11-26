@@ -32,6 +32,11 @@ structure ITenant where
   policies : List Policy
   nextId : Nat
   limits : Limits := Limits.kernel
+  /-- The roles the schema defines, the teams and the invitations: the membership state of
+      slice 7, held as the spec holds it (it is not indexed by record). -/
+  roles : List RoleId := [ownerRole, publicRole]
+  teams : List (TeamId × TeamDef) := []
+  invitations : List (InvitationId × InvitationDef) := []
 
 /-- The whole implementation state: each tenant id has a tenant or does not. -/
 abbrev IWorld := TenantId → Option ITenant
@@ -53,7 +58,24 @@ def absEntry (e : TypeId × IObj) : TypeId × ObjType := (e.1, e.2.abs)
 /-- The spec's tenant that an implementation tenant stands for. -/
 def ITenant.abs (t : ITenant) : Tenant :=
   { types := t.types.map absEntry, members := t.members, grants := t.grants, policies := t.policies,
-    nextId := t.nextId, limits := t.limits }
+    nextId := t.nextId, limits := t.limits, roles := t.roles, teams := t.teams,
+    invitations := t.invitations }
+
+/-- The part of an implementation tenant the membership intents see. -/
+def ITenant.mt (t : ITenant) : MTenant :=
+  { members := t.members, grants := t.grants, policies := t.policies, roles := t.roles,
+    teams := t.teams, invitations := t.invitations }
+
+/-- The implementation tenant with its membership state replaced by `m`. -/
+def ITenant.withM (t : ITenant) (m : MTenant) : ITenant :=
+  { t with members := m.members, grants := m.grants, policies := m.policies, roles := m.roles,
+           teams := m.teams, invitations := m.invitations }
+
+/-- The membership state of an implementation tenant is the spec's. -/
+theorem ITenant.abs_mt (t : ITenant) : t.abs.mt = t.mt := rfl
+
+/-- Writing the membership back commutes with the abstraction. -/
+theorem ITenant.abs_withM (t : ITenant) (m : MTenant) : (t.withM m).abs = t.abs.withM m := rfl
 
 /-- The spec's world for an implementation world. -/
 def absW (w : IWorld) : World := fun x => (w x).map ITenant.abs

@@ -868,6 +868,8 @@ theorem stepTenant_delete_eq {t t' : Tenant} {p : Principal} {ty : TypeId} {id :
 theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
     (hrefs : t.RefsOk) (h : stepTenant t p i = .ok t') : t'.RefsOk := by
   cases i with
+  | createTenant owner name => simp [stepTenant] at h
+  | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact hrefs
   | create ty fs =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h
@@ -984,23 +986,20 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
 theorem step_preserves_refs (w w' : World) (i : Intent) (c : Ctx)
     (hrefs : w.RefsOk) (h : step w i c = .ok w') : w'.RefsOk := by
   intro x t' hx
-  unfold step at h
-  cases ht : w c.tenant with
-  | none => rw [ht] at h; cases h
-  | some t =>
-    rw [ht] at h
-    simp only at h
-    cases hs : stepTenant t c.principal i with
-    | error e => rw [hs] at h; cases h
-    | ok t₁ =>
-      rw [hs] at h
-      cases h
-      by_cases hxc : x = c.tenant
-      · simp [hxc] at hx
-        subst hx
-        exact stepTenant_preserves_refs t _ c.principal i (hrefs c.tenant t ht) hs
-      · simp [hxc] at hx
-        exact hrefs x t' hx
+  rcases step_cases h with ⟨t, t₁, ht, hs, rfl⟩ | ⟨owner, name, rfl, hnone, rfl⟩
+  · by_cases hxc : x = c.tenant
+    · simp [hxc] at hx
+      subst hx
+      exact stepTenant_preserves_refs t _ c.principal i (hrefs c.tenant t ht) hs
+    · simp [hxc] at hx
+      exact hrefs x t' hx
+  · by_cases hxc : x = c.tenant
+    · simp [hxc] at hx
+      subst hx
+      intro T o hT
+      simp [genesisTenant, Tenant.typ?] at hT
+    · simp [hxc] at hx
+      exact hrefs x t' hx
 
 /-- A record that another record names through a field that restricts deletion, or through a
     required single reference, cannot be deleted: one who may delete it, naming no version or the

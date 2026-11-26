@@ -305,6 +305,8 @@ theorem stepTenant_preserves_satisfied (t t' : Tenant) (p : Principal) (i : Inte
     (hs : t.Satisfied) (hst : t.StateConstraints)
     (h : stepTenant t p i = .ok t') : t'.Satisfied := by
   cases i with
+  | createTenant owner name => simp [stepTenant] at h
+  | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact hs
   | create ty fs =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h
@@ -433,24 +435,21 @@ theorem step_preserves_satisfied (w w' : World) (i : Intent) (c : Ctx)
     (hs : ∀ x t, w x = some t → t.Satisfied) (hst : ∀ x t, w x = some t → t.StateConstraints)
     (h : step w i c = .ok w') : ∀ x t, w' x = some t → t.Satisfied := by
   intro x t' hx
-  unfold step at h
-  cases ht : w c.tenant with
-  | none => rw [ht] at h; cases h
-  | some t =>
-    rw [ht] at h
-    simp only at h
-    cases hsT : stepTenant t c.principal i with
-    | error e => rw [hsT] at h; cases h
-    | ok t₁ =>
-      rw [hsT] at h
-      cases h
-      by_cases hxc : x = c.tenant
-      · simp [hxc] at hx
-        subst hx
-        exact stepTenant_preserves_satisfied t _ c.principal i (hs c.tenant t ht)
-          (hst c.tenant t ht) hsT
-      · simp [hxc] at hx
-        exact hs x t' hx
+  rcases step_cases h with ⟨t, t₁, ht, hsT, rfl⟩ | ⟨owner, name, rfl, hnone, rfl⟩
+  · by_cases hxc : x = c.tenant
+    · simp [hxc] at hx
+      subst hx
+      exact stepTenant_preserves_satisfied t _ c.principal i (hs c.tenant t ht)
+        (hst c.tenant t ht) hsT
+    · simp [hxc] at hx
+      exact hs x t' hx
+  · by_cases hxc : x = c.tenant
+    · simp [hxc] at hx
+      subst hx
+      intro T o hT
+      simp [genesisTenant, Tenant.typ?] at hT
+    · simp [hxc] at hx
+      exact hs x t' hx
 
 /-! ## A delete that would break a constraint is refused
 

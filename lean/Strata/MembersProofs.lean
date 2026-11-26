@@ -20,7 +20,7 @@ What they say, in the order of the file:
 Every statement is about the decisions of `Strata/Members.lean`, with no hypothesis beyond those named.
 -/
 
-import Strata.Members
+import Strata.Model
 
 namespace Strata
 
@@ -167,7 +167,7 @@ theorem hasOwner_iff (m : MTenant) : m.hasOwner = true ↔ ∃ q, ownerRole ∈ 
     · simp [ownerRole, publicRole] at h
     · apply List.mem_append_left
       unfold MTenant.directOf at h
-      cases hl : m.base.members.lookup q with
+      cases hl : m.members.lookup q with
       | none => rw [hl] at h; simp at h
       | some v => exact List.mem_map.mpr ⟨(q, v), mem_of_lookup_some _ q v hl, rfl⟩
     · apply List.mem_append_right
@@ -181,10 +181,10 @@ theorem hasOwner_of_mono (m m' : MTenant)
   exact (hasOwner_iff m').mpr ⟨q, h q ownerRole hq⟩
 
 /-- A tenant that is created has an owner. -/
-theorem genesis_hasOwner (o : PrincipalId) : (genesisTenant o).hasOwner = true := by
+theorem genesis_hasOwner (o : PrincipalId) : (genesisM o).hasOwner = true := by
   rw [hasOwner_iff]
   refine ⟨o, ?_⟩
-  simp [effective_roles, MTenant.directOf, genesisTenant, ownerRole]
+  simp [effective_roles, MTenant.directOf, genesisM, ownerRole]
 
 /-- The team table after the entry of team `T` is replaced by `d'`: a user's team roles are those of the
     teams it is in, and of `T` as `d'` gives it. -/
@@ -479,9 +479,9 @@ theorem stepMember_owner_kept (m m' : MTenant) (c : MCtx) (i : MemberIntent) (hn
   | revokeTeamRole t r => exact teamRole_owner m m' c t r false hn h ho
   | addTeamMember t p => exact teamMember_owner m m' c t p true hn h ho
   | removeTeamMember t p => exact teamMember_owner m m' c t p false hn h ho
-  | createInvitation i a rs => exact createInvitation_owner m m' c i a rs h ho
+  | createInvitation i a rs _ => exact createInvitation_owner m m' c i a rs h ho
   | revokeInvitation i => exact revokeInvitation_owner m m' c i h ho
-  | redeemInvitation i => exact redeemInvitation_owner m m' c i h ho
+  | redeemInvitation i _ _ => exact redeemInvitation_owner m m' c i h ho
 
 /-! ## Team ids stay distinct -/
 
@@ -586,9 +586,9 @@ theorem stepMember_teamsNodup (m m' : MTenant) (c : MCtx) (i : MemberIntent) (hn
   | revokeTeamRole t r => exact teamRole_nodup m m' c t r false hn h
   | addTeamMember t p => exact teamMember_nodup m m' c t p true hn h
   | removeTeamMember t p => exact teamMember_nodup m m' c t p false hn h
-  | createInvitation i a rs => exact createInvitation_nodup m m' c i a rs hn h
+  | createInvitation i a rs _ => exact createInvitation_nodup m m' c i a rs hn h
   | revokeInvitation i => exact revokeInvitation_nodup m m' c i hn h
-  | redeemInvitation i => exact redeemInvitation_nodup m m' c i hn h
+  | redeemInvitation i _ _ => exact redeemInvitation_nodup m m' c i hn h
 
 
 /-! ## Conferring -/
@@ -731,8 +731,8 @@ theorem redeem_ok_form (m m' : MTenant) (c : MCtx) (inv : InvitationId)
 
 /-- Redeeming an invitation gives the redeemer no role that the issuer could not confer, and the issuer
     is the one the invitation names. -/
-theorem redeem_only_conferrable (m m' : MTenant) (c : MCtx) (inv : InvitationId)
-    (h : stepMember m c (.redeemInvitation inv) = .ok m') :
+theorem redeem_only_conferrable (m m' : MTenant) (c : MCtx) (inv : InvitationId) (now : Nat) (verified : Option String)
+    (h : stepMember m c (.redeemInvitation inv now verified) = .ok m') :
     ∃ o, m.invitations.lookup inv = some o ∧
       ∀ q x, x ∈ m'.rolesOf (.user q) → x ∈ m.rolesOf (.user q) ∨
         mayConfer m (.user o.createdBy) x = true := by
@@ -844,165 +844,294 @@ theorem redeem_issuer_authority (m m' : MTenant) (c : MCtx) (inv : InvitationId)
   obtain ⟨_, o, _, hl, _, _, _, _, hman, hconf⟩ := redeem_ok_form m m' c inv h
   exact ⟨o, hl, hman, hconf⟩
 
+/-- Every membership intent but a redemption is accepted only from a principal who may manage members. -/
+theorem stepMember_manage (m m' : MTenant) (c : MCtx) (j : MemberIntent)
+    (hj : ∀ inv now verified, j ≠ .redeemInvitation inv now verified)
+    (h : stepMember m c j = .ok m') : manageMembers m c.principal = true := by
+  cases hm : manageMembers m c.principal with
+  | true => rfl
+  | false =>
+    exfalso
+    cases j with
+    | redeemInvitation inv now verified => exact hj inv now verified rfl
+    | _ =>
+      simp [stepMember, changeRole, defineTeamStep, teamRoleStep, teamMemberStep,
+        createInvitationStep, revokeInvitationStep, hm] at h
+
 /-! ## Reserved principal ids -/
 
-/-- A step that names a reserved principal, or whose caller is one, is refused before anything else. -/
-theorem reserved_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx) (i : MIntent)
-    (h : reservedRefused reserved c i = true) : stepWorld reserved w c i = .error .invalidIntent := by
-  unfold stepWorld
+/-- A step that names a reserved principal, or whose caller is one, is refused before anything else:
+    whatever the intent, and whether or not the tenant exists. -/
+theorem reserved_refused (w : World) (c : Ctx) (i : Intent)
+    (h : reservedRefused c.principal i = true) : step w i c = .error .invalidIntent := by
+  unfold step
   simp [h]
 
 /-- Assigning a reserved principal a role is refused. -/
-theorem assign_reserved_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx)
-    (p : PrincipalId) (r : RoleId) (h : reserved p = true) :
-    stepWorld reserved w c (.member (.assignRole p r)) = .error .invalidIntent := by
+theorem assign_reserved_refused (w : World) (c : Ctx) (p : PrincipalId) (r : RoleId)
+    (h : reservedId p = true) : step w (.member (.assignRole p r)) c = .error .invalidIntent := by
   apply reserved_refused
-  simp [reservedRefused, h]
+  simp [reservedRefused, Intent.named, MemberIntent.named, h]
 
 /-- Adding a reserved principal to a team is refused. -/
-theorem add_member_reserved_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx)
-    (team : TeamId) (p : PrincipalId) (h : reserved p = true) :
-    stepWorld reserved w c (.member (.addTeamMember team p)) = .error .invalidIntent := by
+theorem add_member_reserved_refused (w : World) (c : Ctx) (team : TeamId) (p : PrincipalId)
+    (h : reservedId p = true) :
+    step w (.member (.addTeamMember team p)) c = .error .invalidIntent := by
   apply reserved_refused
-  simp [reservedRefused, h]
+  simp [reservedRefused, Intent.named, MemberIntent.named, h]
 
 /-- Creating a tenant for a reserved owner is refused. -/
-theorem create_reserved_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx)
-    (owner : PrincipalId) (name : String) (h : reserved owner = true) :
-    stepWorld reserved w c (.createTenant owner name) = .error .invalidIntent := by
+theorem create_reserved_refused (w : World) (c : Ctx) (owner : PrincipalId) (name : String)
+    (h : reservedId owner = true) : step w (.createTenant owner name) c = .error .invalidIntent := by
   apply reserved_refused
-  simp [reservedRefused, h]
+  simp [reservedRefused, Intent.named, h]
+
+/-- A caller with a reserved id is refused, whatever the intent. -/
+theorem reserved_caller_refused (w : World) (c : Ctx) (q : PrincipalId) (i : Intent)
+    (hp : c.principal = .user q) (h : reservedId q = true) : step w i c = .error .invalidIntent := by
+  apply reserved_refused
+  simp [reservedRefused, callerReserved, hp, h]
 
 /-! ## Creating a tenant -/
 
 /-- An accepted creation makes the genesis tenant under the named owner, when the tenant did not exist,
     by the system, with a name that is not blank. -/
-theorem create_genesis (reserved : PrincipalId → Bool) (w w' : MWorld) (c : MCtx) (owner : PrincipalId)
-    (name : String) (h : stepWorld reserved w c (.createTenant owner name) = .ok w') :
-    w c.tenant = none ∧ c.principal = .system ∧ w' c.tenant = some (genesisTenant owner) := by
-  unfold stepWorld at h
+theorem create_genesis (w w' : World) (c : Ctx) (owner : PrincipalId) (name : String)
+    (h : step w (.createTenant owner name) c = .ok w') :
+    w c.tenant = none ∧ c.principal = .system ∧ isBlank name = false ∧
+      w' c.tenant = some (genesisTenant owner) := by
+  unfold step at h
   split at h
   · cases h
   · cases hw : w c.tenant with
-    | some _ => simp only [hw] at h; cases h
+    | some t => simp [hw, stepTenant] at h
     | none =>
       simp only [hw] at h
-      split at h
-      · cases h
-      · split at h
-        · cases h
-        · cases h
-          simp_all
+      cases hc : createdTenant c.principal owner name with
+      | error e => simp [hc] at h
+      | ok t' =>
+        simp only [hc, Except.ok.injEq] at h
+        subst h
+        unfold createdTenant at hc
+        split at hc
+        · cases hc
+        · split at hc
+          · cases hc
+          · rename_i hp hb
+            simp only [Except.ok.injEq] at hc
+            subst hc
+            exact ⟨rfl, by simpa using hp, by simpa using hb, by simp⟩
 
 /-- A tenant that exists is not created again. -/
-theorem create_existing_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx) (owner : PrincipalId)
-    (name : String) (hr : reservedRefused reserved c (.createTenant owner name) = false)
+theorem create_existing_refused (w : World) (c : Ctx) (owner : PrincipalId) (name : String)
+    (hr : reservedRefused c.principal (.createTenant owner name) = false)
     (hs : (w c.tenant).isSome = true) :
-    stepWorld reserved w c (.createTenant owner name) = .error .tenantExists := by
+    step w (.createTenant owner name) c = .error .tenantExists := by
   obtain ⟨m, hm⟩ := Option.isSome_iff_exists.mp hs
-  unfold stepWorld
-  simp [hr, hm]
+  unfold step
+  simp [hr, hm, stepTenant]
 
 /-- Only the system creates a tenant. -/
-theorem create_not_system_refused (reserved : PrincipalId → Bool) (w : MWorld) (c : MCtx) (owner : PrincipalId)
-    (name : String) (hr : reservedRefused reserved c (.createTenant owner name) = false)
+theorem create_not_system_refused (w : World) (c : Ctx) (owner : PrincipalId) (name : String)
+    (hr : reservedRefused c.principal (.createTenant owner name) = false)
     (hw : w c.tenant = none) (hp : c.principal ≠ .system) :
-    stepWorld reserved w c (.createTenant owner name) = .error .unauthorized := by
-  unfold stepWorld
-  simp [hr, hw, hp]
+    step w (.createTenant owner name) c = .error .unauthorized := by
+  unfold step
+  simp [hr, hw, hp, createdTenant]
 
-/-- The genesis tenant has an owner and distinct team ids. -/
+/-- A blank name is refused. -/
+theorem create_blank_refused (w : World) (c : Ctx) (owner : PrincipalId) (name : String)
+    (hr : reservedRefused c.principal (.createTenant owner name) = false)
+    (hw : w c.tenant = none) (hp : c.principal = .system) (hb : isBlank name = true) :
+    step w (.createTenant owner name) c = .error .invalidIntent := by
+  unfold step
+  simp [hr, hw, hp, createdTenant, hb]
+
+/-- The tenant a creation makes has an owner and distinct team ids. -/
 theorem genesis_owner_and_nodup (o : PrincipalId) :
-    (genesisTenant o).hasOwner = true ∧ (genesisTenant o).TeamsNodup :=
-  ⟨genesis_hasOwner o, by simp [MTenant.TeamsNodup, genesisTenant]⟩
-
+    (genesisTenant o).mt.hasOwner = true ∧ (genesisTenant o).mt.TeamsNodup := by
+  have : (genesisTenant o).mt = genesisM o := rfl
+  rw [this]
+  exact ⟨genesis_hasOwner o, by simp [MTenant.TeamsNodup, genesisM]⟩
 
 /-! ## The world -/
 
+/-- An accepted step leaves every tenant but the addressed one as it was. -/
+theorem step_other (w w' : World) (i : Intent) (c : Ctx) (h : step w i c = .ok w')
+    (x : TenantId) (hx : x ≠ c.tenant) : w' x = w x := by
+  unfold step at h
+  split at h
+  · cases h
+  · repeat' split at h
+    all_goals try (cases h; done)
+    all_goals (simp only [Except.ok.injEq] at h; subst h; simp [hx])
+
 /-- An accepted creation makes the world the old one with the new genesis tenant at the context's id. -/
-theorem create_world_form (reserved : PrincipalId → Bool) (w w' : MWorld) (c : MCtx) (owner : PrincipalId)
-    (name : String) (h : stepWorld reserved w c (.createTenant owner name) = .ok w') :
+theorem create_world_form (w w' : World) (c : Ctx) (owner : PrincipalId) (name : String)
+    (h : step w (.createTenant owner name) c = .ok w') :
     w' = fun x => if x = c.tenant then some (genesisTenant owner) else w x := by
-  unfold stepWorld at h
-  cases hw : w c.tenant with
-  | some _ => simp only [hw] at h; repeat' split at h; all_goals cases h
-  | none =>
-    simp only [hw] at h
-    repeat' split at h
-    all_goals (try cases h)
-    all_goals rfl
+  obtain ⟨hw, hp, hb, _⟩ := create_genesis w w' c owner name h
+  unfold step at h
+  split at h
+  · cases h
+  · simp only [hw] at h
+    have hc : createdTenant c.principal owner name = .ok (genesisTenant owner) := by
+      simp [createdTenant, hp, hb]
+    simp only [hc, Except.ok.injEq] at h
+    exact h.symm
 
-/-- An accepted intent in a tenant that exists changes that tenant by a membership step, and no other. -/
-theorem stepWorld_member_form (reserved : PrincipalId → Bool) (w w' : MWorld) (c : MCtx) (j : MemberIntent)
-    (h : stepWorld reserved w c (.member j) = .ok w') :
-    ∃ mt m', w c.tenant = some mt ∧ stepMember mt c j = .ok m' ∧
-      w' = fun x => if x = c.tenant then some m' else w x := by
-  unfold stepWorld at h
-  cases hw : w c.tenant with
-  | none => simp only [hw] at h; repeat' split at h; all_goals cases h
-  | some mt =>
-    simp only [hw] at h
-    cases hs : stepMember mt c j with
-    | error e => simp only [hs] at h; repeat' split at h; all_goals cases h
-    | ok m' =>
-      simp only [hs] at h
-      repeat' split at h
-      all_goals (try cases h)
-      all_goals exact ⟨mt, m', rfl, hs, rfl⟩
+/-- An accepted membership intent in a tenant that exists changes that tenant by a membership step, and
+    no other. -/
+theorem step_member_form (w w' : World) (c : Ctx) (j : MemberIntent)
+    (h : step w (.member j) c = .ok w') :
+    ∃ t m', w c.tenant = some t ∧ stepMember t.mt (j.ctxOf c.principal) j = .ok m' ∧
+      w' = fun x => if x = c.tenant then some (t.withM m') else w x := by
+  unfold step at h
+  split at h
+  · cases h
+  · cases hw : w c.tenant with
+    | none => simp [hw] at h
+    | some t =>
+      simp only [hw] at h
+      cases hs : stepMember t.mt (j.ctxOf c.principal) j with
+      | error e => simp [stepTenant, stepMemberT, hs, Except.map] at h
+      | ok m' =>
+        simp only [stepTenant, stepMemberT, hs, Except.map] at h
+        cases h
+        exact ⟨t, m', rfl, hs, rfl⟩
 
-/-- An accepted step keeps an owner in every tenant that had one, whichever tenant it addresses. -/
-theorem owner_kept_world (reserved : PrincipalId → Bool) (w w' : MWorld) (c : MCtx) (i : MIntent)
-    (hn : ∀ x m, w x = some m → m.TeamsNodup) (h : stepWorld reserved w c i = .ok w') :
-    ∀ x m, w x = some m → m.hasOwner = true → ∃ m', w' x = some m' ∧ m'.hasOwner = true := by
+/-- A step of a record or schema intent leaves the membership of the tenant as it was: the members,
+    grants, policies, roles, teams and invitations. -/
+theorem stepTenant_data_mt (t t' : Tenant) (p : Principal) (i : Intent)
+    (hc : ∀ owner name, i ≠ .createTenant owner name) (hm : ∀ j, i ≠ .member j)
+    (h : stepTenant t p i = .ok t') : t'.mt = t.mt := by
   cases i with
-  | createTenant owner name =>
-    have hwf := create_world_form reserved w w' c owner name h
-    obtain ⟨hnone, _, _⟩ := create_genesis reserved w w' c owner name h
-    intro x m hx ho
-    have hne : x ≠ c.tenant := fun hxc => by subst hxc; rw [hnone] at hx; cases hx
-    refine ⟨m, ?_, ho⟩
-    rw [hwf]
-    simp [hne, hx]
-  | member j =>
-    obtain ⟨mt, m', hmt, hs, hwf⟩ := stepWorld_member_form reserved w w' c j h
-    intro x m hx ho
-    by_cases hxc : x = c.tenant
-    · subst hxc
-      have hmm : mt = m := Option.some.inj (by rw [← hmt, hx])
-      subst hmm
-      refine ⟨m', ?_, stepMember_owner_kept mt m' c j (hn _ _ hmt) hs ho⟩
-      rw [hwf]
-      simp
-    · refine ⟨m, ?_, ho⟩
-      rw [hwf]
-      simp [hxc, hx]
+  | createTenant owner name => exact absurd rfl (hc owner name)
+  | member j => exact absurd rfl (hm j)
+  | create ty fs =>
+    simp only [stepTenant] at h
+    repeat' split at h
+    all_goals try (cases h; done)
+    all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+  | update ty id fs ev =>
+    simp only [stepTenant] at h
+    repeat' split at h
+    all_goals try (cases h; done)
+    all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+  | delete ty id ev =>
+    simp only [stepTenant] at h
+    repeat' split at h
+    all_goals try (cases h; done)
+    all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+  | setRequired ty f strict =>
+    simp only [stepTenant] at h
+    repeat' split at h
+    all_goals try (cases h; done)
+    all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+  | setUnique ty f strict =>
+    simp only [stepTenant] at h
+    repeat' split at h
+    all_goals try (cases h; done)
+    all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+  | defineUnique ty fs =>
+    simp only [stepTenant] at h
+    repeat' split at h
+    all_goals try (cases h; done)
+    all_goals (simp only [Except.ok.injEq] at h; subst h; rfl)
+
+/-- The tenant a membership decision writes back has the membership it decided on. -/
+theorem withM_mt (t : Tenant) (m : MTenant) : (t.withM m).mt = m := rfl
+
+/-- An accepted step of any intent that is not a creation or a membership intent keeps the membership
+    of the tenant it addresses. -/
+theorem step_data_mt (w w' : World) (c : Ctx) (i : Intent)
+    (hc : ∀ owner name, i ≠ .createTenant owner name) (hm : ∀ j, i ≠ .member j)
+    (h : step w i c = .ok w') (t : Tenant) (ht : w c.tenant = some t) :
+    ∃ t', w' c.tenant = some t' ∧ t'.mt = t.mt := by
+  unfold step at h
+  split at h
+  · cases h
+  · simp only [ht] at h
+    cases hs : stepTenant t c.principal i with
+    | error e => simp [hs] at h
+    | ok t' =>
+      simp only [hs] at h
+      cases h
+      exact ⟨t', by simp, stepTenant_data_mt t t' _ i hc hm hs⟩
+
+/-- An accepted step of an intent that is not a creation addresses a tenant that exists. -/
+theorem step_exists (w w' : World) (c : Ctx) (i : Intent)
+    (hc : ∀ owner name, i ≠ .createTenant owner name) (h : step w i c = .ok w') :
+    ∃ t, w c.tenant = some t := by
+  unfold step at h
+  split at h
+  · cases h
+  · cases hw : w c.tenant with
+    | some t => exact ⟨t, rfl⟩
+    | none =>
+      simp only [hw] at h
+      cases i with
+      | createTenant owner name => exact absurd rfl (hc owner name)
+      | _ => simp at h
+
+/-- An accepted step keeps an owner in every tenant that had one, whichever tenant it addresses and
+    whatever the intent. -/
+theorem owner_kept_world (w w' : World) (c : Ctx) (i : Intent)
+    (hn : ∀ x t, w x = some t → t.mt.TeamsNodup) (h : step w i c = .ok w') :
+    ∀ x t, w x = some t → t.mt.hasOwner = true → ∃ t', w' x = some t' ∧ t'.mt.hasOwner = true := by
+  intro x t hx ho
+  by_cases hxc : x = c.tenant
+  · subst hxc
+    by_cases hcr : ∃ owner name, i = .createTenant owner name
+    · obtain ⟨owner, name, rfl⟩ := hcr
+      obtain ⟨hnone, _⟩ := create_genesis w w' c owner name h
+      rw [hnone] at hx; cases hx
+    · by_cases hmb : ∃ j, i = .member j
+      · obtain ⟨j, rfl⟩ := hmb
+        obtain ⟨t0, m', hmt, hs, hwf⟩ := step_member_form w w' c j h
+        have : t0 = t := Option.some.inj (by rw [← hmt, hx])
+        subst this
+        refine ⟨t0.withM m', ?_, ?_⟩
+        · rw [hwf]; simp
+        · rw [withM_mt]
+          exact stepMember_owner_kept t0.mt m' _ j (hn _ _ hmt) hs ho
+      · have hc : ∀ owner name, i ≠ .createTenant owner name := fun o n e => hcr ⟨o, n, e⟩
+        have hm : ∀ j, i ≠ .member j := fun j e => hmb ⟨j, e⟩
+        obtain ⟨t', h1, h2⟩ := step_data_mt w w' c i hc hm h t hx
+        exact ⟨t', h1, by rw [h2]; exact ho⟩
+  · exact ⟨t, by rw [step_other w w' i c h x hxc]; exact hx, ho⟩
 
 /-- An accepted step keeps team ids distinct in every tenant. -/
-theorem stepWorld_nodup (reserved : PrincipalId → Bool) (w w' : MWorld) (c : MCtx) (i : MIntent)
-    (hn : ∀ x m, w x = some m → m.TeamsNodup) (h : stepWorld reserved w c i = .ok w') :
-    ∀ x m, w' x = some m → m.TeamsNodup := by
-  cases i with
-  | createTenant owner name =>
-    have hwf := create_world_form reserved w w' c owner name h
-    intro x m hx
-    rw [hwf] at hx
-    by_cases hxc : x = c.tenant
-    · subst hxc
-      simp only [if_true] at hx
+theorem step_nodup (w w' : World) (c : Ctx) (i : Intent)
+    (hn : ∀ x t, w x = some t → t.mt.TeamsNodup) (h : step w i c = .ok w') :
+    ∀ x t, w' x = some t → t.mt.TeamsNodup := by
+  intro x t hx
+  by_cases hxc : x = c.tenant
+  · subst hxc
+    by_cases hcr : ∃ owner name, i = .createTenant owner name
+    · obtain ⟨owner, name, rfl⟩ := hcr
+      obtain ⟨_, _, _, hg⟩ := create_genesis w w' c owner name h
+      rw [hg] at hx
       cases hx
       exact (genesis_owner_and_nodup owner).2
-    · simp only [hxc, if_false] at hx
-      exact hn x m hx
-  | member j =>
-    obtain ⟨mt, m', hmt, hs, hwf⟩ := stepWorld_member_form reserved w w' c j h
-    intro x m hx
-    rw [hwf] at hx
-    by_cases hxc : x = c.tenant
-    · subst hxc
-      simp only [if_true] at hx
-      cases hx
-      exact stepMember_teamsNodup mt m' c j (hn _ _ hmt) hs
-    · simp only [hxc, if_false] at hx
-      exact hn x m hx
+    · by_cases hmb : ∃ j, i = .member j
+      · obtain ⟨j, rfl⟩ := hmb
+        obtain ⟨t0, m', hmt, hs, hwf⟩ := step_member_form w w' c j h
+        rw [hwf] at hx
+        simp only [if_true] at hx
+        cases hx
+        rw [withM_mt]
+        exact stepMember_teamsNodup t0.mt m' _ j (hn _ _ hmt) hs
+      · have hc : ∀ owner name, i ≠ .createTenant owner name := fun o n e => hcr ⟨o, n, e⟩
+        have hm : ∀ j, i ≠ .member j := fun j e => hmb ⟨j, e⟩
+        obtain ⟨t0, ht0⟩ := step_exists w w' c i hc h
+        obtain ⟨t', h1, h2⟩ := step_data_mt w w' c i hc hm h t0 ht0
+        rw [h1] at hx
+        cases hx
+        have := hn _ _ ht0
+        unfold MTenant.TeamsNodup at this ⊢
+        rw [h2]; exact this
+  · rw [step_other w w' i c h x hxc] at hx
+    exact hn x t hx
 
 end Strata

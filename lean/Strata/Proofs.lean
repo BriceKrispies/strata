@@ -23,6 +23,7 @@ No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends
 import Strata.Model
 import Strata.References
 import Strata.Uniqueness
+import Strata.MembersProofs
 
 namespace Strata
 
@@ -43,13 +44,7 @@ theorem step_deterministic (w : World) (i : Intent) (c : Ctx) (r₁ r₂ : Excep
 theorem step_isolated (w w' : World) (i : Intent) (c : Ctx)
     (h : step w i c = .ok w') : ∀ x, x ≠ c.tenant → w' x = w x := by
   intro x hx
-  unfold step at h
-  split at h
-  · cases h
-  · split at h
-    · cases h
-    · cases h
-      simp [hx]
+  rcases step_cases h with ⟨t, t', _, _, rfl⟩ | ⟨owner, name, _, _, rfl⟩ <;> simp [hx]
 
 /-- The result for the addressed tenant depends on that tenant's state only: two worlds that
     agree on it give the same outcome for it, whatever else they contain. -/
@@ -57,27 +52,65 @@ theorem step_local (w₁ w₂ : World) (i : Intent) (c : Ctx)
     (h : w₁ c.tenant = w₂ c.tenant) :
     (step w₁ i c).map (fun w => w c.tenant) = (step w₂ i c).map (fun w => w c.tenant) := by
   unfold step
-  rw [h]
-  cases hw : w₂ c.tenant with
-  | none => rfl
-  | some t =>
-    cases hs : stepTenant t c.principal i with
-    | error e => simp [hs]
-    | ok t' => simp [hs, Except.map]
+  by_cases hr : reservedRefused c.principal i = true
+  · simp [hr, Except.map]
+  · simp only [hr, if_false]
+    rw [h]
+    cases hw : w₂ c.tenant with
+    | none =>
+      cases i with
+      | createTenant owner name =>
+        cases hc : createdTenant c.principal owner name <;> simp [hc, Except.map]
+      | _ => simp [Except.map]
+    | some t =>
+      cases hs : stepTenant t c.principal i with
+      | error e => simp [hs, Except.map]
+      | ok t' => simp [hs, Except.map]
 
 /-! ## Property 2: authorization -/
+
+/-- An accepted membership intent other than a redemption was made by a principal who may manage
+    members. -/
+theorem member_authorized (t t' : Tenant) (p : Principal) (j : MemberIntent)
+    (hj : ∀ inv now verified, j ≠ .redeemInvitation inv now verified)
+    (h : stepTenant t p (.member j) = .ok t') :
+    authorized t p (.member j) = true := by
+  obtain ⟨m, hm⟩ := stepTenant_member_eq h
+  simp only [stepTenant, stepMemberT] at h
+  cases hs : stepMember t.mt (j.ctxOf p) j with
+  | error e => simp [hs, Except.map] at h
+  | ok m' =>
+    have := stepMember_manage t.mt m' (j.ctxOf p) j hj hs
+    cases j with
+    | redeemInvitation inv now verified => exact absurd rfl (hj inv now verified)
+    | _ => simpa [authorized, MemberIntent.ctxOf] using this
 
 /-- A step that a tenant accepts was made by a principal authorized to make it. -/
 theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
     (ht : w c.tenant = some t) (h : step w i c = .ok w') :
     authorized t c.principal i = true := by
-  unfold step at h
-  rw [ht] at h
-  simp only at h
-  cases hs : stepTenant t c.principal i with
-  | error e => rw [hs] at h; cases h
-  | ok t' =>
+  rcases step_cases h with ⟨t0, t', ht0, hs, -⟩ | ⟨owner, name, -, hnone, -⟩
+  · have ht0' : t = t0 := Option.some.inj (ht.symm.trans ht0)
+    subst ht0'
     cases i with
+    | createTenant owner name => simp [stepTenant] at hs
+    | member j =>
+      cases j with
+      | redeemInvitation inv now verified =>
+        simp only [stepTenant, stepMemberT, MemberIntent.ctxOf, stepMember, redeemInvitationStep] at hs
+        cases hp : c.principal with
+        | user q => simp [authorized, hp, Principal.userId?]
+        | system => simp [hp, Except.map] at hs
+        | anonymous => simp [hp, Except.map] at hs
+      | assignRole p r => exact member_authorized _ _ _ _ (by intros; simp) hs
+      | revokeRole p r => exact member_authorized _ _ _ _ (by intros; simp) hs
+      | defineTeam team label => exact member_authorized _ _ _ _ (by intros; simp) hs
+      | assignTeamRole team role => exact member_authorized _ _ _ _ (by intros; simp) hs
+      | revokeTeamRole team role => exact member_authorized _ _ _ _ (by intros; simp) hs
+      | addTeamMember team p => exact member_authorized _ _ _ _ (by intros; simp) hs
+      | removeTeamMember team p => exact member_authorized _ _ _ _ (by intros; simp) hs
+      | createInvitation inv address roles now => exact member_authorized _ _ _ _ (by intros; simp) hs
+      | revokeInvitation inv => exact member_authorized _ _ _ _ (by intros; simp) hs
     | create ty fs =>
       cases hT : t.typ? ty with
       | none => simp [stepTenant, hT] at hs
@@ -152,6 +185,7 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
         cases hT : t.typ? ty with
         | none => simp [hT] at hs
         | some o => simp [authorized, hT, hp']
+  · rw [ht] at hnone; cases hnone
 
 /-- A principal who may not update a record cannot change it: the step is refused, so no new
     world exists in which the record differs. The permission is the one for the record as it would
@@ -159,16 +193,18 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
 theorem unauthorized_cannot_update (w : World) (c : Ctx) (t : Tenant) (ty : TypeId) (id : RecordId)
     (o : ObjType) (old : Record) (fs : Fields) (ev : Option Nat)
     (ht : w c.tenant = some t) (hty : t.typ? ty = some o) (hl : o.records.lookup id = some old)
-    (hno : canUpdate t c.principal ty old (patched old fs) = false) :
+    (hno : canUpdate t c.principal ty old (patched old fs) = false)
+    (hr : callerReserved c.principal = false) :
     step w (.update ty id fs ev) c = .error .unauthorized := by
-  simp [step, ht, stepTenant, hty, hl, hno]
+  simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, hty, hl, hno]
 
 theorem unauthorized_cannot_delete (w : World) (c : Ctx) (t : Tenant) (ty : TypeId) (id : RecordId)
     (o : ObjType) (old : Record) (ev : Option Nat)
     (ht : w c.tenant = some t) (hty : t.typ? ty = some o) (hl : o.records.lookup id = some old)
-    (hno : canDelete t c.principal ty old = false) :
+    (hno : canDelete t c.principal ty old = false)
+    (hr : callerReserved c.principal = false) :
     step w (.delete ty id ev) c = .error .unauthorized := by
-  simp [step, ht, stepTenant, hty, hl, hno]
+  simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, hty, hl, hno]
 
 /-- The refusal does not reveal whether a record exists: a principal who may not update any record
     of the type (with no record to test, as the kernel asks it) is refused an update of a record that
@@ -178,16 +214,18 @@ theorem unauthorized_cannot_delete (w : World) (c : Ctx) (t : Tenant) (ty : Type
 theorem missing_record_hidden_on_update (w : World) (c : Ctx) (t : Tenant) (ty : TypeId)
     (id : RecordId) (o : ObjType) (fs : Fields) (ev : Option Nat)
     (ht : w c.tenant = some t) (hty : t.typ? ty = some o) (hl : o.records.lookup id = none)
-    (hno : canWithoutRecord t c.principal ty .update = false) :
+    (hno : canWithoutRecord t c.principal ty .update = false)
+    (hr : callerReserved c.principal = false) :
     step w (.update ty id fs ev) c = .error .unauthorized := by
-  simp [step, ht, stepTenant, hty, hl, missingRecord, hno]
+  simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, hty, hl, missingRecord, hno]
 
 theorem missing_record_hidden_on_delete (w : World) (c : Ctx) (t : Tenant) (ty : TypeId)
     (id : RecordId) (o : ObjType) (ev : Option Nat)
     (ht : w c.tenant = some t) (hty : t.typ? ty = some o) (hl : o.records.lookup id = none)
-    (hno : canWithoutRecord t c.principal ty .delete = false) :
+    (hno : canWithoutRecord t c.principal ty .delete = false)
+    (hr : callerReserved c.principal = false) :
     step w (.delete ty id ev) c = .error .unauthorized := by
-  simp [step, ht, stepTenant, hty, hl, missingRecord, hno]
+  simp [step, reservedRefused, Intent.named, hr, ht, stepTenant, hty, hl, missingRecord, hno]
 
 /-- Stated in terms of the outcome: an unauthorized principal's intent is never accepted.
 
@@ -262,6 +300,8 @@ theorem stepTenant_conform_ids (t t' : Tenant) (p : Principal) (i : Intent)
     (h : stepTenant t p i = .ok t') :
     t'.Conform ∧ t'.IdsBelow := by
   cases i with
+  | createTenant owner name => simp [stepTenant] at h
+  | member j => obtain ⟨m', rfl⟩ := stepTenant_member_eq h; exact ⟨hconf, hids⟩
   | create ty fs =>
     cases hT : t.typ? ty with
     | none => simp [stepTenant, hT] at h
@@ -436,6 +476,18 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : Principal) (i : Intent)
     stepTenant_preserves_distinct t t' p i hd h,
     stepTenant_preserves_unique t t' p i ⟨hconf, hids, hrefs, hd, hu⟩ hstrict h⟩
 
+/-- The tenant a creation makes is well-formed: it has no object types. -/
+theorem genesisTenant_wf (o : PrincipalId) : (genesisTenant o).WF := by
+  have hno : ∀ T ob, (genesisTenant o).typ? T = some ob → False := by
+    intro T ob h
+    simp [genesisTenant, Tenant.typ?] at h
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · intro T ob h; exact (hno T ob h).elim
+  · intro T ob h; exact (hno T ob h).elim
+  · intro T ob h; exact (hno T ob h).elim
+  · exact ⟨by simp [genesisTenant], fun T ob h => (hno T ob h).elim⟩
+  · intro T ob h; exact (hno T ob h).elim
+
 /-- Property 1 for the world: a strict, accepted step from a well-formed world leads to a
     well-formed world.
 
@@ -443,23 +495,19 @@ theorem stepTenant_preserves_wf (t t' : Tenant) (p : Principal) (i : Intent)
 theorem step_preserves_wf (w w' : World) (i : Intent) (c : Ctx)
     (hwf : w.WF) (hstrict : i.strict = true) (h : step w i c = .ok w') : w'.WF := by
   intro x t' hx
-  unfold step at h
-  cases ht : w c.tenant with
-  | none => rw [ht] at h; cases h
-  | some t =>
-    rw [ht] at h
-    simp only at h
-    cases hs : stepTenant t c.principal i with
-    | error e => rw [hs] at h; cases h
-    | ok t₁ =>
-      rw [hs] at h
-      cases h
-      by_cases hxc : x = c.tenant
-      · simp [hxc] at hx
-        subst hx
-        exact stepTenant_preserves_wf t _ c.principal i (hwf c.tenant t ht) hstrict hs
-      · simp [hxc] at hx
-        exact hwf x t' hx
+  rcases step_cases h with ⟨t, t₁, ht, hs, rfl⟩ | ⟨owner, name, rfl, hnone, rfl⟩
+  · by_cases hxc : x = c.tenant
+    · simp [hxc] at hx
+      subst hx
+      exact stepTenant_preserves_wf t _ c.principal i (hwf c.tenant t ht) hstrict hs
+    · simp [hxc] at hx
+      exact hwf x t' hx
+  · by_cases hxc : x = c.tenant
+    · simp [hxc] at hx
+      subst hx
+      exact genesisTenant_wf owner
+    · simp [hxc] at hx
+      exact hwf x t' hx
 
 /-- Property 1 for uniqueness, for the world: a strict, accepted step from a well-formed world
     leaves every object type's unique fields and composite constraints unique. -/

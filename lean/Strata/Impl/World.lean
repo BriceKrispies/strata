@@ -22,6 +22,15 @@ namespace Impl
 theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant)
     (hinv : t.Inv) (h : stepTenantI t p i = .ok t') : t'.Inv := by
   cases i with
+  | createTenant owner name => simp [stepTenantI] at h
+  | member j =>
+    simp only [stepTenantI] at h
+    cases hs : stepMember t.mt (j.ctxOf p) j with
+    | error e => simp [hs, Except.map] at h
+    | ok m =>
+      simp only [hs, Except.map, Except.ok.injEq] at h
+      subst h
+      exact hinv
   | create ty fs =>
     simp only [stepTenantI] at h
     cases hty : t.typ? ty with
@@ -138,54 +147,116 @@ theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant
               exact inv_putType t ty { o with uniques := o.uniques ++ [fs] } t.nextId (Nat.le_refl _)
                 (hinv ty o hty) hinv T q hq
 
+/-- The tenant a `CreateTenant` makes, as the implementation holds it, is the spec's. -/
+theorem createdTenantI_abs (p : Principal) (owner : PrincipalId) (name : String) :
+    (createdTenantI p owner name).map ITenant.abs = createdTenant p owner name := by
+  unfold createdTenantI createdTenant
+  repeat' split
+  all_goals rfl
+
+/-- The genesis tenant has no slot arrays at all. -/
+theorem genesis_inv (owner : PrincipalId) : (ITenant.genesis owner).Inv := by
+  intro ty o h
+  simp [ITenant.typ?, ITenant.genesis] at h
+
 /-- One intent against the world, on slots. -/
 theorem stepI_refines (w : IWorld) (i : Intent) (c : Ctx) (hw : w.Inv) :
     (stepI w i c).map absW = step (absW w) i c := by
   unfold stepI step
-  cases hc : w c.tenant with
-  | none => simp [absW, hc, Except.map]
-  | some t =>
-    have hs := stepTenantI_refines t c.principal i (hw c.tenant t hc)
-    simp only [absW, hc, Option.map_some]
-    cases h' : stepTenantI t c.principal i with
-    | error e =>
-      rw [h'] at hs
-      simp only [Except.map] at hs
-      rw [← hs]
-      simp [Except.map]
-    | ok t' =>
-      rw [h'] at hs
-      simp only [Except.map] at hs
-      rw [← hs]
-      simp only [Except.map, absW]
-      congr 1
-      funext x
-      by_cases hx : x = c.tenant
-      · simp [absW, hx]
-      · simp [absW, hx]
+  by_cases hr : reservedRefused c.principal i = true
+  · simp [hr, Except.map]
+  · simp only [hr, if_false, Bool.false_eq_true]
+    cases hc : w c.tenant with
+    | none =>
+      have hc' : absW w c.tenant = none := by simp [absW, hc]
+      simp only [hc, hc']
+      cases i with
+      | createTenant owner name =>
+        dsimp only
+        have h1 := createdTenantI_abs c.principal owner name
+        cases h2 : createdTenantI c.principal owner name with
+        | error e =>
+          rw [h2] at h1
+          simp only [Except.map] at h1
+          rw [← h1]
+          rfl
+        | ok t' =>
+          rw [h2] at h1
+          simp only [Except.map] at h1
+          rw [← h1]
+          simp only [Except.map]
+          congr 1
+          funext x
+          by_cases hx : x = c.tenant
+          · simp [absW, hx]
+          · simp [absW, hx]
+      | _ => rfl
+    | some t =>
+      have hs := stepTenantI_refines t c.principal i (hw c.tenant t hc)
+      simp only [absW, hc, Option.map_some]
+      cases h' : stepTenantI t c.principal i with
+      | error e =>
+        rw [h'] at hs
+        simp only [Except.map] at hs
+        rw [← hs]
+        simp [Except.map]
+      | ok t' =>
+        rw [h'] at hs
+        simp only [Except.map] at hs
+        rw [← hs]
+        simp only [Except.map, absW]
+        congr 1
+        funext x
+        by_cases hx : x = c.tenant
+        · simp [absW, hx]
+        · simp [absW, hx]
 
 /-- An accepted step keeps the invariant: the addressed tenant keeps its slot count, the others
     are untouched. -/
 theorem stepI_inv (w : IWorld) (i : Intent) (c : Ctx) (w' : IWorld) (hw : w.Inv)
     (h : stepI w i c = .ok w') : w'.Inv := by
   unfold stepI at h
-  cases hc : w c.tenant with
-  | none => simp [hc] at h
-  | some t =>
-    rw [hc] at h
-    cases h' : stepTenantI t c.principal i with
-    | error e => simp [h'] at h
-    | ok t'' =>
-      simp only [h', Except.ok.injEq] at h
-      subst h
-      intro x s hx
-      by_cases hxc : x = c.tenant
-      · subst hxc
-        simp at hx
-        subst hx
-        exact stepTenantI_inv t c.principal i t'' (hw c.tenant t hc) h'
-      · simp only [hxc, if_false] at hx
-        exact hw x s hx
+  by_cases hr : reservedRefused c.principal i = true
+  · simp [hr] at h
+  · simp only [hr, if_false, Bool.false_eq_true] at h
+    cases hc : w c.tenant with
+    | none =>
+      simp only [hc] at h
+      cases i with
+      | createTenant owner name =>
+        cases h2 : createdTenantI c.principal owner name with
+        | error e => simp [h2] at h
+        | ok t'' =>
+          simp only [h2, Except.ok.injEq] at h
+          subst h
+          have : t'' = ITenant.genesis owner := by
+            unfold createdTenantI at h2
+            repeat' split at h2
+            all_goals first | (cases h2; done) | (simp only [Except.ok.injEq] at h2; exact h2.symm)
+          subst this
+          intro x s hx
+          by_cases hxc : x = c.tenant
+          · simp [hxc] at hx
+            subst hx
+            exact genesis_inv owner
+          · simp only [hxc, if_false] at hx
+            exact hw x s hx
+      | _ => simp at h
+    | some t =>
+      rw [hc] at h
+      cases h' : stepTenantI t c.principal i with
+      | error e => simp [h'] at h
+      | ok t'' =>
+        simp only [h', Except.ok.injEq] at h
+        subst h
+        intro x s hx
+        by_cases hxc : x = c.tenant
+        · subst hxc
+          simp at hx
+          subst hx
+          exact stepTenantI_inv t c.principal i t'' (hw c.tenant t hc) h'
+        · simp only [hxc, if_false] at hx
+          exact hw x s hx
 
 /-- An implementation object type with no records. -/
 def IObj.ofEmpty (o : ObjType) : IObj :=
@@ -194,12 +265,13 @@ def IObj.ofEmpty (o : ObjType) : IObj :=
 /-- A tenant with no records, as the implementation starts it: every slot array empty. -/
 def ITenant.ofEmpty (t : Tenant) : ITenant :=
   { types := t.types.map (fun e => (e.1, IObj.ofEmpty e.2)), members := t.members,
-    grants := t.grants, policies := t.policies, nextId := t.nextId, limits := t.limits }
+    grants := t.grants, policies := t.policies, nextId := t.nextId, limits := t.limits,
+    roles := t.roles, teams := t.teams, invitations := t.invitations }
 
 theorem ofEmpty_abs (t : Tenant) (h : ∀ e ∈ t.types, e.2.records = []) :
     (ITenant.ofEmpty t).abs = t := by
   cases t with
-  | mk types members grants policies nextId limits =>
+  | mk types members grants policies nextId limits roles teams invitations =>
     simp only [ITenant.abs, ITenant.ofEmpty, List.map_map]
     congr 1
     conv => rhs; rw [← List.map_id types]

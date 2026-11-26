@@ -196,6 +196,12 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
           if schemaChangeRefused core.limits (scopedTypes t'.abs.types [ty]) true then
             .error (.migrationRejected, ⟨core, ux, cx, rx⟩)
           else .ok ⟨t', ux, cx.addCells (cellsOf ty o.slots.size) (ckeysUnder ty o fs), rx⟩
+  | .createTenant _ _ => .error (.tenantExists, ⟨core, ux, cx, rx⟩)
+  | .member j =>
+    -- A membership step changes no record, so the indexes are as they were.
+    match stepMember core.mt (j.ctxOf p) j with
+    | .error e => .error (e, ⟨core, ux, cx, rx⟩)
+    | .ok m => .ok ⟨core.withM m, ux, cx, rx⟩
 
 /-- One intent against one indexed tenant; a refusal hands the tenant back. -/
 def stepTenantXL (x : XTenant) (p : Principal) (i : Intent) : Except (Err × XTenant) XTenant :=
