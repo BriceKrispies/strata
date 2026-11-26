@@ -995,7 +995,7 @@ cover the decisions.
   state (`1`, default `open`), a vote count (`2`) and a note (`3`). Its workflow is in `lean/Strata/Fixture.lean` and in
   `crates/verification/src/lean.rs`; its policies let a writer change only its own tickets with at most five votes.
   `strata_model` prints the type's block only while it holds a record, so the existing scenarios print as before. The
-  generator (`lean_diff::generate`) emits ticket operations in one iteration of six. Thirteen h- scenarios cover the
+  generator (`lean_diff::generate`) emits ticket operations in one iteration of six. Fifteen h- scenarios cover the
   decisions, from `h-a-new-ticket-starts-open` to `h-deleting-a-ticket-needs-no-transition`. `expected.txt` is not edited.
 - **Checks.** `lake build` builds. `lake env lean Audit.lean` prints only `propext`, `Classical.choice` and `Quot.sound` for
   the new theorems and finds no `sorryAx`. `strata_model`, `--impl` and `--indexed` print the same text on
