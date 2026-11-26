@@ -35,12 +35,15 @@ def itemSchema : Schema :=
    (11, { ty := .ref 2 .restrict, required := false }),
    (12, { ty := .ref 2 .setNull, required := false })]
 
-/-- The constraints of the item type, in id order (slice 5). The first, on field `2`, is violated by a
-    negative integer; the second, on field `1`, by the name `forbidden`. Both are statically well typed
-    (the kernel's schema check refuses a comparison of two kinds), so neither can fail to evaluate. -/
+/-- The constraints of the item type, in id order (slice 5, WG-5664). The first, on field `2`, is violated by a
+    negative integer; the second, on field `1`, by the name `forbidden`; the third reads the set-null
+    reference `4`: an item has a link or a number, so a delete that clears the link of an item with no
+    number is refused. All are statically well typed (the kernel's schema check refuses a comparison of
+    two kinds), so none can fail to evaluate. -/
 def itemConstraints : List Expr :=
   [.or (.isNull (.field .record 2)) (.cmp .ge (.field .record 2) (.lit (.int 0))),
-   .cmp .ne (.field .record 1) (.lit (.str "forbidden"))]
+   .cmp .ne (.field .record 1) (.lit (.str "forbidden")),
+   .or (.not (.isNull (.field .record 4))) (.not (.isNull (.field .record 2)))]
 
 /-- The second object type, "part" (id `2`), whose references point into items and back:
     `1` a reference to an item that restricts its delete; `2` a reference to an item cleared when

@@ -324,7 +324,9 @@ fn item_default(n: u64) -> Option<Expr> {
 }
 
 /// The constraints of the item type, in id order (the model's `itemConstraints`): field `2` is absent
-/// or not negative, and field `1` is not the name `forbidden`.
+/// or not negative, field `1` is not the name `forbidden`, and an item has a link (field `4`, a set-null
+/// reference, which a delete clears) or a number (field `2`), so a delete that clears the link of an
+/// item with no number is refused (WG-5664).
 fn item_constraints() -> Vec<SchemaChange> {
     let field = |n: u64| Box::new(Expr::Var(Scope::Record, format!("f{n:02}")));
     let absent_or_not_negative = Expr::Or(vec![
@@ -336,9 +338,14 @@ fn item_constraints() -> Vec<SchemaChange> {
         field(1),
         Box::new(Expr::Lit(Value::Str("forbidden".into()))),
     );
+    let link_or_number = Expr::Or(vec![
+        Expr::Not(Box::new(Expr::IsNull(field(4)))),
+        Expr::Not(Box::new(Expr::IsNull(field(2)))),
+    ]);
     [
         ("c1", absent_or_not_negative, "a value is negative"),
         ("c2", not_forbidden, "the name is forbidden"),
+        ("c3", link_or_number, "neither a link nor a number"),
     ]
     .into_iter()
     .map(|(name, expr, message)| SchemaChange::DefineConstraint {

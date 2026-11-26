@@ -508,14 +508,18 @@ theorem delete_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
           · simp only [hb, if_true]
             exact good_error _ _
           · simp only [hb, if_false, Bool.false_eq_true]
-            obtain ⟨hok2, hcore⟩ := deleteX_good core ux cx rx hok ty id o old hty hg
-            refine ⟨?_, fun e x' h => (by cases h), ?_⟩
-            · simp only [Except.mapError, Except.map]
-              rw [hcore]
-            · intro y hy
-              simp only [Except.ok.injEq] at hy
-              subst hy
-              exact hok2
+            by_cases hcb : clearBreaksI core ty id = true
+            · simp only [hcb, if_true]
+              exact good_error _ _
+            · simp only [hcb, if_false, Bool.false_eq_true]
+              obtain ⟨hok2, hcore⟩ := deleteX_good core ux cx rx hok ty id o old hty hg
+              refine ⟨?_, fun e x' h => (by cases h), ?_⟩
+              · simp only [Except.mapError, Except.map]
+                rw [hcore]
+              · intro y hy
+                simp only [Except.ok.injEq] at hy
+                subst hy
+                exact hok2
       · have : canDeleteI core p ty old = false := by simpa using hca
         simp only [this, Bool.not_false, if_true]
         exact good_error _ _

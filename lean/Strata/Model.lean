@@ -760,6 +760,17 @@ def delObj (ty : TypeId) (id : RecordId) (j : TypeId) (o : ObjType) : ObjType :=
 def Tenant.afterDelete (t : Tenant) (ty : TypeId) (id : RecordId) : Tenant :=
   { t with types := t.types.map (fun e => (e.1, delObj ty id e.1 e.2)) }
 
+/-- Whether a delete of record `id` of type `ty` would leave a record it rewrites violating a
+    constraint of its type (WG-5664). The rewritten records are the other records that refer to
+    `id` through a clearing field; a rewritten record breaks a constraint when one of its constraints
+    is `false` or cannot be evaluated (`constraintProblem` says so). The kernel refuses such a delete
+    with `constraintViolated`, as a restrict refuses it with `stillReferenced`, so the invariant
+    `Tenant.Satisfied` survives every accepted delete. -/
+def Tenant.clearBreaks (t : Tenant) (ty : TypeId) (id : RecordId) : Bool :=
+  t.types.any (fun e => e.2.records.any (fun q =>
+    !(e.1 == ty && q.1 == id) && recRefers e.2.schema ty id q.2 &&
+      (constraintProblem (storedEnv (clearRef e.2.schema ty id q.2)) e.2.constraints).isSome))
+
 /-- The roles a principal holds (the kernel's `roles_of`): none for the system, `public` for an
     anonymous caller, and for a user its direct roles and `public`. -/
 def Tenant.rolesOf (t : Tenant) : Principal → List RoleId
@@ -1049,6 +1060,7 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
         if !canDelete t p ty old then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else if t.blockedDelete ty id then .error .stillReferenced
+        else if t.clearBreaks ty id then .error .constraintViolated
         else .ok (t.afterDelete ty id)
   | .setRequired ty f strict =>
     if !canManage t p then .error .unauthorized

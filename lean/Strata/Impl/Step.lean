@@ -57,6 +57,15 @@ def unknownTypeI (t : ITenant) (p : Principal) (ty : TypeId) (a : Action) : Err 
 def blockedI (t : ITenant) (ty : TypeId) (id : RecordId) : Bool :=
   t.types.any (fun e => anyFrom e.2.slots (blocks e.1 e.2.schema ty id) e.2.slots.size)
 
+/-- Whether a delete of `id` of type `ty` would leave a record it rewrites violating a constraint
+    (the spec's `Tenant.clearBreaks`, WG-5664), on the slots: some other record that refers to it
+    through a clearing field fails a constraint of its type once cleared. -/
+def clearBreaksI (t : ITenant) (ty : TypeId) (id : RecordId) : Bool :=
+  t.types.any (fun e => anyFrom e.2.slots (fun q => !(e.1 == ty && q.1 == id) &&
+    recRefers e.2.schema ty id q.2 &&
+    (constraintProblem (storedEnv (clearRef e.2.schema ty id q.2)) e.2.constraints).isSome)
+    e.2.slots.size)
+
 /-- The object type `j` after record `id` of type `ty` is deleted (the spec's `delObj`): in its own
     table the slot is cleared, and in every table the references to it are cleared. -/
 def delObjI (ty : TypeId) (id : RecordId) (j : TypeId) (o : IObj) : IObj :=
@@ -111,6 +120,7 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
         if !canDeleteI t p ty old then .error .unauthorized
         else if versionClash ev old then .error .versionConflict
         else if blockedI t ty id then .error .stillReferenced
+        else if clearBreaksI t ty id then .error .constraintViolated
         else .ok { t with types := t.types.map (fun e => (e.1, delObjI ty id e.1 e.2)) }
   | .setRequired ty f strict =>
     if !canManage t.header p then .error .unauthorized
@@ -193,6 +203,14 @@ theorem problemI_abs (t : ITenant) (o : IObj) (self : RecordId) (r : Record) :
 theorem blocked_eq (t : ITenant) (ty : TypeId) (id : RecordId) :
     blockedI t ty id = t.abs.blockedDelete ty id := by
   unfold blockedI Tenant.blockedDelete ITenant.abs
+  simp only [List.any_map]
+  congr 1
+  funext e
+  simp only [Function.comp, absEntry, IObj.abs, any_absSlots]
+
+theorem clearBreaks_eq (t : ITenant) (ty : TypeId) (id : RecordId) :
+    clearBreaksI t ty id = t.abs.clearBreaks ty id := by
+  unfold clearBreaksI Tenant.clearBreaks ITenant.abs
   simp only [List.any_map]
   congr 1
   funext e
@@ -336,9 +354,11 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
           · simp [hc, hv, Except.map]
           · by_cases hb : t.abs.blockedDelete ty id = true
             · simp [hc, hv, hb, Except.map]
-            · simp only [hc, hv, hb, if_false, Bool.false_eq_true, Except.map]
-              congr 1
-              exact afterDelete_abs t ty id
+            · by_cases hcb : t.abs.clearBreaks ty id = true
+              · simp [clearBreaks_eq, hc, hv, hb, hcb, Except.map]
+              · simp only [clearBreaks_eq, hc, hv, hb, hcb, if_false, Bool.false_eq_true, Except.map]
+                congr 1
+                exact afterDelete_abs t ty id
   | setRequired ty f strict =>
     by_cases ho : (!canManage t.header p) = true
     · have ho2 : canManage t.abs p = false := by rw [← canManage_header]; simpa using ho

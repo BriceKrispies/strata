@@ -67,19 +67,21 @@ theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant
           · cases h
           · split at h
             · cases h
-            · simp only [Except.ok.injEq] at h
-              subst h
-              intro T q hq
-              unfold ITenant.typ? at hq
-              simp only [lookup_map_entry] at hq
-              cases hl : t.types.lookup T with
-              | none => simp [hl] at hq
-              | some o2 =>
-                simp only [hl, Option.map_some, Option.some.injEq] at hq
-                subst hq
-                have := hinv T o2 hl
-                unfold delObjI
-                split <;> simp [setSlot, this]
+            · split at h
+              · cases h
+              · simp only [Except.ok.injEq] at h
+                subst h
+                intro T q hq
+                unfold ITenant.typ? at hq
+                simp only [lookup_map_entry] at hq
+                cases hl : t.types.lookup T with
+                | none => simp [hl] at hq
+                | some o2 =>
+                  simp only [hl, Option.map_some, Option.some.injEq] at hq
+                  subst hq
+                  have := hinv T o2 hl
+                  unfold delObjI
+                  split <;> simp [setSlot, this]
   | setRequired ty f strict =>
     simp only [stepTenantI] at h
     split at h

@@ -22,10 +22,11 @@ checks of `stepTenant`):
   no old record and no principal, see `Expr.stateOnly`), every accepted create, update and schema change
   leaves every stored record satisfying every constraint of its type (`stepTenant_preserves_satisfied`,
   `step_preserves_satisfied`).
-- A delete does not keep that invariant. The kernel clears the references a delete removes without
-  checking the constraints of the records it rewrites, so an accepted delete can leave a record that
-  violates a constraint (`delete_breaks_satisfied`, with a concrete tenant). This is a finding about the
-  kernel's behaviour that the model reproduces, not a property the model proves.
+- A delete keeps that invariant by refusal. The clearing of a reference a delete removes rewrites the
+  referrer, so the kernel and the model refuse the delete with `constraintViolated` when a rewritten
+  record would break one of its type's constraints (`Tenant.clearBreaks`, WG-5664). An accepted delete
+  therefore keeps the invariant (`stepTenant_preserves_satisfied`, with the delete case;
+  `brk_delete_refused` is the refusal on a concrete tenant).
 
 No `sorry`, no added axioms. `Audit.lean` prints the axioms each theorem depends on.
 -/
@@ -215,11 +216,6 @@ theorem unauthorized_regardless_of_defaults :
 
 /-! ## The constraint invariant -/
 
-/-- An intent that is not a delete. -/
-def Intent.noDelete : Intent → Bool
-  | .delete _ _ _ => false
-  | _ => true
-
 /-- Constraints read the record and the new record, not the old one or the principal, so their value
     on a stored record does not depend on which write checks them. -/
 theorem evalExpr_congr (env env' : ExprEnv) (hr : env.record = env'.record)
@@ -278,10 +274,35 @@ theorem satisfied_of_putType {t : Tenant} {ty : TypeId} {o o' : ObjType}
   · rw [typ?_putType_other t ty T o' hTy] at hT
     exact hs T o'' hT q hq
 
-/-- An accepted, non-delete step keeps every stored record satisfying the constraints of its type,
-    given that the constraints are the state-only kind. -/
+/-- A record that a delete rewrites keeps the constraints of its type: the delete does not break one
+    when none of the records it would rewrite violates one (`clearBreaks` is false), so the cleared
+    record satisfies the constraints of its type. A record the clearing leaves as it is keeps the
+    constraints it had (WG-5664). -/
+theorem clearBreaks_constraints (t : Tenant) (ty : TypeId) (id : RecordId) (hs : t.Satisfied)
+    (hc : t.clearBreaks ty id = false) (T : TypeId) (o : ObjType) (ho : t.typ? T = some o)
+    (q : RecordId × Record) (hq : q ∈ o.records) (hne : ¬ (T == ty && q.1 == id) = true) :
+    constraintProblem (storedEnv (clearRef o.schema ty id q.2)) o.constraints = none := by
+  by_cases hr : recRefers o.schema ty id q.2 = true
+  · have hmem : (T, o) ∈ t.types := lookup_mem ho
+    have hall := List.any_eq_false.mp hc (T, o) hmem
+    cases hk : constraintProblem (storedEnv (clearRef o.schema ty id q.2)) o.constraints with
+    | none => rfl
+    | some e =>
+      exfalso
+      apply hall
+      refine List.any_eq_true.mpr ⟨q, hq, ?_⟩
+      simp [hne, hr, hk]
+  · have hcl : clearRef o.schema ty id q.2 = q.2 := by
+      unfold clearRef
+      simp [hr]
+    rw [hcl]
+    exact hs T o ho q hq
+
+/-- An accepted step keeps every stored record satisfying the constraints of its type, given that
+    the constraints are the state-only kind. A delete is accepted only when the records it rewrites
+    keep theirs (`Tenant.clearBreaks`, WG-5664). -/
 theorem stepTenant_preserves_satisfied (t t' : Tenant) (p : Principal) (i : Intent)
-    (hs : t.Satisfied) (hst : t.StateConstraints) (hnd : i.noDelete = true)
+    (hs : t.Satisfied) (hst : t.StateConstraints)
     (h : stepTenant t p i = .ok t') : t'.Satisfied := by
   cases i with
   | create ty fs =>
@@ -357,13 +378,60 @@ theorem stepTenant_preserves_satisfied (t t' : Tenant) (p : Principal) (i : Inte
       repeat' split at h
       all_goals try cases h
       exact satisfied_of_putType hT rfl rfl hs
-  | delete ty id ev => simp [Intent.noDelete] at hnd
+  | delete ty id ev =>
+    have ht := stepTenant_delete_eq h
+    subst ht
+    have hc : t.clearBreaks ty id = false := by
+      simp only [stepTenant] at h
+      cases hT : t.typ? ty with
+      | none => simp [hT] at h
+      | some o =>
+        cases hL : o.records.lookup id with
+        | none => simp [hT, hL, missingRecord] at h
+        | some old =>
+          simp only [hT, hL] at h
+          split at h
+          · cases h
+          · split at h
+            · cases h
+            · split at h
+              · cases h
+              · split at h
+                · cases h
+                · rename_i hcb
+                  simpa using hcb
+    intro T o' hT' q hq
+    rw [typ?_afterDelete] at hT'
+    cases ho : t.typ? T with
+    | none => rw [ho] at hT'; cases hT'
+    | some o =>
+      rw [ho] at hT'
+      simp only [Option.map_some, Option.some.injEq] at hT'
+      subst hT'
+      obtain ⟨q₀, hq₀, hmap⟩ := List.mem_map.mp (by unfold delObj at hq; exact hq)
+      subst hmap
+      have hq₀' : q₀ ∈ o.records := by
+        by_cases hTy : (T == ty) = true
+        · rw [if_pos hTy] at hq₀
+          exact (List.mem_filter.mp hq₀).1
+        · rw [if_neg hTy] at hq₀
+          exact hq₀
+      have hne : ¬ (T == ty && q₀.1 == id) = true := by
+        intro hb
+        by_cases hTy : (T == ty) = true
+        · rw [if_pos hTy] at hq₀
+          have h1 := (List.mem_filter.mp hq₀).2
+          have h2 : (q₀.1 == id) = true := ((Bool.and_eq_true _ _).mp hb).2
+          simp [bne, h2] at h1
+        · have h3 : (T == ty) = true := ((Bool.and_eq_true _ _).mp hb).1
+          exact hTy h3
+      exact clearBreaks_constraints t ty id hs hc T o ho q₀ hq₀' hne
 
 /-- The same for the world: an accepted non-delete step from a world whose tenants satisfy their
     constraints leaves the addressed tenant satisfying them, and the others as they were. -/
 theorem step_preserves_satisfied (w w' : World) (i : Intent) (c : Ctx)
     (hs : ∀ x t, w x = some t → t.Satisfied) (hst : ∀ x t, w x = some t → t.StateConstraints)
-    (hnd : i.noDelete = true) (h : step w i c = .ok w') : ∀ x t, w' x = some t → t.Satisfied := by
+    (h : step w i c = .ok w') : ∀ x t, w' x = some t → t.Satisfied := by
   intro x t' hx
   unfold step at h
   cases ht : w c.tenant with
@@ -380,15 +448,17 @@ theorem step_preserves_satisfied (w w' : World) (i : Intent) (c : Ctx)
       · simp [hxc] at hx
         subst hx
         exact stepTenant_preserves_satisfied t _ c.principal i (hs c.tenant t ht)
-          (hst c.tenant t ht) hnd hsT
+          (hst c.tenant t ht) hsT
       · simp [hxc] at hx
         exact hs x t' hx
 
-/-! ## A delete can break the invariant
+/-! ## A delete that would break a constraint is refused
 
-The kernel's delete clears a reference a record holds to the deleted one, and writes that record
-with its version raised, without checking the constraints of the record it rewrites. The model does
-the same, so the invariant of the previous section does not survive a delete. -/
+The kernel's delete clears the set-null references that name the deleted record, and writes each
+record it rewrites. A rewrite can leave a constraint of that record false (a constraint that reads
+the cleared field). The kernel refuses such a delete with `constraintViolated` instead
+(`Tenant.clearBreaks`, WG-5664), so an accepted delete keeps the invariant
+(`stepTenant_preserves_satisfied`). -/
 
 /-- Record `1` refers to record `2` and record `2` refers to record `1`, through a field that clears
     on delete; the constraint reads that field. -/
@@ -400,14 +470,6 @@ def brkObj : ObjType :=
 
 def brkTenant : Tenant :=
   { types := [(1, brkObj)], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 3 }
-
-/-- The object type of `brkTenant` after the delete of record `2`: record `1` has lost its field. -/
-def brkAfterObj : ObjType :=
-  { schema := brkObj.schema, constraints := brkObj.constraints,
-    records := [(1, { owner := some 0, version := 2, fields := [] })] }
-
-def brkAfter : Tenant :=
-  { types := [(1, brkAfterObj)], members := [(0, [ownerRole])], grants := [], policies := [], nextId := 3 }
 
 theorem brkTenant_typ (T : TypeId) (o : ObjType) (h : brkTenant.typ? T = some o) :
     T = 1 ∧ o = brkObj := by
@@ -426,26 +488,9 @@ theorem brkTenant_satisfied : brkTenant.Satisfied := by
       constraintProblem (storedEnv q.2) brkObj.constraints = none := by decide
   exact hall q hq
 
-theorem brkTenant_stateConstraints : brkTenant.StateConstraints := by
-  intro T o hT c hc
-  obtain ⟨rfl, rfl⟩ := brkTenant_typ T o hT
-  simp [brkObj] at hc
-  subst hc
-  decide
-
-theorem brk_delete_result : stepTenant brkTenant (.user 0) (.delete 1 2 none) = .ok brkAfter := rfl
-
-theorem brkAfter_not_satisfied : ¬ brkAfter.Satisfied := by
-  intro h
-  have hq := h 1 brkAfterObj rfl (1, { owner := some 0, version := 2, fields := [] })
-    (by simp [brkAfterObj])
-  exact absurd hq (by decide)
-
-/-- A delete by the owner of an accepted state can leave a stored record violating a constraint. -/
-theorem delete_breaks_satisfied :
-    ∃ (t t' : Tenant) (p : Principal) (i : Intent), t.Satisfied ∧ t.StateConstraints ∧
-      i.noDelete = false ∧ stepTenant t p i = .ok t' ∧ ¬ t'.Satisfied :=
-  ⟨brkTenant, brkAfter, .user 0, .delete 1 2 none, brkTenant_satisfied, brkTenant_stateConstraints,
-    rfl, brk_delete_result, brkAfter_not_satisfied⟩
+/-- Deleting record `2` would clear record `1`'s reference to it, and record `1` would then fail
+    `not is_null(field 1)`: the kernel refuses the delete with `constraintViolated`. -/
+theorem brk_delete_refused :
+    stepTenant brkTenant (.user 0) (.delete 1 2 none) = .error .constraintViolated := rfl
 
 end Strata

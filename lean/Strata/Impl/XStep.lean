@@ -154,6 +154,7 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
         if !canDeleteI core p ty old then .error (.unauthorized, ⟨core, ux, cx, rx⟩)
         else if versionClash ev old then .error (.versionConflict, ⟨core, ux, cx, rx⟩)
         else if blockedX core rx ty id then .error (.stillReferenced, ⟨core, ux, cx, rx⟩)
+        else if clearBreaksI core ty id then .error (.constraintViolated, ⟨core, ux, cx, rx⟩)
         else .ok (XTenant.deleteX core ux cx rx ty id o.schema o.uniques old)
   | .setRequired ty f strict =>
     if !canManage core.header p then .error (.unauthorized, ⟨core, ux, cx, rx⟩)

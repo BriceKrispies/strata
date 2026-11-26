@@ -376,6 +376,10 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
         else if versionClash ev old then .error .versionConflict
         else if (assembleTypes h all).any (fun e => e.2.records.any (blocks e.1 e.2.schema ty id))
           then .error .stillReferenced
+        else if (assembleTypes h all).any (fun e => e.2.records.any (fun q =>
+            !(e.1 == ty && q.1 == id) && recRefers e.2.schema ty id q.2 &&
+              (constraintProblem (storedEnv (clearRef e.2.schema ty id q.2)) e.2.constraints).isSome))
+          then .error .constraintViolated
         else .ok (.remove ty id (referrers h all ty id))
   | .setRequired ty f strict =>
     if !canManage h.asTenant p then .error .unauthorized
@@ -559,6 +563,13 @@ theorem removeAt_referrers (t : Tenant) (ty : TypeId) (id : RecordId) :
     · simp only [hc, if_true, hcl]
     · simp only [hc, if_false, Bool.false_eq_true, hcl]
 
+/-- The clearing check of a delete, read off the tenant's types, is the model's `Tenant.clearBreaks`. -/
+theorem clearBreaks_fold (t : Tenant) (ty : TypeId) (id : RecordId) :
+    (t.types.any (fun e => e.2.records.any (fun q =>
+      !(e.1 == ty && q.1 == id) && recRefers e.2.schema ty id q.2 &&
+        (constraintProblem (storedEnv (clearRef e.2.schema ty id q.2)) e.2.constraints).isSome))) =
+      t.clearBreaks ty id := rfl
+
 /-- A decision from the header, the counter, the tenant's own lookup and record tables, applied as
     a delta, is the kernel's step. -/
 theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
@@ -628,8 +639,12 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
             · simp [TypeHead.ofObj, hT, hl, hc, hv', hb, Tenant.recordAt, Tenant.blockedDelete, Except.map]
             · have hb' : (t.types.any (fun e => e.2.records.any (blocks e.1 e.2.schema ty id))) = false := by
                 simpa using hb
-              simp [TypeHead.ofObj, hT, hl, hc, hv', hb', Tenant.recordAt, Tenant.blockedDelete, Delta.apply, Except.map,
-                Tenant.afterDelete, removeAt_referrers]
+              by_cases hcb : t.clearBreaks ty id = true
+              · simp [TypeHead.ofObj, hT, hl, hc, hv', hb', hcb, clearBreaks_fold, Tenant.recordAt,
+                  Tenant.blockedDelete, Except.map]
+              · have hcb' : t.clearBreaks ty id = false := by simpa using hcb
+                simp [TypeHead.ofObj, hT, hl, hc, hv', hb', hcb', clearBreaks_fold, Tenant.recordAt,
+                  Tenant.blockedDelete, Delta.apply, Except.map, Tenant.afterDelete, removeAt_referrers]
         · simp [TypeHead.ofObj, hT, hl, hc, Except.map, Tenant.recordAt]
   | setRequired ty f strict =>
     simp only [decideTenant, stepTenant, header_types_lookup, assemble_header, canManage_header]

@@ -75,7 +75,7 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `create_fills_default` (restated for a constant default `.lit v`), `defaultsOf_mem`, `newRecord_parts`, `defaultsOf_nodup`, `newRecord_nodup` | An accepted create writes the constant default of each unnamed field; the defaults add no duplicate name |
 | Constraint invariant (slice 5) | `stepTenant_preserves_satisfied`, `step_preserves_satisfied` | For constraints that are state-only (`Tenant.StateConstraints`), an accepted create, update or schema change leaves every stored record satisfying every constraint of its type; it needs the state before to satisfy them (`Tenant.Satisfied`) |
 | | `evalExpr_congr`, `constraintProblem_congr`, `satisfied_of_putType` | A state-only constraint has the same value on a stored record as on the record a write checks (the old record and the principal do not enter it), and replacing a type's schema keeps its records' constraints |
-| | `delete_breaks_satisfied` | The invariant is not preserved by a delete: an accepted delete can leave a record violating a constraint, since the kernel's clearing of a reference does not re-check the constraints of the record it rewrites (a concrete counterexample, `brkAfter_not_satisfied`) |
+| | `brk_delete_refused`, `clearBreaks_constraints` | A delete that would leave a rewritten referrer violating a constraint is refused with `constraintViolated` (a concrete refusal, and the lemma the invariant proof uses), so every accepted delete keeps the invariant |
 | Codec (slice 5) | `lawful_expr`, `decExprN_encExpr`, `decExprN_canon`, `lawful_objType`, `lawful_fieldDef`, `lawful_err` | The expression encoding round-trips for any fuel that covers its nodes, and every decoding is canonical; the object type and the field definition carry their constraints and default expressions; the error tags are fourteen |
 | Roles and policies (slice 6) | `allows_iff`, `default_deny`, `default_deny_create`, `default_deny_update`, `default_deny_delete` | The Bool decision holds exactly when the principal is permitted the action (`Tenant.Permits`: the owner role, a grant of a held role naming the action on the type, or a policy of a held role naming the action on the resource whose condition is `true`). A principal no role of which permits the action is refused `unauthorized` at the step, and no state follows |
 | | `create_ok_permitted`, `update_ok_permitted`, `delete_ok_permitted`, `setRequired_ok_permitted` | An accepted step, of a record intent or a schema change, is permitted for the record it writes: its principal holds a role that permits the action |
@@ -358,7 +358,7 @@ From `transition::create_record`, `update_record`, `delete_record` and `rules::v
 | 8. only if nothing above failed: constraints, failing on `false`; `Evaluation` when one cannot be evaluated | `ConstraintViolated`, `Evaluation` | covered for the expression fragment of slice 5 (`constraintProblem`, after every other check); the kernel's static check of a schema is not modelled (slice 11) | 5 |
 | Accepted create: the record under the next id, `created_by` the caller (none for the system), counter + 1 | | covered (owner = caller) | 0 |
 | Delete: another record of any type referring through a `restrict` field, or through a required single reference, blocks it; a record referring to itself does not | `StillReferenced` | covered for references and lists, across types too (a required list never blocks) | 1, 2, 4 |
-| A delete clears a referrer's reference without checking the referrer's constraints (the kernel does not either); a stored record can then violate a constraint | | covered (`delete_breaks_satisfied`): the counterexample shows the invariant is not kept by a delete | 5 |
+| A delete clears a referrer's reference and would leave the referrer violating a constraint | | covered: the delete is refused with `constraintViolated` (`brk_delete_refused`), so the invariant is kept (WG-5664) | 5 |
 | Accepted delete: the record removed; every other reference to it cleared (a list loses the element); each cleared record's version + 1 | | covered within the one type | 1, 2 |
 | Events: `RecordCreated`, `RecordUpdated` (naming the transitions fired), `RecordDeleted`, an update event per cleared referrer; revision + 1; one `Publish` effect per event | | not covered | 9 |
 
@@ -774,13 +774,12 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
   change is refused when a stored record violates a constraint. The model's `tableViolated` now says
   so. A lax change keeps the records, and a constraint's value does not depend on the schema, so it
   cannot break one.
-- **A delete does not keep the constraints.** The kernel's delete clears a referrer's reference and
-  writes the referrer with its version raised, without checking the constraints of the referrer. The
-  model does the same. So an accepted delete can leave a stored record that violates a constraint:
-  `delete_breaks_satisfied` gives a concrete tenant (a constraint reads a reference that a delete
-  clears). The invariant `Tenant.Satisfied` is therefore preserved by creates, updates and schema
-  changes (`stepTenant_preserves_satisfied`) and not by deletes; that is a finding about the kernel,
-  not a property of the model.
+- **A delete keeps the constraints by refusal.** The kernel's delete clears a referrer's set-null
+  reference and writes the referrer with its version raised. When the referrer would then break one of
+  its type's constraints, the delete is refused with `constraintViolated` (`Tenant.clearBreaks`), as a
+  restrict refuses it with `stillReferenced`. The invariant `Tenant.Satisfied` is therefore preserved by
+  every accepted step, deletes included (`stepTenant_preserves_satisfied`). The rule is chosen (WG-5664)
+  and the decisions log does not fix another. `brk_delete_refused` shows the refusal on a concrete tenant.
 - **Static checks make an evaluation error unreachable from a schema the kernel accepts.** The
   kernel's `expr::check` refuses at definition any constraint that is not a truth value and any
   comparison of two different shapes (in a constraint or a default). The model's evaluator can

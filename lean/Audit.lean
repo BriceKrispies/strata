@@ -845,9 +845,9 @@ import Strata
 #print axioms Strata.stepTenant_preserves_satisfied
 #print axioms Strata.step_preserves_satisfied
 #print axioms Strata.brkTenant_satisfied
-#print axioms Strata.brk_delete_result
-#print axioms Strata.brkAfter_not_satisfied
-#print axioms Strata.delete_breaks_satisfied
+#print axioms Strata.brk_delete_refused
+#print axioms Strata.clearBreaks_constraints
+#print axioms Strata.Impl.clearBreaks_eq
 #print axioms Strata.create_fills_default
 #print axioms Strata.create_within_limits
 #print axioms Strata.update_within_limits
