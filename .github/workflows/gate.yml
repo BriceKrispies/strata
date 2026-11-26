@@ -3,15 +3,14 @@
 # cargo clippy, cargo audit, npm audit, Exegra, the requirement-to-evidence check, and the three browser suites.
 # --require-all makes a tool that is missing a failure, never a silent pass.
 #
-# One job, one build. What it assumes, none of which this repository provides:
+# One job, one build. What it relies on:
 #
-#   secret EXEGRA_CHECKOUT_TOKEN   a token that can read the Exegra repository (BriceKrispies/exegra).
-#                                  The gate validates the specification with Exegra.
-#   an Exegra project "strata"     registered in that checkout and linked to specifications/spec.jsonc.
-#                                  Exegra keeps project registrations as local data, so the registration
-#                                  is NOT created here; a step has to create it before the gate runs
-#                                  (the gate's failure message names what is missing). Until it exists
-#                                  this job fails at the Exegra checks, which is the honest result.
+#   the Exegra repository          BriceKrispies/exegra is public, so it is checked out with the
+#                                  workflow's own token. The gate validates the specification with it.
+#   the Exegra project "strata"    created by the gate itself: scripts/spec-hash.mjs (checkoutSpecs)
+#                                  writes var/exegra-specs/strata/project.jsonc pointing at this
+#                                  checkout's specification and passes --specs on every Exegra call,
+#                                  so no registration inside the Exegra checkout is needed.
 #   elan and Lean                  installed below; lake reads lean/lean-toolchain.
 #   cargo-audit and Chromium       installed below. npm audit and cargo audit need network access.
 name: gate
@@ -32,15 +31,14 @@ jobs:
       EXEGRA_HOME: ${{ github.workspace }}/exegra
       EXEGRA_PROJECT: strata
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: BriceKrispies/exegra
-          token: ${{ secrets.EXEGRA_CHECKOUT_TOKEN }}
           path: exegra
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
