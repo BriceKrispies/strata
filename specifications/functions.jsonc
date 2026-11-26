@@ -4744,7 +4744,97 @@
           "expr": "expr-env{record: scope-new, old: null, new: scope-new, param: {}, now: value.time(now), principal: call principal-value(who), has_role: roles}"
         }
       ],
-      "body": "fold(c in values(object.constraints), acc = false, acc || (match eval(tenant-rule-language, c.expr, env) { Ok(r) => match r { bool(b) => !b, _ => false }, Err(_) => true }))"
+      "body": "fold(c in values(object.constraints), acc = false, acc || (match eval(tenant-rule-language, c.expr, env) { Ok(r) => match r { bool(b) => !b, _ => false }, Err(_) => true }))",
+      "examples": [
+        {
+          "description": "A record breaking its type's constraint (a title over 24 characters) breaks it.",
+          "args": {
+            "object": {
+              "fixture": "fx-object-type-def-1"
+            },
+            "candidate": {
+              "fixture": "fx-record-3"
+            },
+            "who": {
+              "user": "alpha:writer1"
+            },
+            "now": 5000,
+            "roles": [
+              "public",
+              "writer"
+            ]
+          },
+          "result": true
+        },
+        {
+          "description": "An unset excerpt makes len null, which does not break the constraint.",
+          "args": {
+            "object": {
+              "fixture": "fx-object-type-def-2",
+              "with": {
+                "constraints": {
+                  "excerpt_length": {
+                    "id": "excerpt_length",
+                    "expr": {
+                      "cmp": {
+                        "op": "le",
+                        "left": {
+                          "len": {
+                            "var": {
+                              "scope": "new",
+                              "field": "excerpt"
+                            }
+                          }
+                        },
+                        "right": {
+                          "lit": {
+                            "int": 280
+                          }
+                        }
+                      }
+                    },
+                    "message": "An excerpt has at most 280 characters"
+                  }
+                }
+              }
+            },
+            "candidate": {
+              "id": 5,
+              "object": "post",
+              "version": 1,
+              "created-by": "site:ann",
+              "created-at": 1005,
+              "updated-at": 1005,
+              "fields": {
+                "title": {
+                  "str": "Draft"
+                },
+                "slug": {
+                  "str": "draft"
+                },
+                "body": {
+                  "str": "Text."
+                },
+                "author": {
+                  "ref": 2
+                },
+                "status": {
+                  "str": "draft"
+                }
+              }
+            },
+            "who": {
+              "user": "site:ann"
+            },
+            "now": 6000,
+            "roles": [
+              "author",
+              "public"
+            ]
+          },
+          "result": false
+        }
+      ]
     },
     {
       "id": "constraint-checks",
@@ -17765,11 +17855,6 @@
               "kind": "unauthorized",
               "message": "Anonymous may not Create Object(ObjectTypeId(\"note\"))",
               "evidence": [
-                {
-                  "rule": "default:note.status",
-                  "passed": true,
-                  "detail": "'draft'"
-                },
                 {
                   "rule": "policy:none",
                   "passed": false,
