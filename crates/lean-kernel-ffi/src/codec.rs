@@ -343,11 +343,146 @@ pub struct SettingOverride {
     pub revision: u64,
 }
 
+/// A calendar period of the ledger (slice 13; the Lean `LedgerPeriod`): hour `0`, day `1`, week `2`, month `3`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LedgerPeriod {
+    Hour,
+    Day,
+    Week,
+    Month,
+}
+
+/// The owner of a ledger account (slice 13; the Lean `LedgerOwner`): a person by number (`0`) or a pool by
+/// number (`1`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LedgerOwner {
+    Person(u64),
+    Pool(u64),
+}
+
+/// The expiry a unit declares (slice 13; the Lean `LedgerExpiry`): a bucket lives for `periods` periods.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LedgerExpiry {
+    pub period: LedgerPeriod,
+    pub periods: u64,
+}
+
+/// A unit the schema declares, with its expiry when it has one (slice 13; the Lean `LedgerUnitDecl`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LedgerUnitDecl {
+    pub unit: u64,
+    pub expiry: Option<LedgerExpiry>,
+}
+
+/// A limit (slice 13; the Lean `LedgerLimit`): the unit, the owner (none for the unit's own), the scope, the
+/// floor, the cap, the cap per period with its period, and whether that cap counts only additions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerLimit {
+    pub unit: u64,
+    pub owner: Option<LedgerOwner>,
+    pub scope: String,
+    pub floor: Option<i64>,
+    pub cap: Option<i64>,
+    pub period_cap: Option<(u64, LedgerPeriod)>,
+    pub additions_only: Option<bool>,
+}
+
+/// The declarations of a ledger (slice 13; the Lean `LedgerDecls`): its units, its pools and the limits of
+/// units.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerDecls {
+    pub units: Vec<LedgerUnitDecl>,
+    pub pools: Vec<u64>,
+    pub limits: Vec<LedgerLimit>,
+}
+
+/// A bucket of expiring credit (slice 13; the Lean `LedgerBucket`): the start of its period and the credit left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LedgerBucket {
+    pub period_start: i64,
+    pub remaining: u64,
+}
+
+/// The credits an account posted in one calendar period (slice 13; the Lean `LedgerPeriodTotal`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LedgerPeriodTotal {
+    pub period: LedgerPeriod,
+    pub start: i64,
+    pub credits: u64,
+}
+
+/// An account and its header (slice 13; the Lean `LedgerAccount`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerAccount {
+    pub owner: LedgerOwner,
+    pub unit: u64,
+    pub scope: String,
+    pub balance: i64,
+    pub last_seq: u64,
+    pub periods: Vec<LedgerPeriodTotal>,
+    pub buckets: Vec<LedgerBucket>,
+}
+
+/// One entry of the journal (slice 13; the Lean `LedgerEntry`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerEntry {
+    pub owner: LedgerOwner,
+    pub unit: u64,
+    pub scope: String,
+    pub sequence: u64,
+    pub amount: i64,
+    pub key: String,
+    pub reason: String,
+    pub caused_by: Option<u64>,
+    pub time: i64,
+    pub corrects: Option<u64>,
+}
+
+/// The ledger state of a tenant (slice 13; the Lean `LedgerState`): its accounts, its journal (oldest first)
+/// and the limits of accounts.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct LedgerState {
+    pub accounts: Vec<LedgerAccount>,
+    pub journal: Vec<LedgerEntry>,
+    pub limits: Vec<LedgerLimit>,
+}
+
+/// One atom of a ledger policy's condition (slice 13; the Lean `LedgerAtom`): the reader is the owner (`0`), the
+/// unit is a number (`1`), or the scope is a text (`2`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LedgerAtom {
+    OwnerIsCaller,
+    UnitIs(u64),
+    ScopeIs(String),
+}
+
+/// A policy over the ledger (slice 13; the Lean `LedgerPolicy`): its role, its unit (none for every unit) and its
+/// conjunction of atoms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerPolicy {
+    pub role: u64,
+    pub unit: Option<u64>,
+    pub conds: Vec<LedgerAtom>,
+}
+
+/// A posting of a `PostLedger` intent (slice 13; the Lean `LedgerPosting`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerPosting {
+    pub owner: LedgerOwner,
+    pub unit: u64,
+    pub amount: i64,
+    pub key: String,
+    pub reason: String,
+    pub corrects: Option<u64>,
+    pub scope: String,
+}
+
 /// Everything one tenant owns, as the boundary carries it: its object types by id, its members
 /// (each user with its roles), what each role grants, its policies, the next record id, the size
 /// bounds, (slice 7) the roles its schema defines, its teams and its invitations, (slice 9) its
-/// revision, its event sequence and its schema version, and (slice 12) its setting definitions, its
-/// overrides and the revision of each setting. The owner is a member holding role `0`.
+/// revision, its event sequence and its schema version, (slice 12) its setting definitions, its
+/// overrides and the revision of each setting, and (slice 13) its ledger declarations, its ledger
+/// state and its ledger policies. The owner is a member holding role `0`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tenant {
     pub types: Vec<(u64, ObjType)>,
@@ -365,6 +500,9 @@ pub struct Tenant {
     pub setting_defs: Vec<SettingDef>,
     pub overrides: Vec<SettingOverride>,
     pub setting_revs: Vec<(String, u64)>,
+    pub ledger_decls: Option<LedgerDecls>,
+    pub ledger: LedgerState,
+    pub ledger_policies: Vec<LedgerPolicy>,
 }
 
 /// The acting context of a step: which tenant, and who is acting.
@@ -397,6 +535,8 @@ pub enum Refusal {
     TenantExists,
     WorkflowViolation,
     SchemaConflict,
+    /// An adjustment or a reversal of one's own account (slice 13; the Lean `selfAction`, tag `20`).
+    SelfAction,
 }
 
 /// A membership intent (slice 7). Lean's `MemberIntent`.
@@ -511,6 +651,18 @@ pub enum Intent {
         team: Option<u64>,
         value: Option<Val>,
         expected_revision: u64,
+    },
+    /// A `PostLedger` intent (slice 13; tag `10`): the acting context's time, then one to eight postings, each
+    /// decided on the state the earlier ones leave.
+    PostLedger {
+        now: i64,
+        postings: Vec<LedgerPosting>,
+    },
+    /// An `ExpireLedger` intent (slice 13; tag `11`): the time, the unit and the cutoff.
+    ExpireLedger {
+        now: i64,
+        unit: u64,
+        cutoff: i64,
     },
 }
 
@@ -934,6 +1086,9 @@ fn put_tenant(out: &mut Vec<u8>, t: &Tenant) {
     put_list(out, t.setting_defs.as_slice(), put_setting_def);
     put_list(out, t.overrides.as_slice(), put_setting_override);
     put_list(out, t.setting_revs.as_slice(), put_setting_rev);
+    put_opt(out, &t.ledger_decls, put_ledger_decls);
+    put_ledger_state(out, &t.ledger);
+    put_list(out, t.ledger_policies.as_slice(), put_ledger_policy);
 }
 
 /// A membership intent: its tag, then its fields (`encMemberIntent`).
@@ -1121,6 +1276,158 @@ fn put_setting_rev(out: &mut Vec<u8>, e: &(String, u64)) {
     put_nat(out, e.1);
 }
 
+/// An integer by reference, for the option and list combinators (`encInt`).
+fn put_i64(out: &mut Vec<u8>, i: &i64) {
+    put_int(out, *i);
+}
+
+/// A boolean by reference, for the option combinator (`encBool`).
+fn put_flag(out: &mut Vec<u8>, b: &bool) {
+    put_bool(out, *b);
+}
+
+/// A calendar period, one byte: hour `0`, day `1`, week `2`, month `3` (`encLedgerPeriod`).
+fn put_ledger_period(out: &mut Vec<u8>, p: &LedgerPeriod) {
+    out.push(match p {
+        LedgerPeriod::Hour => 0,
+        LedgerPeriod::Day => 1,
+        LedgerPeriod::Week => 2,
+        LedgerPeriod::Month => 3,
+    });
+}
+
+/// An owner: a person `0` and its number, or a pool `1` and its number (`encLedgerOwner`).
+fn put_ledger_owner(out: &mut Vec<u8>, o: &LedgerOwner) {
+    match o {
+        LedgerOwner::Person(p) => {
+            out.push(0);
+            put_nat(out, *p);
+        }
+        LedgerOwner::Pool(n) => {
+            out.push(1);
+            put_nat(out, *n);
+        }
+    }
+}
+
+/// An expiry: its period, then its number of periods (`encLedgerExpiry`).
+fn put_ledger_expiry(out: &mut Vec<u8>, e: &LedgerExpiry) {
+    put_ledger_period(out, &e.period);
+    put_nat(out, e.periods);
+}
+
+/// A unit declaration: the unit, then its expiry as an option (`encLedgerUnitDecl`).
+fn put_ledger_unit_decl(out: &mut Vec<u8>, u: &LedgerUnitDecl) {
+    put_nat(out, u.unit);
+    put_opt(out, &u.expiry, put_ledger_expiry);
+}
+
+/// A cap per period: its number, then its period (`encLedgerPeriodCap`).
+fn put_period_cap(out: &mut Vec<u8>, c: &(u64, LedgerPeriod)) {
+    put_nat(out, c.0);
+    put_ledger_period(out, &c.1);
+}
+
+/// A limit: the unit, its owner, its scope, its floor, its cap, its cap per period and its additions flag, each
+/// option as its encoder gives (`encLedgerLimit`).
+fn put_ledger_limit(out: &mut Vec<u8>, l: &LedgerLimit) {
+    put_nat(out, l.unit);
+    put_opt(out, &l.owner, put_ledger_owner);
+    put_str(out, &l.scope);
+    put_opt(out, &l.floor, put_i64);
+    put_opt(out, &l.cap, put_i64);
+    put_opt(out, &l.period_cap, put_period_cap);
+    put_opt(out, &l.additions_only, put_flag);
+}
+
+/// The declarations: the units, the pools and the limits of units (`encLedgerDecls`).
+fn put_ledger_decls(out: &mut Vec<u8>, d: &LedgerDecls) {
+    put_list(out, d.units.as_slice(), put_ledger_unit_decl);
+    put_list(out, d.pools.as_slice(), put_u64);
+    put_list(out, d.limits.as_slice(), put_ledger_limit);
+}
+
+/// A bucket: the start of its period, then the credit left (`encLedgerBucket`).
+fn put_ledger_bucket(out: &mut Vec<u8>, b: &LedgerBucket) {
+    put_int(out, b.period_start);
+    put_nat(out, b.remaining);
+}
+
+/// A period total: its period, its start and its credits (`encLedgerPeriodTotal`).
+fn put_ledger_period_total(out: &mut Vec<u8>, t: &LedgerPeriodTotal) {
+    put_ledger_period(out, &t.period);
+    put_int(out, t.start);
+    put_nat(out, t.credits);
+}
+
+/// An account header: owner, unit, scope, balance, last sequence number, periods, buckets (`encLedgerAccount`).
+fn put_ledger_account(out: &mut Vec<u8>, a: &LedgerAccount) {
+    put_ledger_owner(out, &a.owner);
+    put_nat(out, a.unit);
+    put_str(out, &a.scope);
+    put_int(out, a.balance);
+    put_nat(out, a.last_seq);
+    put_list(out, a.periods.as_slice(), put_ledger_period_total);
+    put_list(out, a.buckets.as_slice(), put_ledger_bucket);
+}
+
+/// An entry: owner, unit, scope, sequence, amount, key, reason, the caller as an option, time, and the
+/// corrected sequence as an option (`encLedgerEntry`).
+fn put_ledger_entry(out: &mut Vec<u8>, e: &LedgerEntry) {
+    put_ledger_owner(out, &e.owner);
+    put_nat(out, e.unit);
+    put_str(out, &e.scope);
+    put_nat(out, e.sequence);
+    put_int(out, e.amount);
+    put_str(out, &e.key);
+    put_str(out, &e.reason);
+    put_opt_nat(out, e.caused_by);
+    put_int(out, e.time);
+    put_opt_nat(out, e.corrects);
+}
+
+/// The ledger state: its accounts, its journal and its limits (`encLedgerState`).
+fn put_ledger_state(out: &mut Vec<u8>, s: &LedgerState) {
+    put_list(out, s.accounts.as_slice(), put_ledger_account);
+    put_list(out, s.journal.as_slice(), put_ledger_entry);
+    put_list(out, s.limits.as_slice(), put_ledger_limit);
+}
+
+/// An atom: the owner-is-caller tag `0`, the unit tag `1` and its number, the scope tag `2` and its text
+/// (`encLedgerAtom`).
+fn put_ledger_atom(out: &mut Vec<u8>, a: &LedgerAtom) {
+    match a {
+        LedgerAtom::OwnerIsCaller => out.push(0),
+        LedgerAtom::UnitIs(n) => {
+            out.push(1);
+            put_nat(out, *n);
+        }
+        LedgerAtom::ScopeIs(s) => {
+            out.push(2);
+            put_str(out, s);
+        }
+    }
+}
+
+/// A ledger policy: its role, its unit as an option, and its atoms (`encLedgerPolicy`).
+fn put_ledger_policy(out: &mut Vec<u8>, p: &LedgerPolicy) {
+    put_nat(out, p.role);
+    put_opt(out, &p.unit, put_u64);
+    put_list(out, p.conds.as_slice(), put_ledger_atom);
+}
+
+/// A posting of a `PostLedger` intent: owner, unit, amount, key, reason, the corrected sequence as an option,
+/// and the scope (`encLedgerPosting`).
+fn put_ledger_posting(out: &mut Vec<u8>, q: &LedgerPosting) {
+    put_ledger_owner(out, &q.owner);
+    put_nat(out, q.unit);
+    put_int(out, q.amount);
+    put_str(out, &q.key);
+    put_str(out, &q.reason);
+    put_opt_nat(out, q.corrects);
+    put_str(out, &q.scope);
+}
+
 fn put_ctx(out: &mut Vec<u8>, c: &Ctx) {
     put_nat(out, c.tenant);
     put_principal(out, &c.principal);
@@ -1201,6 +1508,17 @@ fn put_intent(out: &mut Vec<u8>, i: &Intent) {
             put_opt(out, value, put_val);
             put_nat(out, *expected_revision);
         }
+        Intent::PostLedger { now, postings } => {
+            out.push(10);
+            put_int(out, *now);
+            put_list(out, postings.as_slice(), put_ledger_posting);
+        }
+        Intent::ExpireLedger { now, unit, cutoff } => {
+            out.push(11);
+            put_int(out, *now);
+            put_nat(out, *unit);
+            put_int(out, *cutoff);
+        }
     }
 }
 
@@ -1226,6 +1544,7 @@ fn put_refusal(out: &mut Vec<u8>, e: &Refusal) {
         Refusal::TenantExists => 17,
         Refusal::WorkflowViolation => 18,
         Refusal::SchemaConflict => 19,
+        Refusal::SelfAction => 20,
     });
 }
 
@@ -1798,6 +2117,9 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
     let setting_defs = get_list(r, get_setting_def)?;
     let overrides = get_list(r, get_setting_override)?;
     let setting_revs = get_list(r, get_setting_rev)?;
+    let ledger_decls = get_opt(r, get_ledger_decls)?;
+    let ledger = get_ledger_state(r)?;
+    let ledger_policies = get_list(r, get_ledger_policy)?;
     Some(Tenant {
         types,
         members,
@@ -1814,6 +2136,9 @@ fn get_tenant(r: &mut Reader<'_>) -> Option<Tenant> {
         setting_defs,
         overrides,
         setting_revs,
+        ledger_decls,
+        ledger,
+        ledger_policies,
     })
 }
 
@@ -1996,6 +2321,182 @@ fn get_setting_rev(r: &mut Reader<'_>) -> Option<(String, u64)> {
     Some((name, revision))
 }
 
+fn get_ledger_period(r: &mut Reader<'_>) -> Option<LedgerPeriod> {
+    match r.byte()? {
+        0 => Some(LedgerPeriod::Hour),
+        1 => Some(LedgerPeriod::Day),
+        2 => Some(LedgerPeriod::Week),
+        3 => Some(LedgerPeriod::Month),
+        _ => None,
+    }
+}
+
+fn get_ledger_owner(r: &mut Reader<'_>) -> Option<LedgerOwner> {
+    match r.byte()? {
+        0 => Some(LedgerOwner::Person(get_nat(r)?)),
+        1 => Some(LedgerOwner::Pool(get_nat(r)?)),
+        _ => None,
+    }
+}
+
+fn get_ledger_expiry(r: &mut Reader<'_>) -> Option<LedgerExpiry> {
+    let period = get_ledger_period(r)?;
+    let periods = get_nat(r)?;
+    Some(LedgerExpiry { period, periods })
+}
+
+fn get_ledger_unit_decl(r: &mut Reader<'_>) -> Option<LedgerUnitDecl> {
+    let unit = get_nat(r)?;
+    let expiry = get_opt(r, get_ledger_expiry)?;
+    Some(LedgerUnitDecl { unit, expiry })
+}
+
+fn get_period_cap(r: &mut Reader<'_>) -> Option<(u64, LedgerPeriod)> {
+    let n = get_nat(r)?;
+    let period = get_ledger_period(r)?;
+    Some((n, period))
+}
+
+fn get_ledger_limit(r: &mut Reader<'_>) -> Option<LedgerLimit> {
+    let unit = get_nat(r)?;
+    let owner = get_opt(r, get_ledger_owner)?;
+    let scope = get_str(r)?;
+    let floor = get_opt(r, get_int)?;
+    let cap = get_opt(r, get_int)?;
+    let period_cap = get_opt(r, get_period_cap)?;
+    let additions_only = get_opt(r, get_bool)?;
+    Some(LedgerLimit {
+        unit,
+        owner,
+        scope,
+        floor,
+        cap,
+        period_cap,
+        additions_only,
+    })
+}
+
+fn get_ledger_decls(r: &mut Reader<'_>) -> Option<LedgerDecls> {
+    let units = get_list(r, get_ledger_unit_decl)?;
+    let pools = get_list(r, get_u64)?;
+    let limits = get_list(r, get_ledger_limit)?;
+    Some(LedgerDecls {
+        units,
+        pools,
+        limits,
+    })
+}
+
+fn get_ledger_bucket(r: &mut Reader<'_>) -> Option<LedgerBucket> {
+    let period_start = get_int(r)?;
+    let remaining = get_nat(r)?;
+    Some(LedgerBucket {
+        period_start,
+        remaining,
+    })
+}
+
+fn get_ledger_period_total(r: &mut Reader<'_>) -> Option<LedgerPeriodTotal> {
+    let period = get_ledger_period(r)?;
+    let start = get_int(r)?;
+    let credits = get_nat(r)?;
+    Some(LedgerPeriodTotal {
+        period,
+        start,
+        credits,
+    })
+}
+
+fn get_ledger_account(r: &mut Reader<'_>) -> Option<LedgerAccount> {
+    let owner = get_ledger_owner(r)?;
+    let unit = get_nat(r)?;
+    let scope = get_str(r)?;
+    let balance = get_int(r)?;
+    let last_seq = get_nat(r)?;
+    let periods = get_list(r, get_ledger_period_total)?;
+    let buckets = get_list(r, get_ledger_bucket)?;
+    Some(LedgerAccount {
+        owner,
+        unit,
+        scope,
+        balance,
+        last_seq,
+        periods,
+        buckets,
+    })
+}
+
+fn get_ledger_entry(r: &mut Reader<'_>) -> Option<LedgerEntry> {
+    let owner = get_ledger_owner(r)?;
+    let unit = get_nat(r)?;
+    let scope = get_str(r)?;
+    let sequence = get_nat(r)?;
+    let amount = get_int(r)?;
+    let key = get_str(r)?;
+    let reason = get_str(r)?;
+    let caused_by = get_opt_nat(r)?;
+    let time = get_int(r)?;
+    let corrects = get_opt_nat(r)?;
+    Some(LedgerEntry {
+        owner,
+        unit,
+        scope,
+        sequence,
+        amount,
+        key,
+        reason,
+        caused_by,
+        time,
+        corrects,
+    })
+}
+
+fn get_ledger_state(r: &mut Reader<'_>) -> Option<LedgerState> {
+    let accounts = get_list(r, get_ledger_account)?;
+    let journal = get_list(r, get_ledger_entry)?;
+    let limits = get_list(r, get_ledger_limit)?;
+    Some(LedgerState {
+        accounts,
+        journal,
+        limits,
+    })
+}
+
+fn get_ledger_atom(r: &mut Reader<'_>) -> Option<LedgerAtom> {
+    match r.byte()? {
+        0 => Some(LedgerAtom::OwnerIsCaller),
+        1 => Some(LedgerAtom::UnitIs(get_nat(r)?)),
+        2 => Some(LedgerAtom::ScopeIs(get_str(r)?)),
+        _ => None,
+    }
+}
+
+fn get_ledger_policy(r: &mut Reader<'_>) -> Option<LedgerPolicy> {
+    let role = get_nat(r)?;
+    let unit = get_opt(r, get_u64)?;
+    let conds = get_list(r, get_ledger_atom)?;
+    Some(LedgerPolicy { role, unit, conds })
+}
+
+fn get_ledger_posting(r: &mut Reader<'_>) -> Option<LedgerPosting> {
+    let owner = get_ledger_owner(r)?;
+    let unit = get_nat(r)?;
+    let amount = get_int(r)?;
+    let key = get_str(r)?;
+    let reason = get_str(r)?;
+    let corrects = get_opt_nat(r)?;
+    let scope = get_str(r)?;
+    Some(LedgerPosting {
+        owner,
+        unit,
+        amount,
+        key,
+        reason,
+        corrects,
+        scope,
+    })
+}
+
 fn get_ctx(r: &mut Reader<'_>) -> Option<Ctx> {
     let tenant = get_nat(r)?;
     let principal = get_principal(r)?;
@@ -2074,6 +2575,17 @@ fn get_intent(r: &mut Reader<'_>) -> Option<Intent> {
                 expected_revision,
             })
         }
+        10 => {
+            let now = get_int(r)?;
+            let postings = get_list(r, get_ledger_posting)?;
+            Some(Intent::PostLedger { now, postings })
+        }
+        11 => {
+            let now = get_int(r)?;
+            let unit = get_nat(r)?;
+            let cutoff = get_int(r)?;
+            Some(Intent::ExpireLedger { now, unit, cutoff })
+        }
         _ => None,
     }
 }
@@ -2100,6 +2612,7 @@ fn get_refusal(r: &mut Reader<'_>) -> Option<Refusal> {
         17 => Some(Refusal::TenantExists),
         18 => Some(Refusal::WorkflowViolation),
         19 => Some(Refusal::SchemaConflict),
+        20 => Some(Refusal::SelfAction),
         _ => None,
     }
 }

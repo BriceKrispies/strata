@@ -6,9 +6,10 @@ use strata_lean_kernel_ffi::codec::{
     decode_record, decode_refusal, decode_step_result, decode_tenant, decode_ty, decode_val,
     encode_ctx, encode_field_def, encode_intent, encode_member_intent, encode_policy,
     encode_record, encode_refusal, encode_step_result, encode_tenant, encode_ty, encode_val,
-    Action, Change, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, InvitationDef, Limits,
-    MemberIntent, ObjType, OnDelete, Policy, Principal, Record, Refusal, Resource, Scope,
-    StepResult, TeamDef, Tenant, Ty, Val, WfTransition, Workflow, MAX_EXPR_DEPTH, MAX_TY_DEPTH,
+    Action, Change, CmpOp, Ctx, Elem, Expr, FieldDef, Grant, Intent, InvitationDef, LedgerOwner,
+    LedgerPosting, LedgerState, Limits, MemberIntent, ObjType, OnDelete, Policy, Principal, Record,
+    Refusal, Resource, Scope, StepResult, TeamDef, Tenant, Ty, Val, WfTransition, Workflow,
+    MAX_EXPR_DEPTH, MAX_TY_DEPTH,
 };
 use strata_lean_kernel_ffi::{step, step_reference};
 
@@ -84,12 +85,15 @@ fn fixture_tenant() -> Tenant {
         setting_defs: vec![],
         overrides: vec![],
         setting_revs: vec![],
+        ledger_decls: None,
+        ledger: LedgerState::default(),
+        ledger_policies: vec![],
     }
 }
 
 const FIXTURE_TENANT: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
-    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0,
+    128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 /// The fixture tenant with a role `2`, a team and an invitation (`fxTenantM` in
@@ -124,7 +128,7 @@ fn fixture_tenant_members() -> Tenant {
 const FIXTURE_TENANT_MEMBERS: &[u8] = &[
     1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128,
     128, 16, 3, 0, 1, 2, 1, 5, 2, 97, 98, 1, 7, 1, 2, 1, 9, 3, 97, 64, 98, 1, 2, 7, 172, 2, 0, 1,
-    7, 0, 0, 1, 0, 0, 0,
+    7, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 /// The fixture tenant with one workflow on its object type `1` (slice 9): id `""`, field 1, initial
@@ -161,7 +165,8 @@ const FIXTURE_TENANT_WORKFLOW: &[u8] = &[
     4, 111, 112, 101, 110, // from "open"
     6, 99, 108, 111, 115, 101, 100, // to "closed"
     0, 0, // no guard, no assignments
-    1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0,
+    1, 7, 1, 0, 0, 0, 1, 128, 128, 4, 232, 7, 200, 1, 128, 128, 16, 2, 0, 1, 0, 0, 0, 0, 1, 0, 0,
+    0, 0, 0, 0, 0, 0,
 ];
 
 #[test]
@@ -288,6 +293,34 @@ fn codec_fixtures_match_the_lean_encoder() {
     assert_eq!(encode_intent(&schema_change), schema_change_bytes);
     assert_eq!(decode_intent(&schema_change_bytes), Some(schema_change));
     assert_eq!(encode_refusal(&Refusal::SchemaConflict), vec![19]);
+    assert_eq!(encode_refusal(&Refusal::SelfAction), vec![20]);
+    // The ledger intents (slice 13): tag 10, the time, then the postings; a posting is its owner (a person `0`
+    // and its number), its unit, its amount, its key, its reason, its corrected sequence and its scope.
+    let post = Intent::PostLedger {
+        now: 1000,
+        postings: vec![LedgerPosting {
+            owner: LedgerOwner::Person(7),
+            unit: 1,
+            amount: -5,
+            key: "k".into(),
+            reason: String::new(),
+            corrects: None,
+            scope: String::new(),
+        }],
+    };
+    assert_eq!(
+        encode_intent(&post),
+        vec![10, 0, 232, 7, 1, 0, 7, 1, 1, 4, 1, 107, 0, 0, 0]
+    );
+    assert_eq!(decode_intent(&encode_intent(&post)), Some(post));
+    // Tag 11: the time, the unit and the cutoff (-1 is the integer tag 1 and the natural 0).
+    let expire = Intent::ExpireLedger {
+        now: 1000,
+        unit: 3,
+        cutoff: -1,
+    };
+    assert_eq!(encode_intent(&expire), vec![11, 0, 232, 7, 3, 1, 0]);
+    assert_eq!(decode_intent(&encode_intent(&expire)), Some(expire));
     assert_eq!(encode_refusal(&Refusal::InvalidIntent), vec![14]);
     assert_eq!(encode_refusal(&Refusal::UnknownRole), vec![15]);
     assert_eq!(encode_refusal(&Refusal::LastOwner), vec![16]);
@@ -752,6 +785,9 @@ fn gen_tenant(rng: &mut Rng) -> Tenant {
         setting_defs: vec![],
         overrides: vec![],
         setting_revs: vec![],
+        ledger_decls: None,
+        ledger: LedgerState::default(),
+        ledger_policies: vec![],
     }
 }
 
@@ -954,7 +990,7 @@ fn gen_intent(rng: &mut Rng) -> Intent {
 }
 
 fn gen_refusal(rng: &mut Rng) -> Refusal {
-    match rng.below(20) {
+    match rng.below(21) {
         0 => Refusal::NoTenant,
         1 => Refusal::Unauthorized,
         2 => Refusal::NotFound,
@@ -975,6 +1011,7 @@ fn gen_refusal(rng: &mut Rng) -> Refusal {
         17 => Refusal::TenantExists,
         18 => Refusal::WorkflowViolation,
         19 => Refusal::SchemaConflict,
+        20 => Refusal::SelfAction,
         _ => unreachable!("an unknown refusal tag"),
     }
 }

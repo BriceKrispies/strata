@@ -54,6 +54,10 @@
 //! | `Err.unknownQuery` (read only) | `UnknownQuery` |
 //! | `setting <name> <level> [team=<n>] [v=<rev>] <value\|remove>` (slice 12) | `WriteSetting`, the team `team<n>`, the expected revision `<rev>` (zero when absent); the fixture defines `notify`, `density`, `label`, `banner` and `mode` (`fixture_settings`) |
 //! | `read <t> <p> setting <name>` (slice 12) | `settings::resolve` for the principal; `err <kind>`, or the source, the team's number, the value and the tenant's revision |
+//! | `ledger post @<now> <unit> <owner> <amount> key=<k> [reason=<r>] [corrects=<n>] [scope=<s>] [; ..]` (slice 13) | `Intent::PostLedger` in a context whose `now` is `<now>`; a unit `n` is the kernel's `u<n>` and a pool `n` is `pool<n>` (a kernel name starts with a letter); a person's owner is `p<n>` |
+//! | `ledger expire @<now> <unit> <cutoff>` (slice 13) | `Intent::ExpireLedger` in a context whose `now` is `<now>` |
+//! | `read <t> <p> ledger <unit> <owner> [scope=<s>] [own]` (slice 13) | `ledger::read_balance`; `err <kind>`, or `ok`, the balance and the sequence number |
+//! | the fixture ledger (slice 13) | `fixture_ledger_decls` on tenants `t1` and `t2`, set on the schema after the fixture batch (no event) |
 //!
 //! # The Main.lean protocol
 //!
@@ -108,6 +112,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 use strata_kernel::search::{SearchRequest, SearchResult};
 use strata_kernel::types::{PageCursor, QueryId};
 use strata_kernel::*;
@@ -1335,6 +1340,243 @@ fn parse_principal(token: &str) -> Principal {
     }
 }
 
+/// The kernel's name of ledger unit `n`. A unit name starts with a letter (the `ledger-unit` pattern), so the
+/// scenario's number is written after a `u`; the names are internal, and every printed line uses the number.
+fn ledger_unit(n: u64) -> LedgerUnit {
+    LedgerUnit(format!("u{n}"))
+}
+
+/// The kernel's name of pool `n`: `pool<n>`, which starts with a letter (the `ledger-pool-name` pattern).
+fn ledger_pool(n: u64) -> LedgerPoolName {
+    LedgerPoolName(format!("pool{n}"))
+}
+
+/// The number of a unit: the inverse of [`ledger_unit`].
+fn unit_number(unit: &LedgerUnit) -> u64 {
+    unit.0
+        .trim_start_matches('u')
+        .parse()
+        .expect("fixture units are u<number>")
+}
+
+/// The number of a pool: the inverse of [`ledger_pool`].
+fn pool_number(pool: &LedgerPoolName) -> u64 {
+    pool.0
+        .trim_start_matches("pool")
+        .parse()
+        .expect("fixture pools are pool<number>")
+}
+
+/// A ledger owner as the scenario names it: a person's number, or `pool<n>` (the model's `parseOwner`).
+fn parse_ledger_owner(token: &str) -> Option<LedgerOwner> {
+    match token.strip_prefix("pool") {
+        Some(number) => Some(LedgerOwner::Pool {
+            pool: ledger_pool(number.parse().ok()?),
+        }),
+        None => Some(LedgerOwner::Principal {
+            principal: principal_id(token.parse().ok()?),
+        }),
+    }
+}
+
+/// A ledger owner as the printed forms name it: a person's number, or `pool<n>` (the model's `showOwner`).
+fn ledger_owner_text(owner: &LedgerOwner) -> String {
+    match owner {
+        LedgerOwner::Principal { principal } => user_number(principal).to_string(),
+        LedgerOwner::Pool { pool } => format!("pool{}", pool_number(pool)),
+    }
+}
+
+/// A scope or a reason as the printed forms name it: `-` when it is empty.
+fn ledger_text(text: &str) -> String {
+    if text.is_empty() {
+        "-".to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// The scope a request names: none when the scenario names none (the kernel's `scope_text` reads it as empty).
+fn ledger_scope(text: &str) -> Option<LedgerScope> {
+    (!text.is_empty()).then(|| LedgerScope(text.to_string()))
+}
+
+/// A posting's tokens: `<unit> <owner> <amount> key=<k> [reason=<r>] [corrects=<n>] [scope=<s>]` (slice 13; the
+/// model's `parsePosting`). A `corrects=` that is not a number leaves the posting uncorrected, as the model does.
+fn parse_posting(tokens: &[&str]) -> Option<LedgerPostingRequest> {
+    let [unit, owner, amount, options @ ..] = tokens else {
+        return None;
+    };
+    let unit: u64 = unit.parse().ok()?;
+    let owner = parse_ledger_owner(owner)?;
+    let amount: i64 = amount.parse().ok()?;
+    let mut key: Option<String> = None;
+    let mut reason = String::new();
+    let mut corrects: Option<u64> = None;
+    let mut scope = String::new();
+    for option in options.iter() {
+        if let Some(text) = option.strip_prefix("key=") {
+            key = Some(text.to_string());
+        } else if let Some(text) = option.strip_prefix("reason=") {
+            reason = text.to_string();
+        } else if let Some(text) = option.strip_prefix("corrects=") {
+            corrects = text.parse().ok();
+        } else if let Some(text) = option.strip_prefix("scope=") {
+            scope = text.to_string();
+        } else {
+            return None;
+        }
+    }
+    Some(LedgerPostingRequest {
+        owner,
+        unit: ledger_unit(unit),
+        amount: LedgerAmount(amount),
+        idempotency_key: key?,
+        reason,
+        corrects,
+        scope: ledger_scope(&scope),
+    })
+}
+
+/// The postings of a `post` line, split on the `;` token (the model's `splitPostings`): an empty group is a
+/// refusal to parse, as the model's is.
+fn parse_postings(tokens: &[&str]) -> Option<Vec<LedgerPostingRequest>> {
+    tokens
+        .split(|token| *token == ";")
+        .map(parse_posting)
+        .collect()
+}
+
+/// The time of a ledger intent, `@<now>` (the model's `parseNowInt`).
+fn parse_ledger_now(token: &str) -> Option<i64> {
+    token.strip_prefix('@')?.parse().ok()
+}
+
+/// A ledger intent and its time: `ledger post @<now> <posting> [; <posting>]*` or `ledger expire @<now> <unit>
+/// <cutoff>` (slice 13; the model's `parseLedgerOp`). The time becomes the context's `now`.
+fn parse_ledger_op(tokens: &[&str]) -> Option<(i64, Intent)> {
+    match tokens {
+        ["ledger", "post", now, postings @ ..] => {
+            let now = parse_ledger_now(now)?;
+            let postings = parse_postings(postings)?;
+            Some((now, Intent::PostLedger { postings }))
+        }
+        ["ledger", "expire", now, unit, cutoff] => {
+            let now = parse_ledger_now(now)?;
+            let unit: u64 = unit.parse().ok()?;
+            let cutoff: i64 = cutoff.parse().ok()?;
+            Some((
+                now,
+                Intent::ExpireLedger {
+                    unit: ledger_unit(unit),
+                    cutoff: Timestamp(cutoff),
+                },
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// A ledger balance read after `read <t> <p>`: `ledger <unit> <owner> [scope=<s>] [own]` (slice 13; the model's
+/// `parseLedgerRead`). Returns the unit, the owner, the scope and whether the read is one's own.
+fn parse_ledger_read(tokens: &[&str]) -> Option<(LedgerUnit, LedgerOwner, String, bool)> {
+    let ["ledger", unit, owner, options @ ..] = tokens else {
+        return None;
+    };
+    let unit: u64 = unit.parse().ok()?;
+    let owner = parse_ledger_owner(owner)?;
+    let mut scope = String::new();
+    let mut own = false;
+    for option in options.iter() {
+        if let Some(text) = option.strip_prefix("scope=") {
+            scope = text.to_string();
+        } else if *option == "own" {
+            own = true;
+        } else {
+            return None;
+        }
+    }
+    Some((ledger_unit(unit), owner, scope, own))
+}
+
+/// The lines a ledger balance read prints (the model's `showLedgerRead`): `err <kind>`, or `ok`, the balance and
+/// the sequence number.
+fn ledger_read_lines(result: Result<LedgerBalance, DomainError>) -> Vec<String> {
+    match result {
+        Err(error) => vec![format!("err {}", show_error(error.kind))],
+        Ok(balance) => vec![
+            "ok".to_string(),
+            format!("balance {}", balance.balance.0),
+            format!("seq {}", balance.last_sequence),
+        ],
+    }
+}
+
+/// The fixture's ledger declarations (slice 13; the model's `fixtureLedgerDecls`): units `1` and `2` without an
+/// expiry, unit `3` expiring monthly after two periods, pool `1`, a cap of 1000 on unit `1` and a floor of zero on
+/// unit `2`, and no account limit.
+fn fixture_ledger_decls() -> LedgerDeclarations {
+    let units = [
+        (1u64, None),
+        (2, None),
+        (
+            3,
+            Some(LedgerExpiry {
+                period: LedgerPeriod::Month,
+                periods: 2,
+            }),
+        ),
+    ]
+    .into_iter()
+    .map(|(n, expiry)| {
+        (
+            ledger_unit(n),
+            LedgerUnitDecl {
+                unit: ledger_unit(n),
+                description: String::new(),
+                expiry,
+                transfer: None,
+            },
+        )
+    })
+    .collect();
+    let pools = std::iter::once((
+        ledger_pool(1),
+        LedgerPoolDecl {
+            pool: ledger_pool(1),
+            description: String::new(),
+            parent: None,
+        },
+    ))
+    .collect();
+    let limit = |unit: u64, floor: Option<i64>, cap: Option<i64>| LedgerLimit {
+        unit: ledger_unit(unit),
+        owner: None,
+        floor: floor.map(LedgerAmount),
+        cap: cap.map(LedgerAmount),
+        period_cap: None,
+        period: None,
+        scope: None,
+        additions_only: None,
+    };
+    LedgerDeclarations {
+        units,
+        pools,
+        limits: vec![limit(1, None, Some(1000)), limit(2, Some(0), None)],
+    }
+}
+
+/// Declares the fixture ledger on a fixture tenant's schema, directly: no schema event is emitted, so the
+/// revision and the event sequence stay the fixture's (slice 13).
+fn set_fixture_ledger(world: &mut World, tenant: &TenantId) {
+    let state = world
+        .tenants
+        .get_mut(tenant)
+        .expect("the fixture tenant exists");
+    let state = Arc::make_mut(state);
+    Arc::make_mut(&mut state.schema).ledger = Some(fixture_ledger_decls());
+}
+
 /// The kernel world that corresponds to the model's `initialWorld`.
 fn initial_world() -> World {
     let mut world = World::default();
@@ -1575,6 +1817,7 @@ fn initial_world() -> World {
                 },
             );
         }
+        set_fixture_ledger(&mut world, &tenant);
     }
     world
 }
@@ -1693,6 +1936,7 @@ fn show_error(kind: ErrorKind) -> &'static str {
         ErrorKind::WorkflowViolation => "workflow_violation",
         ErrorKind::SchemaConflict => "schema_conflict",
         ErrorKind::UnknownQuery => "unknown_query",
+        ErrorKind::SelfAction => "self_action",
         _ => "unmodelled",
     }
 }
@@ -1818,7 +2062,11 @@ fn setting_lines(n: u64, tenant: &TenantState) -> Vec<String> {
                 _ => held.subject.clone(),
             };
             (
-                format!("{}/{}/{subject}", held.setting.as_str(), held.level.as_str()),
+                format!(
+                    "{}/{}/{subject}",
+                    held.setting.as_str(),
+                    held.level.as_str()
+                ),
                 held,
             )
         })
@@ -1970,6 +2218,74 @@ fn show_world(world: &World) -> Vec<String> {
         }
         // The setting overrides and revisions (slice 12), after the membership, as the model prints them.
         out.extend(setting_lines(n, tenant));
+        // The ledger accounts and their entries (slice 13), last, as the model prints them.
+        out.extend(ledger_lines(n, tenant));
+    }
+    out
+}
+
+/// The order of ledger accounts as the model prints them: a person before a pool, then by number, unit and scope.
+fn account_rank(account: &LedgerAccount) -> (u8, u64, u64, String) {
+    let (kind, number) = match &account.owner {
+        Some(LedgerOwner::Principal { principal }) => (0, user_number(principal)),
+        Some(LedgerOwner::Pool { pool }) => (1, pool_number(pool)),
+        None => (2, 0),
+    };
+    (
+        kind,
+        number,
+        unit_number(&account.unit),
+        account.scope.0.clone(),
+    )
+}
+
+/// The ledger of a tenant (slice 13), printed only while it has an account: each account's header in
+/// `accountBefore` order, then the entries of each account in sequence order (the model's `ledgerLines`).
+fn ledger_lines(n: u64, tenant: &TenantState) -> Vec<String> {
+    let Some(ledger) = tenant.ledger.as_ref() else {
+        return Vec::new();
+    };
+    let mut accounts: Vec<&LedgerAccount> = ledger.accounts.values().collect();
+    accounts.sort_by_key(|account| account_rank(account));
+    let mut out = Vec::new();
+    for account in accounts {
+        let owner = account
+            .owner
+            .as_ref()
+            .map_or_else(|| "-".to_string(), ledger_owner_text);
+        let unit = unit_number(&account.unit);
+        let scope = ledger_text(&account.scope.0);
+        let buckets = match account.buckets.as_deref() {
+            Some(list) if !list.is_empty() => list
+                .iter()
+                .map(|bucket| format!("{}:{}", bucket.period_start.0, bucket.remaining))
+                .collect::<Vec<String>>()
+                .join(","),
+            _ => "-".to_string(),
+        };
+        out.push(format!(
+            "ledger-account {n} owner={owner} unit={unit} scope={scope} balance={} seq={} buckets={buckets}",
+            account.balance.0, account.last_sequence
+        ));
+        let key = strata_kernel::ledger::account_key(&account.account);
+        let entries: &[LedgerEntry] = ledger.entries.get(&key).map_or(&[], |held| held.as_slice());
+        for entry in entries {
+            let by = entry
+                .caused_by
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |user| user_number(user).to_string());
+            let corrects = entry
+                .corrects
+                .map_or_else(|| "-".to_string(), |c| c.to_string());
+            out.push(format!(
+                "ledger-entry {n} owner={owner} unit={unit} scope={scope} seq={} amount={} key={} reason={} by={by} at={} corrects={corrects}",
+                entry.sequence,
+                entry.amount.0,
+                entry.idempotency_key,
+                ledger_text(&entry.reason),
+                entry.at.0
+            ));
+        }
     }
     out
 }
@@ -2140,6 +2456,27 @@ fn event_text(event: &DomainEvent, changes: &[SchemaChange]) -> String {
             setting.as_str(),
             level.as_str(),
             subject_text(*level, subject)
+        ),
+        EventBody::LedgerEntryPosted {
+            owner,
+            unit,
+            scope,
+            amount,
+            balance,
+            balance_before,
+            entry_sequence,
+            reason,
+            ..
+        } => format!(
+            "ledger-posted owner={} unit={} scope={} amount={} balance={} before={} seq={} reason={}",
+            ledger_owner_text(owner),
+            unit_number(unit),
+            ledger_text(&scope.0),
+            amount.0,
+            balance.0,
+            balance_before.0,
+            entry_sequence,
+            ledger_text(reason)
         ),
         // The model has no such event. The line does not start with `event `, so a kernel that emits one
         // makes the comparison fail instead of being hidden by the filter of `outcome_lines`.
@@ -2576,6 +2913,17 @@ pub fn kernel_output(scenarios: &str) -> String {
                             continue;
                         }
                     },
+                    ["ledger", ..] => match parse_ledger_op(rest) {
+                        Some((now, intent)) => {
+                            // A ledger intent is decided at the time the scenario gives, not the fixture's clock.
+                            ctx.now = Timestamp(now);
+                            intent
+                        }
+                        None => {
+                            out.push(format!("unparsed {line}"));
+                            continue;
+                        }
+                    },
                     _ => match parse_member_op(rest, &mut ctx) {
                         Some(intent) => intent,
                         None => {
@@ -2637,6 +2985,16 @@ pub fn kernel_output(scenarios: &str) -> String {
                         None => out.push(format!("unparsed {line}")),
                     },
                     ["setting", name] => out.extend(setting_read_lines(&world, &ctx, name)),
+                    ["ledger", ..] => match parse_ledger_read(rest) {
+                        Some((unit, owner, scope, own)) => {
+                            let state = world.state(&ctx.tenant);
+                            let result = strata_kernel::ledger::read_balance(
+                                &state, &owner, &unit, &scope, own, &ctx,
+                            );
+                            out.extend(ledger_read_lines(result));
+                        }
+                        None => out.push(format!("unparsed {line}")),
+                    },
                     _ => match parse_read(rest) {
                         Some(request) => out.extend(read_lines(&world.read(&request, &ctx))),
                         None => out.push(format!("unparsed {line}")),
@@ -2786,7 +3144,7 @@ pub fn parse_audit(output: &str) -> Vec<Checked> {
 /// a first line with the lines that follow it up to the next first line; the state lines at the end
 /// are not an operation's. The `k`th group is the outcome of the `k`th operation.
 pub fn op_outcomes<S: AsRef<str>>(output: &[S]) -> Vec<&[S]> {
-    const CONTINUATION: [&str; 14] = [
+    const CONTINUATION: [&str; 16] = [
         "revision ",
         "event ",
         "effect ",
@@ -2801,6 +3159,8 @@ pub fn op_outcomes<S: AsRef<str>>(output: &[S]) -> Vec<&[S]> {
         "team ",
         "value ",
         "tenant-rev ",
+        "balance ",
+        "seq ",
     ];
     let end = output
         .iter()

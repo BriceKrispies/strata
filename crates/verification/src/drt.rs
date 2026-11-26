@@ -12,11 +12,11 @@
 //! ready to append to `lean/fixtures/scenarios.txt`. Each candidate the minimiser tries is one more
 //! Lean process, and that happens only once there is a disagreement to shrink.
 
+use crate::lean::op_outcomes;
 use crate::lean::{
     build_model, compare_outputs, kernel_output, read_shapes, run_model, Generator, ScenarioStream,
 };
-use crate::lean::op_outcomes;
-use crate::lean_diff::{lean_error_names, setting_shapes};
+use crate::lean_diff::{lean_error_names, ledger_shapes, setting_shapes, LEDGER_KINDS};
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -227,7 +227,7 @@ fn minimise_disagreement(
 /// The accepted outcome kinds, one per intent kind of the scenario format: the intent's name
 /// followed by `ok`. `require` and `unique` are split by their mode, as the model's strict and lax
 /// schema outcomes differ.
-pub const ACCEPTED_KINDS: [&str; 25] = [
+pub const ACCEPTED_KINDS: [&str; 28] = [
     "create ok",
     "update ok",
     "patch ok",
@@ -253,6 +253,9 @@ pub const ACCEPTED_KINDS: [&str; 25] = [
     "read-query ok",
     "setting ok",
     "setting-remove ok",
+    "ledger-post ok",
+    "ledger-expire ok",
+    "read-ledger ok",
 ];
 
 /// The outcome kinds of reads that a run must also reach: the shapes of an accepted read (with rows and
@@ -363,6 +366,7 @@ fn intent_of(op: &str) -> &'static str {
             Some("records") => "read-records",
             Some("query") => "read-query",
             Some("setting") => "read-setting",
+            Some("ledger") => "read-ledger",
             _ => "unknown",
         };
     }
@@ -395,6 +399,9 @@ fn intent_of(op: &str) -> &'static str {
         // A removal has no value token, so its last token is `remove` (slice 12).
         Some("setting") if tokens.last().copied() == Some("remove") => "setting-remove",
         Some("setting") => "setting",
+        // A ledger posting names `post` after `ledger`; an expiry names `expire` (slice 13).
+        Some("ledger") if tokens.get(4).copied() == Some("post") => "ledger-post",
+        Some("ledger") => "ledger-expire",
         _ => "unknown",
     }
 }
@@ -418,13 +425,15 @@ fn count_outcomes(
                 "unparsed".to_string()
             };
             *coverage.entry(kind).or_insert(0) += 1;
-            // A refusal of a setting write or read, by the intent that made it (slice 12).
-            if intent.contains("setting") && line.starts_with("err ") {
+            // A refusal of a setting or ledger intent or read, by the intent that made it (slices 12 and 13).
+            if (intent.contains("setting") || intent.contains("ledger")) && line.starts_with("err ")
+            {
                 *coverage.entry(format!("{intent} {line}")).or_insert(0) += 1;
             }
             // The shapes of a read's answer, besides its outcome.
             let mut shapes = read_shapes(op, group);
             shapes.extend(setting_shapes(op, group));
+            shapes.extend(ledger_shapes(op, group));
             for shape in shapes {
                 if !shape.ends_with(" ok") {
                     *coverage.entry(shape).or_insert(0) += 1;
@@ -460,6 +469,7 @@ pub fn run(
     required.extend(ACCEPTED_KINDS.iter().map(|kind| kind.to_string()));
     required.extend(READ_KINDS.iter().map(|kind| kind.to_string()));
     required.extend(SETTING_KINDS.iter().map(|kind| kind.to_string()));
+    required.extend(LEDGER_KINDS.iter().map(|kind| kind.to_string()));
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     // `lake exe` runs in `lean_dir`, so a relative batch path would be read from the wrong place.

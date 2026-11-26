@@ -30,7 +30,7 @@ use crate::lean::{build_model, kernel_output, read_shapes, run_model};
 use std::path::Path;
 
 /// The intent kinds the generator produces; each is the word after the principal in an `op` line.
-pub const GENERATED_INTENTS: [&str; 20] = [
+pub const GENERATED_INTENTS: [&str; 21] = [
     "create",
     "update",
     "patch",
@@ -51,6 +51,7 @@ pub const GENERATED_INTENTS: [&str; 20] = [
     "redeem",
     "schema",
     "setting",
+    "ledger",
 ];
 
 /// Known differences between the model and the kernel that are intended, each with its reason.
@@ -148,6 +149,14 @@ pub enum OpKind {
     SettingWrite(String, String, Option<u64>, u64, Option<String>),
     /// A setting read (slice 12): the setting's name.
     SettingRead(String),
+    /// A ledger posting (slice 13): the time, then the postings, each as its tokens (`<unit> <owner> <amount>
+    /// key=<k> [reason=<r>] [corrects=<n>] [scope=<s>]`); a `;` token separates them in the rendered line.
+    LedgerPost(i64, Vec<String>),
+    /// A ledger expiry (slice 13): the time, the unit and the cutoff.
+    LedgerExpire(i64, u64, i64),
+    /// A balance read of a ledger account (slice 13): the unit, the owner token (a person's number or `pool<n>`),
+    /// the scope (empty for none) and whether the read is one's own.
+    LedgerRead(u64, String, String, bool),
 }
 
 pub type Scenario = Vec<Op>;
@@ -282,6 +291,28 @@ impl Op {
                 "read {} {} setting {name}",
                 self.tenant,
                 self.principal.token()
+            ),
+            OpKind::LedgerPost(now, postings) => format!(
+                "{head} ledger post @{now}{}",
+                postings
+                    .iter()
+                    .map(|p| format!(" {p}"))
+                    .collect::<Vec<String>>()
+                    .join(" ;")
+            ),
+            OpKind::LedgerExpire(now, unit, cutoff) => {
+                format!("{head} ledger expire @{now} {unit} {cutoff}")
+            }
+            OpKind::LedgerRead(unit, owner, scope, own) => format!(
+                "read {} {} ledger {unit} {owner}{}{}",
+                self.tenant,
+                self.principal.token(),
+                if scope.is_empty() {
+                    String::new()
+                } else {
+                    format!(" scope={scope}")
+                },
+                if *own { " own" } else { "" }
             ),
         }
     }
@@ -2051,7 +2082,10 @@ fn setting_write_op(rng: &mut Lcg, guess: &mut SettingGuess) -> Op {
     } else {
         (rng.below(8) == 0).then(|| 1 + rng.below(3))
     };
-    let key = format!("{tenant}/{name}/{}", setting_subject(level, team, principal));
+    let key = format!(
+        "{tenant}/{name}/{}",
+        setting_subject(level, team, principal)
+    );
     let expected = if rng.below(6) == 0 {
         rng.below(4)
     } else {
@@ -2072,13 +2106,7 @@ fn setting_write_op(rng: &mut Lcg, guess: &mut SettingGuess) -> Op {
         tenant,
         principal,
         object: 1,
-        kind: OpKind::SettingWrite(
-            name.to_string(),
-            level.to_string(),
-            team,
-            expected,
-            value,
-        ),
+        kind: OpKind::SettingWrite(name.to_string(), level.to_string(), team, expected, value),
     }
 }
 
@@ -2149,10 +2177,288 @@ fn with_settings(seed: u64, mut ops: Scenario) -> Scenario {
     ops
 }
 
-/// The scenario of case `seed` with its searches, aggregates and settings placed in (see `with_queries` and
-/// `with_settings`). `generate` alone is what the fixture scenarios are made of, so the fixture does not change.
+/// The first instant of each calendar month from January 2026 to April 2027, in milliseconds (UTC). The ledger's
+/// periods are computed by the model and the kernel; these are the times the generator aims at, so that a posting,
+/// an expiry and its cutoff fall in months that the expiry rule relates.
+const LEDGER_MONTHS: [i64; 16] = [
+    1767225600000,
+    1769904000000,
+    1772323200000,
+    1775001600000,
+    1777593600000,
+    1780272000000,
+    1782864000000,
+    1785542400000,
+    1788220800000,
+    1790812800000,
+    1793491200000,
+    1796083200000,
+    1798761600000,
+    1801440000000,
+    1803859200000,
+    1806537600000,
+];
+
+/// A time in calendar month `month` of [`LEDGER_MONTHS`], at a whole number of hours after its start (up to 27 days).
+fn ledger_time(rng: &mut Lcg, month: u64) -> i64 {
+    LEDGER_MONTHS[month as usize] + (rng.below(27 * 24) * 3_600_000) as i64
+}
+
+/// The owner token of a ledger posting or read: the owner's own account most often, a member's, a pool (declared or
+/// not) or a number that is no member.
+fn ledger_owner_token(rng: &mut Lcg, home: u64) -> String {
+    match rng.below(20) {
+        0..=9 => home.to_string(),
+        10..=11 => (home + 1).to_string(),
+        12 => (home + 2).to_string(),
+        13 => "999".to_string(),
+        14..=15 => "pool1".to_string(),
+        16 => "pool2".to_string(),
+        _ => (home + 3).to_string(),
+    }
+}
+
+/// One posting's tokens (slice 13). Unit `3` (the one that expires) is posted only to the account of person `100`,
+/// so that an expiry never has two due accounts in one tenant. Amounts are within `±1000` for unit `1`, the one with
+/// a cap, and within `±100000` otherwise, so that the cap and the floor are both reached and not every posting
+/// crosses them. Keys come from a few names, so that replays, version conflicts and corrections occur.
+fn ledger_posting(rng: &mut Lcg, home: u64) -> String {
+    let unit = match rng.below(10) {
+        0..=3 => 1,
+        4..=5 => 2,
+        6..=8 => 3,
+        _ => 4,
+    };
+    let owner = if unit == 3 {
+        "100".to_string()
+    } else {
+        ledger_owner_token(rng, home)
+    };
+    let amount: i64 = if rng.below(30) == 0 {
+        0
+    } else if unit == 3 && rng.below(4) != 0 {
+        rng.below(100_000) as i64 + 1
+    } else if unit == 1 {
+        rng.below(2001) as i64 - 1000
+    } else {
+        rng.below(200_001) as i64 - 100_000
+    };
+    let key = match rng.below(40) {
+        0 => "key=".to_string(),
+        1 => format!("key=expiry:{}", rng.below(3)),
+        _ => format!("key=k{}", rng.below(8)),
+    };
+    let reason = match rng.below(20) {
+        0..=9 => "",
+        10..=11 => " reason=adjust",
+        12 => " reason=reverse",
+        _ => " reason=pay",
+    };
+    let corrects = if rng.below(10) < 2 {
+        format!(" corrects={}", rng.below(6))
+    } else {
+        String::new()
+    };
+    let scope = if rng.below(6) == 0 { " scope=s1" } else { "" };
+    format!("{unit} {owner} {amount} {key}{reason}{corrects}{scope}")
+}
+
+/// A ledger posting operation (slice 13): one, two or three postings at one time, by a caller of the tenant or one
+/// that is not (the system, an anonymous caller, a member without the ledger capability, a number that is no member).
+fn ledger_post_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(20) {
+        0 => 3,
+        1..=3 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0 => Caller::System,
+        1 => Caller::Anonymous,
+        2 => Caller::User(999),
+        3..=5 => Caller::User(home + 1),
+        6 => Caller::User(home + 2),
+        _ => Caller::User(home),
+    };
+    let count = match rng.below(10) {
+        0..=6 => 1,
+        7..=8 => 2,
+        _ => 3,
+    };
+    let postings: Vec<String> = (0..count).map(|_| ledger_posting(rng, home)).collect();
+    let month = rng.below(12);
+    let now = ledger_time(rng, month);
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::LedgerPost(now, postings),
+    }
+}
+
+/// A ledger expiry operation (slice 13): by the system, the owner or another caller; of unit `3` most often, so that
+/// buckets of the expiring unit fall due, and of a unit without an expiry or that no tenant declares now and then.
+fn ledger_expire_op(rng: &mut Lcg) -> Op {
+    let tenant = if rng.below(10) == 0 { 2 } else { 1 };
+    let home = home_of(tenant);
+    let principal = match rng.below(10) {
+        0..=3 => Caller::System,
+        4..=6 => Caller::User(home),
+        7 => Caller::User(home + 1),
+        8 => Caller::Anonymous,
+        _ => Caller::User(999),
+    };
+    let unit = match rng.below(10) {
+        0..=6 => 3,
+        7 => 1,
+        8 => 2,
+        _ => 9,
+    };
+    let month = rng.below(10);
+    let now = ledger_time(rng, month);
+    let cutoff = LEDGER_MONTHS[rng.below(10) as usize];
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::LedgerExpire(now, unit, cutoff),
+    }
+}
+
+/// A ledger balance read (slice 13): by the owner of the tenant (who holds `ledger-read`), by the editor or the writer
+/// (who reads only their own account), or by a caller that may read nothing.
+fn ledger_read_op(rng: &mut Lcg) -> Op {
+    let tenant = match rng.below(20) {
+        0 => 3,
+        1..=2 => 2,
+        _ => 1,
+    };
+    let home = home_of(tenant);
+    let principal = match rng.below(20) {
+        0 => Caller::System,
+        1 => Caller::Anonymous,
+        2 => Caller::User(999),
+        3..=8 => Caller::User(home),
+        9..=14 => Caller::User(home + 1),
+        15..=16 => Caller::User(home + 2),
+        _ => Caller::User(home + 3),
+    };
+    let unit = match rng.below(10) {
+        0..=3 => 1,
+        4..=5 => 2,
+        6..=8 => 3,
+        _ => 4,
+    };
+    let owner = ledger_owner_token(rng, home);
+    let scope = if rng.below(6) == 0 { "s1" } else { "" }.to_string();
+    let own = rng.below(3) == 0;
+    Op {
+        tenant,
+        principal,
+        object: 1,
+        kind: OpKind::LedgerRead(unit, owner, scope, own),
+    }
+}
+
+/// The ledger operations placed among the operations of a scenario (slice 13): postings, expiries and balance reads,
+/// from a stream of their own, after the first third of the scenario so that the accounts they name may exist.
+fn with_ledger(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x6c65_6467_6572_0013);
+    for _ in 0..4 + rng.below(8) {
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let op = match rng.below(20) {
+            0..=11 => ledger_post_op(&mut rng),
+            12..=14 => ledger_expire_op(&mut rng),
+            _ => ledger_read_op(&mut rng),
+        };
+        ops.insert(at, op);
+    }
+    ops
+}
+
+/// The shapes of a ledger operation's accepted answer as the coverage counts them (slice 13). A posting that
+/// emitted no event changed nothing (`replay`); a correction, and several postings, are counted when they emitted
+/// events. An expiry is `entries>0` when it debited an entry. A read is counted by the reach it was made with: the
+/// owner of the tenant holds `ledger-read` (`ledger-read`), the owner of the account reads its own (`owner`), and
+/// any other reader is `other`. A refusal is counted by its outcome alone, as every intent is.
+pub fn ledger_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String> {
+    let words: Vec<&str> = rendered.split_whitespace().collect();
+    if group.first().map(|line| line.as_ref()) != Some("ok") {
+        return Vec::new();
+    }
+    let events = group
+        .iter()
+        .filter(|line| line.as_ref().starts_with("event "))
+        .count();
+    match words.as_slice() {
+        ["op", _, _, "ledger", "post", ..] => {
+            let mut shapes = Vec::new();
+            if events == 0 {
+                shapes.push("ledger-post ok replay".to_string());
+            } else {
+                if words.iter().any(|w| w.starts_with("corrects=")) {
+                    shapes.push("ledger-post ok correction".to_string());
+                }
+                if words.contains(&";") {
+                    shapes.push("ledger-post ok multi".to_string());
+                }
+            }
+            shapes
+        }
+        ["op", _, _, "ledger", "expire", ..] => {
+            if events > 0 {
+                vec!["ledger-expire ok entries>0".to_string()]
+            } else {
+                vec!["ledger-expire ok entries=0".to_string()]
+            }
+        }
+        ["read", tenant, principal, "ledger", _unit, owner, ..] => {
+            let tenant: u64 = tenant.parse().unwrap_or(0);
+            let reach = if *principal == home_of(tenant).to_string() {
+                "ledger-read"
+            } else if owner == principal {
+                "owner"
+            } else {
+                "other"
+            };
+            vec![format!("read-ledger ok {reach}")]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The ledger outcomes a run must reach (slice 13): each refusal the ledger intents can give, an accepted posting, a
+/// replay, a correction, several postings, an expiry that debits, and each reach of a balance read, with the refusals
+/// a read can give. Counted by intent, as the other `REQUIRED_PER_INTENT` entries are.
+pub const LEDGER_KINDS: &[&str] = &[
+    "ledger-post ok",
+    "ledger-post ok replay",
+    "ledger-post ok correction",
+    "ledger-post ok multi",
+    "ledger-post err unauthorized",
+    "ledger-post err not_found",
+    "ledger-post err invalid_intent",
+    "ledger-post err self_action",
+    "ledger-post err version_conflict",
+    "ledger-post err constraint_violated",
+    "ledger-expire ok entries>0",
+    "ledger-expire err unauthorized",
+    "ledger-expire err invalid_intent",
+    "read-ledger ok ledger-read",
+    "read-ledger ok owner",
+    "read-ledger err unauthorized",
+    "read-ledger err not_found",
+];
+
+/// The scenario of case `seed` with its searches, aggregates, settings and ledger operations placed in (see
+/// `with_queries`, `with_settings` and `with_ledger`). `generate` alone is what the fixture scenarios are made of, so
+/// the fixture does not change.
 pub fn generate_reads(seed: u64) -> Scenario {
-    with_settings(seed, with_queries(seed, generate(seed)))
+    with_ledger(
+        seed,
+        with_settings(seed, with_queries(seed, generate(seed))),
+    )
 }
 
 /// The seed of case `index` in a run with base seed `base`.
@@ -2280,6 +2586,9 @@ fn intent_name(op: &Op) -> &'static str {
         OpKind::SettingWrite(_, _, _, _, Some(_)) => "setting",
         OpKind::SettingWrite(_, _, _, _, None) => "setting-remove",
         OpKind::SettingRead(_) => "read-setting",
+        OpKind::LedgerPost(..) => "ledger-post",
+        OpKind::LedgerExpire(..) => "ledger-expire",
+        OpKind::LedgerRead(..) => "read-ledger",
     }
 }
 
@@ -2296,6 +2605,7 @@ fn count_outcomes(scenarios: &[Scenario], lean: &[Vec<String>]) -> Outcomes {
             // The shapes of a read's answer, besides its outcome.
             let mut shapes = read_shapes(&op.render(), group);
             shapes.extend(setting_shapes(&op.render(), group));
+            shapes.extend(ledger_shapes(&op.render(), group));
             for shape in shapes {
                 if !shape.ends_with(" ok") {
                     *counts.entry(shape).or_default() += 1;
@@ -2389,7 +2699,10 @@ fn fields_mut(kind: &mut OpKind) -> Option<&mut Vec<(u64, String)>> {
         | OpKind::ReadSearch(..)
         | OpKind::ReadAggregate(..)
         | OpKind::SettingWrite(..)
-        | OpKind::SettingRead(_) => None,
+        | OpKind::SettingRead(_)
+        | OpKind::LedgerPost(..)
+        | OpKind::LedgerExpire(..)
+        | OpKind::LedgerRead(..) => None,
     }
 }
 
@@ -2598,6 +2911,7 @@ pub fn check_coverage(outcomes: &Outcomes, main_source: &str) -> Result<(), Stri
             .map(|n| format!("err {n}")),
     );
     wanted.extend(REQUIRED_PER_INTENT.iter().map(|s| s.to_string()));
+    wanted.extend(LEDGER_KINDS.iter().map(|s| s.to_string()));
     let seen = |k: &str| outcomes.get(k).copied().unwrap_or(0);
     let thin: Vec<String> = wanted
         .iter()

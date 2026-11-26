@@ -2636,3 +2636,88 @@ op 1 101 setting label team team=1 s:x
 op 1 100 setting label team team=1 s:x
 read 1 101 setting label
 end
+scenario h-ledger-post-accepted-and-read
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+read 1 100 ledger 1 100
+end
+scenario h-ledger-replay-changes-nothing
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+end
+scenario h-ledger-version-conflict
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+op 1 100 ledger post @1767225600000 1 100 300 key=k1
+end
+scenario h-ledger-unauthorized-postings
+op 1 101 ledger post @1767225600000 1 101 5 key=k1
+op 1 system ledger post @1767225600000 1 100 5 key=k2
+op 1 anon ledger post @1767225600000 1 100 5 key=k3
+op 1 999 ledger post @1767225600000 1 999 5 key=k4
+end
+scenario h-ledger-unknown-unit-and-owner
+op 1 100 ledger post @1767225600000 9 100 5 key=k1
+op 1 100 ledger post @1767225600000 1 999 5 key=k2
+op 1 100 ledger post @1767225600000 1 pool2 5 key=k3
+op 1 100 ledger post @1767225600000 1 pool1 5 key=k4
+end
+scenario h-ledger-invalid-amount-and-key
+op 1 100 ledger post @1767225600000 1 100 0 key=k1
+op 1 100 ledger post @1767225600000 1 100 5 key=
+op 1 100 ledger post @1767225600000 1 100 5 key=expiry:1
+end
+scenario h-ledger-self-adjustment-refused
+op 1 100 ledger post @1767225600000 1 100 5 key=k1 reason=adjust
+op 1 100 ledger post @1767225600000 1 100 5 key=k2 reason=reverse
+op 1 100 ledger post @1767225600000 1 101 5 key=k3 reason=adjust
+end
+scenario h-ledger-correction-names-an-entry
+op 1 100 ledger post @1767225600000 1 100 500 key=k1
+op 1 100 ledger post @1767225600000 1 100 -200 key=k2 corrects=1
+op 1 100 ledger post @1767225600000 1 100 -200 key=k3 corrects=7
+op 1 100 ledger post @1767225600000 1 100 -200 key=k4 corrects=0
+end
+scenario h-ledger-multi-posting-one-refusal-refuses-all
+op 1 100 ledger post @1767225600000 1 100 10 key=a1 ; 2 100 5 key=a2 ; 1 100 0 key=a3
+op 1 100 ledger post @1767225600000 1 100 10 key=b1 ; 2 100 5 key=b2
+end
+scenario h-ledger-cap-and-floor
+op 1 100 ledger post @1767225600000 1 100 900 key=c1
+op 1 100 ledger post @1767225600000 1 100 200 key=c2
+op 1 100 ledger post @1767225600000 1 100 -300 key=c3
+op 2 200 ledger post @1767225600000 2 200 -5 key=f1
+end
+scenario h-ledger-expiry-debits-due-credit
+op 1 100 ledger post @1767225600000 3 100 100 key=e1
+op 1 100 ledger post @1767225600000 3 100 50 key=e2
+op 1 system ledger expire @1772323200000 3 1767225600000
+read 1 100 ledger 3 100
+end
+scenario h-ledger-expiry-refused
+op 1 100 ledger post @1767225600000 3 100 100 key=e1
+op 1 101 ledger expire @1772323200000 3 1767225600000
+op 1 100 ledger expire @1772323200000 1 1767225600000
+op 1 100 ledger expire @1769904000000 3 1772323200000
+op 1 system ledger expire @1772323200000 9 1767225600000
+end
+scenario h-ledger-expiry-with-nothing-due
+op 1 system ledger expire @1772323200000 3 1767225600000
+op 1 100 ledger post @1772323200000 3 100 40 key=e1
+op 1 system ledger expire @1775001600000 3 1767225600000
+end
+scenario h-ledger-reads-by-reach
+op 1 100 ledger post @1767225600000 1 101 25 key=r1
+read 1 101 ledger 1 101
+read 1 101 ledger 1 101 own
+read 1 101 ledger 1 100
+read 1 102 ledger 1 101
+read 1 100 ledger 1 101
+read 1 100 ledger 4 100
+read 1 100 ledger 2 100 own
+read 1 anon ledger 1 100
+end
+scenario h-ledger-reads-without-an-account
+read 1 102 ledger 2 102
+read 1 102 ledger 2 102 own
+read 1 100 ledger 2 102
+read 1 102 ledger 1 102 scope=s1
+end
