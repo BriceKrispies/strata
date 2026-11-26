@@ -60,7 +60,7 @@ theorem ITenant.recordsOf_abs (t : ITenant) (ty : TypeId) : t.abs.recordsOf ty =
 /-- Whether a principal may read a stored record of an object type: `Tenant.allows` for the `read`
     action, on the tenant's membership, grants and policies. -/
 def ITenant.canRead (t : ITenant) (p : Principal) (ty : TypeId) (r : Record) : Bool :=
-  let roles := t.mt.rolesOf p
+  let roles := t.header.rolesOf p
   roles.contains ownerRole ||
     (Action.read != .manage &&
       t.grants.any (fun g => roles.contains g.1 && g.2 == .object ty .read)) ||

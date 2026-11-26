@@ -13,6 +13,8 @@ import Strata.SchemaChange
 import Strata.Settings
 import Strata.LedgerModel
 import Strata.Operations
+import Strata.Events
+import Strata.Triggers
 
 namespace Strata
 
@@ -77,6 +79,9 @@ def reservedRefused (p : Principal) (i : Intent) : Bool :=
 structure Ctx where
   tenant : TenantId
   principal : Principal
+  /-- The hop of the event that caused the intent, zero for an intent no automation caused (the kernel's `hop`,
+      slice 15). -/
+  hop : Nat := 0
   deriving Repr
 
 /-- One intent against one tenant. An expected version is checked after the permission, so only
@@ -282,46 +287,6 @@ wrote: each derivation is the kernel's emission for that intent (`transition::cr
 `update_record`, `delete_record`, `change_schema`, `create_tenant`). `step` keeps its type; `transition`
 returns the events and effects alongside the world. -/
 
-/-- Who a membership event names: a user, or a team, whose principal the kernel writes as `team:<id>`. -/
-inductive Member where
-  | user (p : PrincipalId)
-  | team (t : TeamId)
-  deriving DecidableEq, Repr
-
-/-- The body of a domain event (the kernel's `EventBody`). A record event names the record as stored before
-    and after; an update names the workflow transitions it fired, by workflow id, and a delete names the
-    record it removed. -/
-inductive EventBody where
-  | tenantCreated (name : String)
-  | schemaChanged (version : Nat) (summary : List SchemaLine) (grandfathered : Nat)
-  | recordCreated (ty : TypeId) (id : RecordId) (r : Record)
-  | recordUpdated (ty : TypeId) (id : RecordId) (before after : Record) (fired : List (String × String))
-  | recordDeleted (ty : TypeId) (id : RecordId) (before : Record)
-  /-- A principal's effective roles changed: its direct roles and those of its teams (slice 9). -/
-  | memberChanged (who : Member) (roles : List RoleId)
-  /-- An override of a setting was set or removed, naming the setting and its subject and carrying no value
-      (slice 12, the kernel's `SettingChanged`: a person's value can be personal data). -/
-  | settingChanged (name : String) (subject : SettingSubject)
-  /-- An entry was posted to a ledger account, or an expiry debited one: the account, the amount, the balances
-      around it and the entry's number (slice 13, the kernel's `LedgerEntryPosted`). -/
-  | ledgerEntryPosted (e : LedgerPosted)
-  deriving Repr
-
-/-- A domain event: its sequence number (gapless per tenant), the revision it was committed at, the principal
-    that caused it, and its body. The kernel's time and correlation are not modelled. -/
-structure DomainEvent where
-  seq : Nat
-  revision : Nat
-  principal : Principal
-  body : EventBody
-  deriving Repr
-
-/-- An effect of an accepted transition (the kernel's `Effect`). Only `Publish` is modelled: slice 15 adds the
-    automation effects, and the session revocation is not modelled. -/
-inductive Effect where
-  | publish (seq : Nat)
-  deriving DecidableEq, Repr
-
 /-- The records of the tenant that refer to record `id` of object type `ty` through a field, each with its
     stored form and the form the delete rewrites it to. The deleted record does not refer to itself. -/
 def referrerEntries (t : Tenant) (ty : TypeId) (id : RecordId) :
@@ -510,6 +475,28 @@ def commitWorld (w w' : World) (c : Ctx) (i : Intent) : World :=
       | _, _ => w' x
     else w' x
 
+/-- The intents that can change who may confer what: the schema intents (their grants and policies) and the membership
+    intents (their roles). Only these are followed by the check of the automations' definers (the kernel's
+    `authority_changed`, which tests for a `PutSchema` or a `PutMember` in the transition). -/
+def Intent.changesAuthority (i : Intent) : Bool :=
+  i.changesSchema || (match i with
+    | .member _ => true
+    | _ => false)
+
+def afterStep (t t' : Tenant) (p : Principal) (i : Intent) (hop : Nat) :
+    Tenant × List DomainEvent × List Effect :=
+  -- The kernel's `after_decision` (slice 15): when the intent changed authority, the automations whose definer lost it
+  -- are suspended, with their events after the step's own; then the triggers decide each event, in sequence order. The
+  -- decisions read the committed tenant, which differs from the decided one only in its counters and schema version.
+  let base := eventBodies t p i t'
+  let decided := if i.changesAuthority then suspendLost t' else (t', [])
+  let t'' := decided.1
+  let suspensions := decided.2
+  let bodies := base ++ suspensions
+  let tf : Tenant := { commitT t t'' p i with eventSeq := t.eventSeq + bodies.length }
+  let evs := numberEvents (t.eventSeq + 1) tf.revision p 0 bodies
+  (tf, evs, evs.map (fun e => .publish e.seq) ++ triggerEffects tf hop evs)
+
 /-- The transition of one intent (slice 9): the world after it, which is `step`'s with the tenant committed
     (`commitWorld`), the domain events it emits in order, and one `Publish` effect per event. A refused step
     has no transition, so it emits nothing and the revision stays where it was. `step` is the projection of
@@ -518,9 +505,14 @@ def transition (w : World) (i : Intent) (c : Ctx) : Except Err Transition :=
   match step w i c with
   | .error e => .error e
   | .ok w' =>
-    let w'' := commitWorld w w' c i
-    let evs := stepEvents w w'' c i
-    .ok { world := w'', events := evs, effects := evs.map (fun e => .publish e.seq) }
+    match w c.tenant, w' c.tenant with
+    | some t, some t' =>
+      let (tf, evs, effs) := afterStep t t' c.principal i c.hop
+      .ok { world := fun x => if x = c.tenant then some tf else w' x, events := evs, effects := effs }
+    | _, _ =>
+      let w'' := commitWorld w w' c i
+      let evs := stepEvents w w'' c i
+      .ok { world := w'', events := evs, effects := evs.map (fun e => .publish e.seq) }
 
 
 /-- An accepted membership intent writes back the tenant's membership and nothing else: the tenant it

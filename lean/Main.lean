@@ -590,6 +590,29 @@ def showFired (fs : List (String × String)) : String :=
   if fs.isEmpty then "-"
   else ",".intercalate ((fs.mergeSort (fun a b => decide (a.1 ≤ b.1))).map fun p => s!"{p.1}:{p.2}")
 
+/-- The text of an optional principal of an effect: `p<n>`, or `-` for none. -/
+def showOptPrincipal : Option PrincipalId → String
+  | none => "-"
+  | some p => s!"p{p}"
+
+/-- One effect as its line (slice 15 adds the automation hand-offs): `effect publish <seq>` for an event, or the
+    trigger's run or decline, with the trigger, the automation, the event's sequence and hop, the definer, the schema
+    version, the run key (the SHA-256 hex of the canonical key value, or `-`), and the parameters by name. The
+    decline's detail text is not printed. -/
+def showEffect : Effect → String
+  | .publish seq => s!"effect publish {seq}"
+  | .startAutomation s =>
+    let params := if s.params.isEmpty then "-" else ",".intercalate (s.params.map (fun p => s!"{p.1}={showVal p.2}"))
+    s!"effect start-automation trigger={s.trigger} automation={s.automation} event={s.eventSeq} hop={s.hop} caused-by=automation:{s.automation} on-behalf-of={showOptPrincipal s.onBehalfOf} definition={s.definitionVersion} run-key={s.runKey.getD "-"} params={params}"
+  | .declineAutomation d =>
+    let reason := match d.reason with
+      | .hopLimit => "hop-limit"
+      | .runAsSuspended => "run-as-suspended"
+      | .automationRemoved => "automation-removed"
+      | .conditionFailed => "condition-failed"
+      | .automationInactive => "automation-inactive"
+    s!"effect decline-automation trigger={d.trigger} automation={d.automation} event={d.eventSeq} hop={d.hop} reason={reason}"
+
 /-- One domain event as its line: the sequence number, the revision, the principal and the body. -/
 def showEvent (e : DomainEvent) : String :=
   let body := match e.body with
@@ -608,6 +631,8 @@ def showEvent (e : DomainEvent) : String :=
       s!"member-changed who={name} roles={showNats roles}"
     | .settingChanged name subj =>
       s!"setting-changed setting={name} level={showLevel subj.level} subject={showSubject subj}"
+    | .automationSuspended automation definer role =>
+      s!"automation-suspended automation={automation} definer={definer} role={role}"
     | .ledgerEntryPosted e =>
       s!"ledger-posted owner={showOwner e.owner} unit={e.unit} scope={ledgerScopeText e.scope} amount={e.amount} balance={e.balance} before={e.balanceBefore} seq={e.entrySequence} reason={ledgerScopeText e.reason}"
   s!"event {e.seq} rev={e.revision} by={showPrincipal e.principal} {body}"
@@ -772,7 +797,7 @@ def showAgg : Except AggErr AggResult → List String
     with the events it emits), the revision of a tenant, and how it prints its state. -/
 structure Kernel (W : Type) where
   init : W
-  step : W → Intent → Ctx → Except Err (W × List DomainEvent)
+  step : W → Intent → Ctx → Except Err (W × List DomainEvent × List Effect)
   revision : W → TenantId → Option Nat
   render : W → List String
   /-- A read on a tenant for a principal: none when the tenant does not exist. -/
@@ -788,7 +813,7 @@ structure Kernel (W : Type) where
 /-- The spec's kernel: the model as written, with its transition. -/
 def specKernel : Kernel World :=
   { init := initialWorld,
-    step := fun w i c => (transition w i c).map (fun tr => (tr.world, tr.events)),
+    step := fun w i c => (transition w i c).map (fun tr => (tr.world, tr.events, tr.effects)),
     revision := fun w x => (w x).map (fun t => t.revision),
     render := showWorld,
     read := fun w x p req => (w x).map (fun t => read t (readSpecOf x) p req),
@@ -858,11 +883,11 @@ partial def runLines {W : Type} (K : Kernel W) (lines : List String) (w : W) (ou
       | none => runLines K rest w (out.push s!"unparsed {line}")
       | some (c, i) =>
         match K.step w i c with
-        | .ok (w', evs) =>
+        | .ok (w', evs, effs) =>
           -- An accepted step: `ok`, the tenant's revision after it, then each event and its `Publish` effect.
           let rev := (K.revision w' c.tenant).getD 0
           let lines := ["ok", s!"revision {rev}"] ++ evs.map showEvent ++
-            evs.map (fun e => s!"effect publish {e.seq}")
+            effs.map showEffect
           runLines K rest w' (lines.foldl (fun a l => a.push l) out)
         | .error e => runLines K rest w (out.push s!"err {showErr e}")
 

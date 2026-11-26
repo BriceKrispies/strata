@@ -98,6 +98,9 @@ theorem invokeOperationT_user {t t' : Tenant} {p : Principal} {now : Int} {name 
     unfold invokeOperationT invokeOpCore at h
     rcases hl : t.operations.lookup name with _ | op <;> simp [hl, Except.map] at h
   | user u => rfl
+  | automation a =>
+    unfold invokeOperationT invokeOpCore at h
+    rcases hl : t.operations.lookup name with _ | op <;> simp [hl, Except.map] at h
 
 /-- A step that a tenant accepts was made by a principal authorized to make it. -/
 theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
@@ -121,6 +124,7 @@ theorem step_ok_authorized (w w' : World) (i : Intent) (c : Ctx) (t : Tenant)
         | user q => simp [authorized, hp, Principal.userId?]
         | system => simp [hp, Except.map] at hs
         | anonymous => simp [hp, Except.map] at hs
+        | automation a => simp [hp, Except.map] at hs
       | assignRole p r => exact member_authorized _ _ _ _ (by intros; simp) hs
       | revokeRole p r => exact member_authorized _ _ _ _ (by intros; simp) hs
       | defineTeam team label => exact member_authorized _ _ _ _ (by intros; simp) hs

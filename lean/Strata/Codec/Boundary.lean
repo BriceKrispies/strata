@@ -947,6 +947,7 @@ def encPrincipal : Principal → Bytes
   | .user p => tag 0 :: encNat p
   | .system => [tag 1]
   | .anonymous => [tag 2]
+  | .automation a => tag 3 :: encNat a
 
 def decPrincipal : Dec Principal := fun bs =>
   match bs with
@@ -958,6 +959,9 @@ def decPrincipal : Dec Principal := fun bs =>
       | none => none
     | 1 => some (.system, r)
     | 2 => some (.anonymous, r)
+    | 3 => match decNat r with
+      | some (a, r') => some (.automation a, r')
+      | none => none
     | _ => none
 
 theorem lawful_principal : Lawful encPrincipal decPrincipal := by
@@ -967,6 +971,7 @@ theorem lawful_principal : Lawful encPrincipal decPrincipal := by
     | user p => simp [encPrincipal, decPrincipal, tag, lawful_nat.1 p rest]
     | system => simp [encPrincipal, decPrincipal, tag]
     | anonymous => simp [encPrincipal, decPrincipal, tag]
+    | automation a => simp [encPrincipal, decPrincipal, tag, lawful_nat.1 a rest]
   · intro bs x rest h
     cases bs with
     | nil => simp [decPrincipal] at h
@@ -988,9 +993,19 @@ theorem lawful_principal : Lawful encPrincipal decPrincipal := by
       · simp only [decPrincipal, hk, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, rfl⟩ := h
         simp [encPrincipal, byte_eq_tag b 2 hk]
-      · simp only [decPrincipal] at h
-        repeat' split at h
-        all_goals first | omega | simp at h
+      · rcases (show b.toNat = 3 ∨ 4 ≤ b.toNat by omega) with hk3 | hk3
+        · simp only [decPrincipal, hk3] at h
+          cases hn : decNat r with
+          | none => simp [hn] at h
+          | some q =>
+            obtain ⟨a, r'⟩ := q
+            simp only [hn, Option.some.injEq, Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            have hr := lawful_nat.2 r a r' hn
+            simp [encPrincipal, byte_eq_tag b 3 hk3, hr]
+        · simp only [decPrincipal] at h
+          repeat' split at h
+          all_goals first | omega | simp at h
 
 def encResource : Resource → Bytes
   | .object ty => tag 0 :: encNat ty
@@ -2069,6 +2084,133 @@ def decOpEntry : Dec (String × OpDef) := decPair decStr decOpDef
 
 theorem lawful_opEntry : Lawful encOpEntry decOpEntry := lawful_pair lawful_str lawful_opDef
 
+/-! ## Triggers and automations (slice 15)
+
+A trigger's event is a tag byte and the object type or ledger unit it names, with the transition an update names as an
+option; a trigger and an automation are their fields as a nested product, and an automation state is a tag byte
+(`0` active, `1` draft). Ids and principals are naturals (`PrincipalId` is a natural in the model). -/
+
+def encTriggerOn : TriggerOn → Bytes
+  | .recordCreated ty => tag 0 :: encNat ty
+  | .recordUpdated ty tr => tag 1 :: encPair encNat (encOpt encStr) (ty, tr)
+  | .recordDeleted ty => tag 2 :: encNat ty
+  | .ledgerPosted u => tag 3 :: encNat u
+
+def decTriggerOn : Dec TriggerOn := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => decIso decNat (fun ty => TriggerOn.recordCreated ty) r
+    | 1 => decIso (decPair decNat (decOpt decStr)) (fun p => TriggerOn.recordUpdated p.1 p.2) r
+    | 2 => decIso decNat (fun ty => TriggerOn.recordDeleted ty) r
+    | 3 => decIso decNat (fun u => TriggerOn.ledgerPosted u) r
+    | _ => none
+
+theorem lawful_triggerOn : Lawful encTriggerOn decTriggerOn := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | recordCreated ty => simp [encTriggerOn, decTriggerOn, decIso, tag, lawful_nat.1 ty rest]
+    | recordUpdated ty tr =>
+      have hp := (lawful_pair lawful_nat (lawful_opt lawful_str)).1 (ty, tr) rest
+      simp [encTriggerOn, decTriggerOn, decIso, tag, hp]
+    | recordDeleted ty => simp [encTriggerOn, decTriggerOn, decIso, tag, lawful_nat.1 ty rest]
+    | ledgerPosted u => simp [encTriggerOn, decTriggerOn, decIso, tag, lawful_nat.1 u rest]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decTriggerOn] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ b.toNat = 2 ∨ b.toNat = 3 ∨ 4 ≤ b.toNat by omega)
+        with hk | hk | hk | hk | hk
+      · simp only [decTriggerOn, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv lawful_nat _ r x rest h
+        simp [encTriggerOn, byte_eq_tag b 0 hk, ← hy]
+      · simp only [decTriggerOn, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv (lawful_pair lawful_nat (lawful_opt lawful_str)) _ r x rest h
+        obtain ⟨ty, tr⟩ := y
+        simp [encTriggerOn, byte_eq_tag b 1 hk, ← hy, encPair]
+      · simp only [decTriggerOn, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv lawful_nat _ r x rest h
+        simp [encTriggerOn, byte_eq_tag b 2 hk, ← hy]
+      · simp only [decTriggerOn, hk] at h
+        obtain ⟨y, rfl, hy⟩ := dec_ctor_inv lawful_nat _ r x rest h
+        simp [encTriggerOn, byte_eq_tag b 3 hk, ← hy]
+      · simp only [decTriggerOn] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+def encAutoState : AutoState → Bytes
+  | .active => [tag 0]
+  | .draft => [tag 1]
+
+def decAutoState : Dec AutoState := fun bs =>
+  match bs with
+  | [] => none
+  | b :: r =>
+    match b.toNat with
+    | 0 => some (.active, r)
+    | 1 => some (.draft, r)
+    | _ => none
+
+theorem lawful_autoState : Lawful encAutoState decAutoState := by
+  refine ⟨?_, ?_⟩
+  · intro x rest
+    cases x with
+    | active => simp [encAutoState, decAutoState, tag]
+    | draft => simp [encAutoState, decAutoState, tag]
+  · intro bs x rest h
+    cases bs with
+    | nil => simp [decAutoState] at h
+    | cons b r =>
+      rcases (show b.toNat = 0 ∨ b.toNat = 1 ∨ 2 ≤ b.toNat by omega) with hk | hk | hk
+      · simp only [decAutoState, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encAutoState, byte_eq_tag b 0 hk]
+      · simp only [decAutoState, hk, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        simp [encAutoState, byte_eq_tag b 1 hk]
+      · simp only [decAutoState] at h
+        repeat' split at h
+        all_goals first | omega | simp at h
+
+def encTriggerDef : TriggerDef → Bytes :=
+  encIso (encPair encNat (encPair encTriggerOn (encPair (encOpt encExpr) (encPair encNat (encPair encBool
+    (encOpt encNat)))))) (fun t => (t.id, t.on, t.condition, t.automation, t.paused, t.definedBy))
+
+def decTriggerDef : Dec TriggerDef :=
+  decIso (decPair decNat (decPair decTriggerOn (decPair (decOpt decExpr) (decPair decNat (decPair decBool
+    (decOpt decNat)))))) (fun p => ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1, p.2.2.2.2.1, p.2.2.2.2.2⟩)
+
+theorem lawful_triggerDef : Lawful encTriggerDef decTriggerDef :=
+  lawful_iso (lawful_pair lawful_nat (lawful_pair lawful_triggerOn (lawful_pair (lawful_opt lawful_expr)
+    (lawful_pair lawful_nat (lawful_pair lawful_bool (lawful_opt lawful_nat)))))) (fun t => by cases t; rfl) (fun _ => rfl)
+
+def encAutomationDef : AutomationDef → Bytes :=
+  encIso (encPair encNat (encPair (encList encNat) (encPair (encOpt encExpr) (encPair (encOpt encNat)
+    (encPair (encOpt encNat) encAutoState))))) (fun a => (a.id, a.runAs, a.runKey, a.definedBy, a.suspendedFor, a.state))
+
+def decAutomationDef : Dec AutomationDef :=
+  decIso (decPair decNat (decPair (decList decNat) (decPair (decOpt decExpr) (decPair (decOpt decNat)
+    (decPair (decOpt decNat) decAutoState))))) (fun p => ⟨p.1, p.2.1, p.2.2.1, p.2.2.2.1, p.2.2.2.2.1, p.2.2.2.2.2⟩)
+
+theorem lawful_automationDef : Lawful encAutomationDef decAutomationDef :=
+  lawful_iso (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_nat) (lawful_pair (lawful_opt lawful_expr)
+    (lawful_pair (lawful_opt lawful_nat) (lawful_pair (lawful_opt lawful_nat) lawful_autoState))))) (fun a => by cases a; rfl) (fun _ => rfl)
+
+def encTriggerEntry : Nat × TriggerDef → Bytes := encPair encNat encTriggerDef
+
+def decTriggerEntry : Dec (Nat × TriggerDef) := decPair decNat decTriggerDef
+
+theorem lawful_triggerEntry : Lawful encTriggerEntry decTriggerEntry := lawful_pair lawful_nat lawful_triggerDef
+
+def encAutomationEntry : Nat × AutomationDef → Bytes := encPair encNat encAutomationDef
+
+def decAutomationEntry : Dec (Nat × AutomationDef) := decPair decNat decAutomationDef
+
+theorem lawful_automationEntry : Lawful encAutomationEntry decAutomationEntry :=
+  lawful_pair lawful_nat lawful_automationDef
+
 /-- The tenant's fields as one nested product: its object types, members, grants, policies, next id,
     limits, the roles its schema defines (slice 7), its teams and its invitations, then (slice 9) its
     revision, its event sequence and its schema version. -/
@@ -2076,25 +2218,25 @@ def encTenantBody : List (TypeId × ObjType) × List (PrincipalId × List RoleId
     List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
     List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat ×
     List SettingDef × List SettingOverride × List (String × Nat) ×
-    Option LedgerDecls × LedgerState × List LedgerPolicy × List (String × OpDef) → Bytes :=
-  encPair (encList encTypeEntry) (encPair (encList encMember) (encPair (encList encGrantEntry) (encPair (encList encPolicy) (encPair encNat (encPair encLimits (encPair (encList encNat) (encPair (encList encTeamEntry) (encPair (encList encInvitationEntry) (encPair encNat (encPair encNat (encPair encNat (encPair (encList encSettingDef) (encPair (encList encOverride) (encPair (encList encSettingRev) (encPair (encOpt encLedgerDecls) (encPair encLedgerState (encPair (encList encLedgerPolicy) (encList encOpEntry))))))))))))))))))
+    Option LedgerDecls × LedgerState × List LedgerPolicy × List (String × OpDef) × List (Nat × TriggerDef) × List (Nat × AutomationDef) → Bytes :=
+  encPair (encList encTypeEntry) (encPair (encList encMember) (encPair (encList encGrantEntry) (encPair (encList encPolicy) (encPair encNat (encPair encLimits (encPair (encList encNat) (encPair (encList encTeamEntry) (encPair (encList encInvitationEntry) (encPair encNat (encPair encNat (encPair encNat (encPair (encList encSettingDef) (encPair (encList encOverride) (encPair (encList encSettingRev) (encPair (encOpt encLedgerDecls) (encPair encLedgerState (encPair (encList encLedgerPolicy) (encPair (encList encOpEntry) (encPair (encList encTriggerEntry) (encList encAutomationEntry))))))))))))))))))))
 
 def decTenantBody :
     Dec (List (TypeId × ObjType) × List (PrincipalId × List RoleId) ×
       List (RoleId × Grant) × List Policy × Nat × Limits × List RoleId ×
       List (TeamId × TeamDef) × List (InvitationId × InvitationDef) × Nat × Nat × Nat ×
       List SettingDef × List SettingOverride × List (String × Nat) ×
-      Option LedgerDecls × LedgerState × List LedgerPolicy × List (String × OpDef)) :=
-  decPair (decList decTypeEntry) (decPair (decList decMember) (decPair (decList decGrantEntry) (decPair (decList decPolicy) (decPair decNat (decPair decLimits (decPair (decList decNat) (decPair (decList decTeamEntry) (decPair (decList decInvitationEntry) (decPair decNat (decPair decNat (decPair decNat (decPair (decList decSettingDef) (decPair (decList decOverride) (decPair (decList decSettingRev) (decPair (decOpt decLedgerDecls) (decPair decLedgerState (decPair (decList decLedgerPolicy) (decList decOpEntry))))))))))))))))))
+      Option LedgerDecls × LedgerState × List LedgerPolicy × List (String × OpDef) × List (Nat × TriggerDef) × List (Nat × AutomationDef)) :=
+  decPair (decList decTypeEntry) (decPair (decList decMember) (decPair (decList decGrantEntry) (decPair (decList decPolicy) (decPair decNat (decPair decLimits (decPair (decList decNat) (decPair (decList decTeamEntry) (decPair (decList decInvitationEntry) (decPair decNat (decPair decNat (decPair decNat (decPair (decList decSettingDef) (decPair (decList decOverride) (decPair (decList decSettingRev) (decPair (decOpt decLedgerDecls) (decPair decLedgerState (decPair (decList decLedgerPolicy) (decPair (decList decOpEntry) (decPair (decList decTriggerEntry) (decList decAutomationEntry))))))))))))))))))))
 
 theorem lawful_tenantBody : Lawful encTenantBody decTenantBody :=
-  lawful_pair (lawful_list lawful_typeEntry) (lawful_pair (lawful_list lawful_member) (lawful_pair (lawful_list lawful_grantEntry) (lawful_pair (lawful_list lawful_policy) (lawful_pair lawful_nat (lawful_pair lawful_limits (lawful_pair (lawful_list lawful_nat) (lawful_pair (lawful_list lawful_teamEntry) (lawful_pair (lawful_list lawful_invitationEntry) (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_settingDef) (lawful_pair (lawful_list lawful_override) (lawful_pair (lawful_list lawful_settingRev) (lawful_pair (lawful_opt lawful_ledgerDecls) (lawful_pair lawful_ledgerState (lawful_pair (lawful_list lawful_ledgerPolicy) (lawful_list lawful_opEntry))))))))))))))))))
+  lawful_pair (lawful_list lawful_typeEntry) (lawful_pair (lawful_list lawful_member) (lawful_pair (lawful_list lawful_grantEntry) (lawful_pair (lawful_list lawful_policy) (lawful_pair lawful_nat (lawful_pair lawful_limits (lawful_pair (lawful_list lawful_nat) (lawful_pair (lawful_list lawful_teamEntry) (lawful_pair (lawful_list lawful_invitationEntry) (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair lawful_nat (lawful_pair (lawful_list lawful_settingDef) (lawful_pair (lawful_list lawful_override) (lawful_pair (lawful_list lawful_settingRev) (lawful_pair (lawful_opt lawful_ledgerDecls) (lawful_pair lawful_ledgerState (lawful_pair (lawful_list lawful_ledgerPolicy) (lawful_pair (lawful_list lawful_opEntry) (lawful_pair (lawful_list lawful_triggerEntry) (lawful_list lawful_automationEntry))))))))))))))))))))
 
 def encTenant : Tenant → Bytes :=
   encIso encTenantBody
     (fun t => (t.types, t.members, t.grants, t.policies, t.nextId, t.limits, t.roles, t.teams,
       t.invitations, t.revision, t.eventSeq, t.schemaVersion, t.settingDefs, t.overrides, t.settingRevs,
-      t.ledgerDecls, t.ledger, t.ledgerPolicies, t.operations))
+      t.ledgerDecls, t.ledger, t.ledgerPolicies, t.operations, t.triggers, t.automations))
 
 def decTenant : Dec Tenant :=
   decIso decTenantBody fun p =>
@@ -2106,7 +2248,7 @@ def decTenant : Dec Tenant :=
       settingRevs := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
       ledgerDecls := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
       ledger := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1,
-      ledgerPolicies := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, operations := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2 }
+      ledgerPolicies := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, operations := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, triggers := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1, automations := p.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2 }
 
 theorem lawful_tenant : Lawful encTenant decTenant :=
   lawful_iso lawful_tenantBody (fun t => by cases t; rfl) (fun _ => rfl)
@@ -2691,13 +2833,13 @@ theorem lawful_intent : Lawful encIntent decIntent := by
         all_goals first | omega | simp at h
 
 /-- The context of a step: the tenant and the acting principal. -/
-def encCtx : Ctx → Bytes := encIso (encPair encNat encPrincipal) (fun c => (c.tenant, c.principal))
+def encCtx : Ctx → Bytes := encIso (encPair encNat (encPair encPrincipal encNat)) (fun c => (c.tenant, (c.principal, c.hop)))
 
 def decCtx : Dec Ctx :=
-  decIso (decPair decNat decPrincipal) (fun p => { tenant := p.1, principal := p.2 })
+  decIso (decPair decNat (decPair decPrincipal decNat)) (fun p => { tenant := p.1, principal := p.2.1, hop := p.2.2 })
 
 theorem lawful_ctx : Lawful encCtx decCtx :=
-  lawful_iso (lawful_pair lawful_nat lawful_principal) (fun c => by cases c; rfl) (fun _ => rfl)
+  lawful_iso (lawful_pair lawful_nat (lawful_pair lawful_principal lawful_nat)) (fun c => by cases c; rfl) (fun _ => rfl)
 
 /-- The result of a step: tag `0` a refusal, `1` the tenant after the change. -/
 def encResult : Except Err Tenant → Bytes

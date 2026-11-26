@@ -130,6 +130,9 @@ inductive Principal where
   | user (id : PrincipalId)
   | system
   | anonymous
+  /-- An automation acts as its own principal, the kernel's `automation:<workflow-id>` (WFL-1527): it holds the run-as
+      roles of the automation `a` and no other role, and it names no user. -/
+  | automation (a : Nat)
   deriving DecidableEq, Repr
 
 /-- The user a principal is, if it is one: the principal an expression reads as `principal` and the
@@ -947,6 +950,8 @@ def MTenant.rolesOf (m : MTenant) : Principal → List RoleId
   | .system => []
   | .anonymous => [publicRole]
   | .user p => publicRole :: (m.directOf p ++ m.teamRoles p)
+  -- An automation holds the roles of its own automation, which the tenant decides, never a membership (see `Tenant.rolesOf`).
+  | .automation _ => []
 
 /-! ## Operations (slice 14)
 
@@ -1000,6 +1005,54 @@ structure OpDef where
   steps : List OpStep
   deriving DecidableEq, Repr
 
+/-! ## Triggers and automations (slice 15)
+
+A trigger subscribes to a kind of event the kernel matches (a record created, updated or deleted, or a ledger
+posting), with a condition over the event's parameters and record scopes, and starts an automation. An automation
+is declared data: its run-as roles, its run key, its definer and its state. Its steps are run by the automation
+worker outside the kernel, so they are not modelled. The decisions are in `Strata/Triggers.lean`. -/
+
+/-- The events a trigger subscribes to, as the kernel matches them. `recordUpdated` names a workflow transition the
+    update must fire, or any update when none is named. The kinds that come from engines outside the kernel match no
+    kernel event and are not modelled. -/
+inductive TriggerOn where
+  | recordCreated (ty : TypeId)
+  | recordUpdated (ty : TypeId) (transition : Option String)
+  | recordDeleted (ty : TypeId)
+  | ledgerPosted (unit : Nat)
+  deriving DecidableEq, Repr
+
+/-- A trigger (the kernel's `TriggerDef`): its id, its event, its condition (none for every event), the automation it
+    starts, whether it is paused, and the user who defined it (none for the system). The definition time is not
+    modelled: no decision reads it. -/
+structure TriggerDef where
+  id : Nat
+  on : TriggerOn
+  condition : Option Expr := none
+  automation : Nat
+  paused : Bool := false
+  definedBy : Option PrincipalId := none
+  deriving Repr
+
+/-- The state an automation is defined with. A draft starts no runs; an active automation does. An automation with no
+    state is active (the kernel's `state_of`). -/
+inductive AutoState where
+  | active
+  | draft
+  deriving DecidableEq, Repr
+
+/-- An automation (the kernel's `AutomationDef`, without its steps): its run-as roles, the run key expression (none
+    for one run per event), its definer (none for the system), the role it is suspended for when its definer may no
+    longer confer it, and its state. -/
+structure AutomationDef where
+  id : Nat
+  runAs : List RoleId
+  runKey : Option Expr := none
+  definedBy : Option PrincipalId := none
+  suspendedFor : Option RoleId := none
+  state : AutoState := .active
+  deriving Repr
+
 /-- Everything one tenant owns. -/
 structure Tenant where
   /-- The object types, by id. Each id occurs once. -/
@@ -1043,6 +1096,10 @@ structure Tenant where
   ledgerPolicies : List LedgerPolicy := []
   /-- The operations the schema defines, by id (slice 14): their inputs, invokers, subject, conditions and steps. -/
   operations : List (String × OpDef) := []
+  /-- The triggers, by id (slice 15). -/
+  triggers : List (Nat × TriggerDef) := []
+  /-- The automations, by id (slice 15). -/
+  automations : List (Nat × AutomationDef) := []
   deriving Repr
 
 /-- The part of a tenant the membership intents see. -/
@@ -1109,10 +1166,17 @@ def Tenant.clearBreaks (t : Tenant) (ty : TypeId) (id : RecordId) : Bool :=
     !(e.1 == ty && q.1 == id) && recRefers e.2.schema ty id q.2 &&
       (constraintProblem (storedEnv (clearRef e.2.schema ty id q.2)) e.2.constraints).isSome))
 
-/-- The roles a principal holds (the kernel's `roles_of`): none for the system, `public` for an
-    anonymous caller, and for a user `public`, its direct roles and the roles of the teams it
-    belongs to. -/
-def Tenant.rolesOf (t : Tenant) : Principal → List RoleId := t.mt.rolesOf
+/-- The automation of a tenant, by id. -/
+def Tenant.automationDef? (t : Tenant) (a : Nat) : Option AutomationDef := t.automations.lookup a
+
+/-- The roles of a principal (the kernel's `roles_of`). An automation principal holds exactly the run-as roles of its
+    automation, and none when the automation is missing or suspended (`automation_roles`, WFL-1527, WFL-1529); every
+    other principal holds what its membership gives. -/
+def Tenant.rolesOf (t : Tenant) : Principal → List RoleId
+  | .automation a => match t.automationDef? a with
+    | some d => if d.suspendedFor.isSome then [] else d.runAs
+    | none => []
+  | p => t.mt.rolesOf p
 
 /-- A policy's condition holds on the environment: absent, or an expression that is exactly `true`.
     `false`, `null` and an evaluation error do not (the kernel's `authorize`). -/

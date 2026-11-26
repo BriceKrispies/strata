@@ -27,7 +27,7 @@ namespace Impl
 def ITenant.header (t : ITenant) : Tenant :=
   { types := [], members := t.members, grants := t.grants, policies := t.policies,
     nextId := t.nextId, limits := t.limits, roles := t.roles, teams := t.teams,
-    invitations := t.invitations }
+    invitations := t.invitations, automations := t.automations }
 
 /-- May `p` attempt a create on type `ty` (the spec's `canAttemptCreate`, WG-5665). -/
 def canAttemptCreateI (t : ITenant) (p : Principal) (ty : TypeId) : Bool :=

@@ -718,6 +718,7 @@ theorem redeem_ok_form (m m' : MTenant) (c : MCtx) (inv : InvitationId)
   cases hp : c.principal with
   | system => simp only [hp] at h; cases h
   | anonymous => simp only [hp] at h; cases h
+  | automation _ => simp only [hp] at h; cases h
   | user redeemer =>
     simp only [hp] at h
     cases hl : m.invitations.lookup inv with
@@ -773,6 +774,7 @@ theorem create_invitation_expiry (m m' : MTenant) (c : MCtx) (inv : InvitationId
   cases hp : c.principal with
   | system => simp only [hp] at h; repeat' split at h; all_goals cases h
   | anonymous => simp only [hp] at h; repeat' split at h; all_goals cases h
+  | automation _ => simp only [hp] at h; repeat' split at h; all_goals cases h
   | user creator =>
     simp only [hp] at h
     refine ⟨creator, rfl, ?_⟩
@@ -813,6 +815,7 @@ theorem revoked_not_redeemable (m m' : MTenant) (c : MCtx) (inv : InvitationId)
   cases hp : c.principal with
   | system => simp only [hp] at h; repeat' split at h; all_goals cases h
   | anonymous => simp only [hp] at h; repeat' split at h; all_goals cases h
+  | automation _ => simp only [hp] at h; repeat' split at h; all_goals cases h
   | user actor =>
     simp only [hp] at h
     cases hl : m.invitations.lookup inv with

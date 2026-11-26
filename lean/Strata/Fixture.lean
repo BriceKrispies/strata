@@ -183,6 +183,32 @@ def fixtureOperations : List (String × OpDef) :=
   [("note", opNote), ("note_count", opNoteCount), ("retag", opRetag), ("drop", opDrop),
    ("grant", opGrant), ("note_grant", opNoteGrant)]
 
+/-- The automations every scenario's tenants define (slice 15), for the tenant whose owner is `owner`: `1` runs as the
+    writers and is defined by the owner; `2` runs as the editors and carries a run key, the text of the deleted item;
+    `3` runs as `public`, which reads no record; `4` is a draft that starts no run. -/
+def fixtureAutomations (owner : PrincipalId) : List (Nat × AutomationDef) :=
+  [(1, { id := 1, runAs := [writerRole], definedBy := some owner }),
+   (2, { id := 2, runAs := [editorRole], definedBy := some owner,
+         runKey := some (.field .old 1) }),
+   (3, { id := 3, runAs := [publicRole], definedBy := some owner }),
+   (4, { id := 4, runAs := [writerRole], definedBy := some owner, state := .draft })]
+
+/-- The triggers every scenario's tenants define (slice 15): on an item created (`1`, the writers' automation), on a
+    part created whose hop is positive (`2`, condition on `param.hop`), on an item updated (`3`), on an item deleted
+    (`4`, the editors' automation with its run key), on a posting to unit 1 (`5`, the `public` automation, which
+    observes no record), on a ticket created (`6`, a draft automation), on a part updated and paused (`7`), and on an
+    item created whose third field is null (`8`). -/
+def fixtureTriggers : List (Nat × TriggerDef) :=
+  [(1, { id := 1, on := .recordCreated 1, automation := 1 }),
+   (2, { id := 2, on := .recordCreated 2, condition := some (.cmp .gt (.param "hop") (.lit (.int 0))),
+         automation := 1 }),
+   (3, { id := 3, on := .recordUpdated 1 none, automation := 1 }),
+   (4, { id := 4, on := .recordDeleted 1, automation := 2 }),
+   (5, { id := 5, on := .ledgerPosted 1, automation := 3 }),
+   (6, { id := 6, on := .recordCreated 4, automation := 4 }),
+   (7, { id := 7, on := .recordUpdated 2 none, automation := 2, paused := true }),
+   (8, { id := 8, on := .recordCreated 1, condition := some (.isNull (.field .new 3)), automation := 2 })]
+
 /-- The object types every scenario starts from, each tenant with an owner, an editor and two writers.
     Type `4` (the tickets, with the workflow) is part of the fixture too. The size limits are the kernel's. -/
 def initialTenant (n : Nat) : Tenant :=
@@ -202,7 +228,8 @@ def initialTenant (n : Nat) : Tenant :=
     -- setting's revision to one (the kernel's schema_change_effects), so the event sequence is 6 + 5 = 11.
     revision := 6, eventSeq := 11, schemaVersion := 3, settingDefs := fixtureSettings,
     settingRevs := fixtureSettings.map (fun d => (d.name, 1)), ledgerDecls := some fixtureLedgerDecls,
-    operations := fixtureOperations }
+    operations := fixtureOperations, triggers := fixtureTriggers,
+    automations := fixtureAutomations (n * 100) }
 
 /-- The fields an `update` line names for each object type: the item's fields, or the part's.
     A line that does not name one of them gives it `null`, so it replaces the record (`patch`

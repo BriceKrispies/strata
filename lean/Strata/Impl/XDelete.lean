@@ -309,7 +309,9 @@ theorem clearOne_ledger (ty : TypeId) (id : RecordId) (y : XTenant) (c : Cell) :
     (XTenant.clearOne ty id y c).core.ledgerDecls = y.core.ledgerDecls ∧
       (XTenant.clearOne ty id y c).core.ledger = y.core.ledger ∧
       (XTenant.clearOne ty id y c).core.ledgerPolicies = y.core.ledgerPolicies ∧
-      (XTenant.clearOne ty id y c).core.operations = y.core.operations := by
+      (XTenant.clearOne ty id y c).core.operations = y.core.operations ∧
+      (XTenant.clearOne ty id y c).core.triggers = y.core.triggers ∧
+      (XTenant.clearOne ty id y c).core.automations = y.core.automations := by
   unfold XTenant.clearOne
   rcases y with ⟨core, ux, cx, rx⟩
   dsimp only
@@ -319,15 +321,17 @@ theorem foldl_clearOne_ledger (ty : TypeId) (id : RecordId) (ds : List Cell) :
     ∀ y : XTenant, (ds.foldl (XTenant.clearOne ty id) y).core.ledgerDecls = y.core.ledgerDecls ∧
       (ds.foldl (XTenant.clearOne ty id) y).core.ledger = y.core.ledger ∧
       (ds.foldl (XTenant.clearOne ty id) y).core.ledgerPolicies = y.core.ledgerPolicies ∧
-      (ds.foldl (XTenant.clearOne ty id) y).core.operations = y.core.operations := by
+      (ds.foldl (XTenant.clearOne ty id) y).core.operations = y.core.operations ∧
+      (ds.foldl (XTenant.clearOne ty id) y).core.triggers = y.core.triggers ∧
+      (ds.foldl (XTenant.clearOne ty id) y).core.automations = y.core.automations := by
   induction ds with
-  | nil => intro y; exact ⟨rfl, rfl, rfl, rfl⟩
+  | nil => intro y; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
   | cons c ds ih =>
     intro y
     simp only [List.foldl_cons]
-    obtain ⟨h1, h2, h3, h4⟩ := ih (XTenant.clearOne ty id y c)
-    obtain ⟨g1, g2, g3, g4⟩ := clearOne_ledger ty id y c
-    exact ⟨h1.trans g1, h2.trans g2, h3.trans g3, h4.trans g4⟩
+    obtain ⟨h1, h2, h3, h4, h5, h6⟩ := ih (XTenant.clearOne ty id y c)
+    obtain ⟨g1, g2, g3, g4, g5, g6⟩ := clearOne_ledger ty id y c
+    exact ⟨h1.trans g1, h2.trans g2, h3.trans g3, h4.trans g4, h5.trans g5, h6.trans g6⟩
 
 
 theorem clearAll_cleared (ty : TypeId) (id : RecordId) (ds : List Cell) :
@@ -419,7 +423,8 @@ theorem ITenant.ext' (a b : ITenant) (h1 : a.types = b.types) (h2 : a.members = 
     (h11 : a.eventSeq = b.eventSeq) (h12 : a.schemaVersion = b.schemaVersion)
     (h13 : a.settingDefs = b.settingDefs) (h14 : a.overrides = b.overrides)
     (h15 : a.settingRevs = b.settingRevs) (h16 : a.ledgerDecls = b.ledgerDecls)
-    (h17 : a.ledger = b.ledger) (h18 : a.ledgerPolicies = b.ledgerPolicies) (h19 : a.operations = b.operations) : a = b := by
+    (h17 : a.ledger = b.ledger) (h18 : a.ledgerPolicies = b.ledgerPolicies) (h19 : a.operations = b.operations) (h20 : a.triggers = b.triggers)
+    (h21 : a.automations = b.automations) : a = b := by
   cases a; cases b; simp_all
 
 theorem getRec_delObjI (ty : TypeId) (id : RecordId) (j : TypeId) (o : IObj) (i : RecordId)
@@ -578,7 +583,9 @@ theorem deleteX_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
   · rw [← hy, (foldl_clearOne_ledger ty id _ x1).1, hx1core]; rfl
   · rw [← hy, (foldl_clearOne_ledger ty id _ x1).2.1, hx1core]; rfl
   · rw [← hy, (foldl_clearOne_ledger ty id _ x1).2.2.1, hx1core]; rfl
-  · rw [← hy, (foldl_clearOne_ledger ty id _ x1).2.2.2, hx1core]; rfl
+  · rw [← hy, (foldl_clearOne_ledger ty id _ x1).2.2.2.1, hx1core]; rfl
+  · rw [← hy, (foldl_clearOne_ledger ty id _ x1).2.2.2.2.1, hx1core]; rfl
+  · rw [← hy, (foldl_clearOne_ledger ty id _ x1).2.2.2.2.2, hx1core]; rfl
 
 theorem delete_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)

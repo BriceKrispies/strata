@@ -194,6 +194,7 @@ def writeSettingCore (t : Tenant) (p : Principal) (n : String) (lvl : SettingLev
   match p with
   | .system => .error .unauthorized
   | .anonymous => .error .unauthorized
+  | .automation _ => .error .unauthorized
   | .user u =>
     if lvl == .platform then .error .invalidIntent
     else if lvl == .tenant && !t.holdsCap p capWriteTenant then .error .unauthorized
@@ -238,7 +239,7 @@ namespace Strata
     type, counter, revision or sequence, so it decides the same on any tenant with these fields (slice 12). -/
 def Tenant.decisionView (t : Tenant) : Tenant :=
   { types := [], members := t.members, grants := t.grants, policies := t.policies, nextId := 0,
-    limits := t.limits, roles := t.roles, teams := t.teams, invitations := t.invitations,
+    limits := t.limits, roles := t.roles, teams := t.teams, invitations := t.invitations, automations := t.automations,
     settingDefs := t.settingDefs, overrides := t.overrides, settingRevs := t.settingRevs }
 
 /-- The write of one override on a tenant (the kernel's `write_setting`), decided on the tenant's decision view
@@ -275,6 +276,7 @@ theorem writeSettingCore_ok_auth {t t' : Tenant} {p : Principal} {n : String} {l
   cases p with
   | system => simp [writeSettingCore] at h
   | anonymous => simp [writeSettingCore] at h
+  | automation a => simp [writeSettingCore] at h
   | user u =>
     unfold writeSettingCore at h
     cases lvl <;> simp_all [Principal.userId?, subjectOf]

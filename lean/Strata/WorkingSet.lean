@@ -107,6 +107,10 @@ structure Header where
   /-- The operations of the schema (slice 14): an invocation decides from the header, the operation's
       definition and the tenant's object types, counter and ledger. -/
   operations : List (String × OpDef) := []
+  /-- The triggers and automations of the schema (slice 15): a principal's roles are those of its automation, which a
+      decision reads, so the header holds the automations; the triggers are carried with them. -/
+  triggers : List (Nat × TriggerDef) := []
+  automations : List (Nat × AutomationDef) := []
 
 def TypeHead.ofObj (o : ObjType) : TypeHead :=
   { schema := o.schema, uniques := o.uniques, constraints := o.constraints, workflows := o.workflows }
@@ -122,7 +126,7 @@ def _root_.Strata.Tenant.header (t : Tenant) : Header :=
     teams := t.teams, invitations := t.invitations, schemaVersion := t.schemaVersion,
     settingDefs := t.settingDefs, overrides := t.overrides, settingRevs := t.settingRevs,
     ledgerDecls := t.ledgerDecls, ledger := t.ledger, ledgerPolicies := t.ledgerPolicies,
-    operations := t.operations }
+    operations := t.operations, triggers := t.triggers, automations := t.automations }
 
 /-- A header as a tenant with no records, so the model's permission functions apply to it. They
     read neither records nor the counter. -/
@@ -132,7 +136,8 @@ def Header.asTenant (h : Header) : Tenant :=
     limits := h.limits, roles := h.roles, teams := h.teams, invitations := h.invitations,
     schemaVersion := h.schemaVersion, settingDefs := h.settingDefs, overrides := h.overrides,
     settingRevs := h.settingRevs, ledgerDecls := h.ledgerDecls, ledger := h.ledger,
-    ledgerPolicies := h.ledgerPolicies, operations := h.operations }
+    ledgerPolicies := h.ledgerPolicies, operations := h.operations, triggers := h.triggers,
+    automations := h.automations }
 
 /-- The records of each object type of a tenant, in the tenant's type order. -/
 def _root_.Strata.Tenant.tables (t : Tenant) : List (TypeId × Records) :=
@@ -2243,7 +2248,7 @@ def decideReqWS (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal) : Sys σ
   | some r =>
     match decideOn (reqGet sys.store r) r.tenant pr i with
     | .ok d =>
-      ({ sys with pending := upd sys.pending j (some ⟨⟨r.tenant, pr⟩, i, d, r.gen⟩),
+      ({ sys with pending := upd sys.pending j (some ⟨⟨r.tenant, pr, 0⟩, i, d, r.gen⟩),
                   req := upd sys.req j none }, .done)
     | .error e =>
       if sys.store.gen r.tenant = r.gen then
@@ -3139,7 +3144,7 @@ theorem decideReqWS_inv (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal) 
 theorem decideReq_refusal (sys : Sys σ) (j : Slot) (i : Intent) (pr : Principal) (e : Err)
     (hr : ReqOk sys.req sys.store) (hres : (decideReqWS sys j i pr).2 = .result (.error e)) :
     ∃ r, sys.req j = some r ∧ sys.store.gen r.tenant = r.gen ∧
-      step sys.store.world i ⟨r.tenant, pr⟩ = .error e := by
+      step sys.store.world i ⟨r.tenant, pr, 0⟩ = .error e := by
   unfold decideReqWS at hres
   split at hres
   · simp at hres
@@ -3564,7 +3569,7 @@ def StepFaithful (sys : Sys σ) (op : Op) (r : Sys σ × Outcome) : Prop :=
   (∀ j i c e, op = .decide j i c → r.2 = .result (.error e) → step sys.store.world i c = .error e) ∧
   (∀ j i pr e, op = .decideReq j i pr → r.2 = .result (.error e) →
     ∃ rq, sys.req j = some rq ∧ sys.store.gen rq.tenant = rq.gen ∧
-      step sys.store.world i ⟨rq.tenant, pr⟩ = .error e) ∧
+      step sys.store.world i ⟨rq.tenant, pr, 0⟩ = .error e) ∧
   (r.1.store.world = sys.store.world ∨
     (∃ j p, (op = .submit j ∨ op = .submitLost j) ∧ sys.pending j = some p ∧
       step sys.store.world p.intent p.ctx = .ok r.1.store.world) ∨

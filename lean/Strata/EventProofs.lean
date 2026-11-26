@@ -1,10 +1,12 @@
 /-
-Events, revisions and effects (slice 9): the properties of `Strata.transition`.
+Events, revisions and effects (slices 9 and 15): the properties of `Strata.transition`.
 
 An accepted transition against a tenant that exists is the step of `stepTenant` with the tenant committed
 (`commitT`: the revision raised by one, the event sequence by the events, the schema version by a schema change),
-and the events the kernel emits for the intent, numbered after the sequence, one `Publish` effect per event in
-order. A refused step has no transition, so it emits no event and leaves the revision where it was.
+and the events the kernel emits for the intent, numbered after the sequence, followed by the suspensions of the
+automations whose definer lost authority when the intent changes authority (`suspensionsOf`, empty otherwise). The
+effects are one `Publish` per event in order, followed by the trigger effects (`triggerEffects`). A refused step has
+no transition, so it emits no event and leaves the revision where it was.
 -/
 
 import Strata.Model
@@ -14,19 +16,44 @@ import Strata.References
 
 namespace Strata
 
+/-- The suspensions an accepted intent makes on the tenant it decided, as the transition emits them: none unless the
+    intent changes authority (the schema or the members), and then the automations whose definer lost it. -/
+def suspensionsOf (t : Tenant) (i : Intent) : List EventBody :=
+  if i.changesAuthority then (suspendLost t).2 else []
+
+/-- An intent that does not change authority suspends nothing. -/
+theorem suspensionsOf_of_not_changes {t : Tenant} {i : Intent} (h : i.changesAuthority = false) :
+    suspensionsOf t i = [] := by
+  unfold suspensionsOf
+  rw [if_neg (by simp [h])]
+
+/-- The publish effects of an accepted step's events come first among its effects, in order. -/
+theorem afterStep_take (t t₁ : Tenant) (p : Principal) (i : Intent) (hop : Nat) :
+    List.take (afterStep t t₁ p i hop).2.1.length (afterStep t t₁ p i hop).2.2 =
+      (afterStep t t₁ p i hop).2.1.map (fun e => Effect.publish e.seq) := by
+  unfold afterStep
+  dsimp only
+  exact List.take_left' (by simp)
+
 /-- An accepted transition is a step: its world is the committed world, its events the events of the step, its
-    effects one `Publish` per event. -/
+    effects one `Publish` per event (followed by the trigger effects). -/
 theorem transition_ok {w : World} {i : Intent} {c : Ctx} {tr : Transition}
     (h : transition w i c = .ok tr) :
-    ∃ w', step w i c = .ok w' ∧ tr.world = commitWorld w w' c i ∧
-      tr.events = stepEvents w tr.world c i ∧ tr.effects = tr.events.map (fun e => .publish e.seq) := by
+    ∃ w', step w i c = .ok w' ∧
+      tr.effects.take tr.events.length = tr.events.map (fun e => .publish e.seq) := by
   unfold transition at h
   cases hs : step w i c with
-  | error e => simp [hs] at h
+  | error e =>
+    simp only [hs] at h
+    cases h
   | ok w' =>
-    simp only [hs, Except.ok.injEq] at h
-    subst h
-    exact ⟨w', rfl, rfl, rfl, rfl⟩
+    refine ⟨w', rfl, ?_⟩
+    simp only [hs] at h
+    split at h
+    · cases h
+      exact afterStep_take _ _ _ _ _
+    · cases h
+      exact List.take_of_length_le (by simp)
 
 /-- A refused step has no transition, so it emits no event and changes no state. -/
 theorem transition_refused {w : World} {i : Intent} {c : Ctx} {e : Err}
@@ -42,28 +69,46 @@ theorem eventBodies_commit (t t' : Tenant) (p : Principal) (i : Intent) :
     | rfl
     | simp [eventBodies, commitT, Intent.line, Tenant.recordAt, Tenant.typ?, Tenant.env, Intent.touched]
 
-/-- An accepted step against a tenant that exists: the tenant it wrote, committed, and the events of the intent,
-    numbered after the tenant's event sequence and committed at the next revision. -/
+/-- The events an accepted step against a tenant emits, as `afterStep` numbers them. -/
+theorem afterStep_events (t t₁ : Tenant) (p : Principal) (i : Intent) (hop : Nat) :
+    (afterStep t t₁ p i hop).2.1 = numberEvents (t.eventSeq + 1) (t.revision + 1) p 0
+      (eventBodies t p i t₁ ++ suspensionsOf t₁ i) := by
+  unfold afterStep suspensionsOf
+  cases h : i.changesAuthority <;> simp [h, commitT]
+
+/-- The tenant an accepted step against a tenant writes is at the next revision. -/
+theorem afterStep_revision (t t₁ : Tenant) (p : Principal) (i : Intent) (hop : Nat) :
+    (afterStep t t₁ p i hop).1.revision = t.revision + 1 := by
+  unfold afterStep
+  simp [commitT]
+
+/-- An accepted step against a tenant that exists: the step of `stepTenant` on it, and the events of the intent,
+    numbered after the tenant's event sequence and committed at the next revision, followed by the suspensions the
+    intent makes (`suspensionsOf`). The committed tenant has the next revision. -/
 theorem transition_existing {w : World} {i : Intent} {c : Ctx} {tr : Transition} {t : Tenant}
     (h : transition w i c = .ok tr) (ht : w c.tenant = some t) :
-    ∃ t₁, stepTenant t c.principal i = .ok t₁ ∧ tr.world c.tenant = some (commitT t t₁ c.principal i) ∧
+    ∃ t₁, stepTenant t c.principal i = .ok t₁ ∧
+      (∃ tf, tr.world c.tenant = some tf ∧ tf.revision = t.revision + 1) ∧
       tr.events = numberEvents (t.eventSeq + 1) (t.revision + 1) c.principal 0
-        (eventBodies t c.principal i t₁) := by
-  obtain ⟨w', hs, hw, hev, -⟩ := transition_ok h
-  rcases step_cases hs with ⟨t₂, t₁, ht₂, hst, hw'⟩ | ⟨_, _, _, hnone, _⟩
-  · have heq : t₂ = t := Option.some.inj (ht₂.symm.trans ht)
-    rw [heq] at hst
-    subst hw'
-    have hc : commitWorld w (fun x => if x = c.tenant then some t₁ else w x) c i c.tenant
-        = some (commitT t t₁ c.principal i) := by simp [commitWorld, ht]
-    refine ⟨t₁, hst, ?_, ?_⟩
-    · rw [hw]; exact hc
-    · rw [hev, hw]
-      simp only [stepEvents, ht, hc]
-      rw [eventBodies_commit]
-      rfl
-  · rw [hnone] at ht
-    cases ht
+        (eventBodies t c.principal i t₁ ++ suspensionsOf t₁ i) := by
+  unfold transition at h
+  cases hs : step w i c with
+  | error e =>
+    simp only [hs] at h
+    cases h
+  | ok w' =>
+    simp only [hs] at h
+    obtain ⟨t₁, hst, hw'⟩ : ∃ t₁, stepTenant t c.principal i = .ok t₁ ∧ w' c.tenant = some t₁ := by
+      rcases step_cases hs with ⟨t₂, t₁, ht₂, hst, hw'⟩ | ⟨_, _, _, hnone, _⟩
+      · rw [ht] at ht₂
+        cases ht₂
+        exact ⟨t₁, hst, by rw [hw']; simp⟩
+      · rw [ht] at hnone
+        cases hnone
+    rw [hw', ht] at h
+    cases h
+    refine ⟨t₁, hst, ⟨_, by simp, afterStep_revision t t₁ c.principal i c.hop⟩, ?_⟩
+    simp only [afterStep_events]
 
 /-- The numbering of a list of events: the `k`-th is `s + k`, so the sequence numbers are consecutive. -/
 theorem numberEvents_map_seq (s r : Nat) (p : Principal) :
@@ -98,19 +143,20 @@ theorem transition_seqs {w : World} {i : Intent} {c : Ctx} {tr : Transition} {t 
   obtain ⟨t₁, -, -, hev⟩ := transition_existing h ht
   rw [hev, numberEvents_map_seq, numberEvents_length]
 
-/-- An accepted step publishes each of its events, in order, with one `Publish` effect per event. -/
+/-- An accepted step publishes each of its events, in order, with one `Publish` effect per event; the trigger effects
+    follow them. -/
 theorem transition_publish {w : World} {i : Intent} {c : Ctx} {tr : Transition}
     (h : transition w i c = .ok tr) :
-    tr.effects = tr.events.map (fun e => .publish e.seq) := by
-  obtain ⟨-, -, -, -, he⟩ := transition_ok h
+    tr.effects.take tr.events.length = tr.events.map (fun e => .publish e.seq) := by
+  obtain ⟨-, -, he⟩ := transition_ok h
   exact he
 
 /-- An accepted step against a tenant that exists raises its revision by exactly one. -/
 theorem transition_revision {w : World} {i : Intent} {c : Ctx} {tr : Transition} {t : Tenant}
     (h : transition w i c = .ok tr) (ht : w c.tenant = some t) :
     ∃ t', tr.world c.tenant = some t' ∧ t'.revision = t.revision + 1 := by
-  obtain ⟨t₁, -, hw, -⟩ := transition_existing h ht
-  exact ⟨_, hw, rfl⟩
+  obtain ⟨t₁, -, ⟨tf, hw, hr⟩, -⟩ := transition_existing h ht
+  exact ⟨tf, hw, hr⟩
 
 /-- An accepted step against no tenant creates the tenant at revision 1, with its one `TenantCreated` event as the
     first of its sequence. -/
@@ -118,19 +164,20 @@ theorem transition_created {w : World} {owner : PrincipalId} {name : String} {c 
     (h : transition w (.createTenant owner name) c = .ok tr) (hw : w c.tenant = none) :
     tr.world c.tenant = some (genesisTenant owner) ∧
       tr.events = [{ seq := 1, revision := 1, principal := c.principal, body := .tenantCreated name }] := by
-  obtain ⟨w', hs, hwt, hev, -⟩ := transition_ok h
-  rcases step_cases hs with ⟨t₂, t₁, ht₂, -, -⟩ | ⟨o, n, hi, -, hw'⟩
-  · rw [hw] at ht₂; cases ht₂
-  · cases hi
-    subst hw'
-    have hc : commitWorld w (fun x => if x = c.tenant then some (genesisTenant owner) else w x) c
-        (.createTenant owner name) c.tenant = some (genesisTenant owner) := by
-      simp [commitWorld, hw]
-    refine ⟨?_, ?_⟩
-    · rw [hwt]; exact hc
-    · rw [hev, hwt]
-      simp only [stepEvents, hw, hc]
-      simp [genesisTenant]
+  unfold transition at h
+  cases hs : step w (.createTenant owner name) c with
+  | error e => simp [hs] at h
+  | ok w' =>
+    rcases step_cases hs with ⟨t₂, t₁, ht₂, -, -⟩ | ⟨o, n, hi, -, hw'⟩
+    · rw [hw] at ht₂
+      cases ht₂
+    · cases hi
+      subst hw'
+      simp only [hs, hw] at h
+      cases h
+      refine ⟨?_, ?_⟩
+      · simp [commitWorld, hw]
+      · simp [stepEvents, commitWorld, hw, genesisTenant]
 
 /-- The object type an accepted record intent names has a definition in the tenant it addresses. -/
 theorem typ_of_stepTenant_create {t t₁ : Tenant} {p : Principal} {ty : TypeId} {fs : Fields}
@@ -152,7 +199,7 @@ theorem transition_create {w : World} {ty : TypeId} {fs : Fields} {c : Ctx} {tr 
     rw [ht1]; exact typ?_putType_self t ty o _ hT
   have hr : t₁.recordAt ty t.nextId = some r := by
     unfold Tenant.recordAt; rw [hk]; simp
-  rw [hev]
+  rw [hev, suspensionsOf_of_not_changes (i := .create ty fs) rfl]
   simp [eventBodies, hr, numberEvents]
 
 /-- An accepted update emits exactly one `RecordUpdated` event: the record as stored before, the record as stored
@@ -174,7 +221,7 @@ theorem transition_update {w : World} {ty : TypeId} {id : RecordId} {fs : Fields
   obtain ⟨r, -, hr, -⟩ := update_writes_fired hT hl hst
   have hold : t.recordAt ty id = some old := by simp [Tenant.recordAt, hT, hl]
   refine ⟨old, r, hold, ?_⟩
-  rw [hev]
+  rw [hev, suspensionsOf_of_not_changes (i := .update ty id fs ev) rfl]
   simp [eventBodies, hold, hr, hT, numberEvents]
 
 /-- The record a delete removes is stored, so the delete's events are read from it. -/
@@ -199,21 +246,21 @@ theorem transition_delete {w : World} {ty : TypeId} {id : RecordId} {ev : Option
   obtain ⟨t₁, hst, -, hev⟩ := transition_existing h ht
   obtain ⟨old, hold⟩ := stored_of_stepTenant_delete hst
   refine ⟨old, hold, ?_, ?_⟩
-  · rw [hev, numberEvents_length]
-    simp only [eventBodies, hold, referrerEvents, List.length_append, List.length_map, List.length_mergeSort, List.length_singleton]
-  · rw [hev]
-    simp only [eventBodies, hold]
+  · rw [hev, suspensionsOf_of_not_changes (i := .delete ty id ev) rfl, numberEvents_length]
+    simp only [eventBodies, hold, referrerEvents, suspensionsOf, Intent.changesAuthority, Intent.changesSchema, Intent.isSchema, List.append_nil, List.length_append, List.length_map, List.length_mergeSort, List.length_singleton]
+  · rw [hev, suspensionsOf_of_not_changes (i := .delete ty id ev) rfl]
+    simp only [eventBodies, hold, suspensionsOf, Intent.changesAuthority, Intent.changesSchema, Intent.isSchema, List.append_nil]
 
 /-- An accepted schema change of a field's required flag emits one `SchemaChanged` event: the version it made, the
     field it changed, and the number of records of the touched types that violate the schema now (the kernel's
-    `grandfathered`: the records a lax change keeps). -/
+    `grandfathered`: the records a lax change keeps). The suspensions of automations that lost authority follow it. -/
 theorem transition_setRequired {w : World} {ty : TypeId} {f : FieldId} {strict : Bool} {c : Ctx}
     {tr : Transition} {t : Tenant}
     (h : transition w (.setRequired ty f strict) c = .ok tr) (ht : w c.tenant = some t) :
-    ∃ t₁, stepTenant t c.principal (.setRequired ty f strict) = .ok t₁ ∧
-      tr.events = [{ seq := t.eventSeq + 1, revision := t.revision + 1, principal := c.principal, body := .schemaChanged (t.schemaVersion + 1) [.field ty f] (violatedCount t.limits (scopedTypes t₁.types (Intent.touched t (.setRequired ty f strict))) t₁.env) }] := by
+    ∃ t₁, stepTenant t c.principal (.setRequired ty f strict) = .ok t₁ ∧ ∃ rest : List DomainEvent,
+      tr.events = { seq := t.eventSeq + 1, revision := t.revision + 1, principal := c.principal, body := .schemaChanged (t.schemaVersion + 1) [.field ty f] (violatedCount t.limits (scopedTypes t₁.types (Intent.touched t (.setRequired ty f strict))) t₁.env) } :: rest := by
   obtain ⟨t₁, hst, -, hev⟩ := transition_existing h ht
-  refine ⟨t₁, hst, ?_⟩
+  refine ⟨t₁, hst, numberEvents (t.eventSeq + 1) (t.revision + 1) c.principal 1 (suspensionsOf t₁ (.setRequired ty f strict)), ?_⟩
   rw [hev]
   simp [eventBodies, Intent.line, numberEvents]
 
