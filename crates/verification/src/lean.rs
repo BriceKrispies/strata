@@ -1818,6 +1818,186 @@ fn set_fixture_ledger(world: &mut World, tenant: &TenantId) {
     Arc::make_mut(&mut state.schema).ledger = Some(fixture_ledger_decls());
 }
 
+/// The number of an automation: the digits after the `w` of its id `w<number>`.
+fn automation_number(automation: &WorkflowId) -> u64 {
+    automation.as_str()[1..]
+        .parse()
+        .expect("fixture automations are w<number>")
+}
+
+/// The number of a trigger: the digits after the `t` of its id `t<number>`.
+fn trigger_number(trigger: &TriggerId) -> u64 {
+    trigger.as_str()[1..]
+        .parse()
+        .expect("fixture triggers are t<number>")
+}
+
+/// Automation `n` of the fixture (slice 15): the id `w<n>`, one step that ends, run as the roles given by
+/// number, defined by the owner, with the run key and the state given.
+fn fixture_automation(
+    n: u64,
+    owner: u64,
+    roles: &[u64],
+    run_key: Option<Expr>,
+    state: Option<AutomationState>,
+) -> AutomationDef {
+    let done = StepName::new("done").expect("the step name is valid");
+    AutomationDef {
+        id: WorkflowId::new(format!("w{n}")).expect("the automation id is valid"),
+        label: format!("Automation {n}"),
+        run_as: RunAs {
+            roles: roles.iter().map(|&r| role_id(r)).collect(),
+        },
+        run_key,
+        start: done.clone(),
+        steps: BTreeMap::from([(
+            done,
+            AutomationStepDef {
+                action: AutomationStep::End,
+                next: None,
+                retry: None,
+                timeout: None,
+                compensate: None,
+            },
+        )]),
+        defined_by: Some(principal_id(owner)),
+        defined_at: None,
+        suspended_for: None,
+        state,
+    }
+}
+
+/// Trigger `n` of the fixture (slice 15), starting automation `automation` and defined by the owner.
+fn fixture_trigger(
+    n: u64,
+    on: TriggerEvent,
+    condition: Option<Expr>,
+    automation: u64,
+    paused: Option<bool>,
+    owner: u64,
+) -> TriggerDef {
+    TriggerDef {
+        id: TriggerId::new(format!("t{n}")).expect("the trigger id is valid"),
+        on,
+        condition,
+        automation: WorkflowId::new(format!("w{automation}")).expect("the automation id is valid"),
+        paused,
+        defined_by: Some(principal_id(owner)),
+        defined_at: None,
+    }
+}
+
+/// The automations of the fixture (slice 15), as the model's `fixtureAutomations` lists them: `1` runs as
+/// the writers, `2` as the editors with the run key of field `1` of the old record, `3` as `public` and
+/// `4` as the writers in the draft state.
+fn fixture_automation_changes(owner: u64) -> Vec<SchemaChange> {
+    vec![
+        SchemaChange::DefineAutomation(fixture_automation(1, owner, &[3], None, None)),
+        SchemaChange::DefineAutomation(fixture_automation(
+            2,
+            owner,
+            &[2],
+            Some(Expr::Var(Scope::Old, field_id(1).as_str().into())),
+            None,
+        )),
+        SchemaChange::DefineAutomation(fixture_automation(3, owner, &[1], None, None)),
+        SchemaChange::DefineAutomation(fixture_automation(
+            4,
+            owner,
+            &[3],
+            None,
+            Some(AutomationState::Draft),
+        )),
+    ]
+}
+
+/// The triggers of the fixture (slice 15), as the model's `fixtureTriggers` lists them.
+fn fixture_trigger_changes(owner: u64) -> Vec<SchemaChange> {
+    let hop_positive = Expr::Cmp(
+        CmpOp::Gt,
+        Box::new(Expr::Param("hop".into())),
+        Box::new(Expr::Lit(Value::Int(0))),
+    );
+    let third_null = Expr::IsNull(Box::new(Expr::Var(
+        Scope::New,
+        field_id(3).as_str().into(),
+    )));
+    vec![
+        SchemaChange::DefineTrigger(fixture_trigger(
+            1,
+            TriggerEvent::RecordCreated { object: item() },
+            None,
+            1,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            2,
+            TriggerEvent::RecordCreated { object: part() },
+            Some(hop_positive),
+            1,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            3,
+            TriggerEvent::RecordUpdated {
+                object: item(),
+                transition: None,
+            },
+            None,
+            1,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            4,
+            TriggerEvent::RecordDeleted { object: item() },
+            None,
+            2,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            5,
+            TriggerEvent::LedgerPosted {
+                unit: ledger_unit(1),
+            },
+            None,
+            3,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            6,
+            TriggerEvent::RecordCreated { object: ticket() },
+            None,
+            4,
+            None,
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            7,
+            TriggerEvent::RecordUpdated {
+                object: part(),
+                transition: None,
+            },
+            None,
+            2,
+            Some(true),
+            owner,
+        )),
+        SchemaChange::DefineTrigger(fixture_trigger(
+            8,
+            TriggerEvent::RecordCreated { object: item() },
+            Some(third_null),
+            2,
+            None,
+            owner,
+        )),
+    ]
+}
+
 /// The kernel world that corresponds to the model's `initialWorld`.
 fn initial_world() -> World {
     let mut world = World::default();
@@ -2024,6 +2204,9 @@ fn initial_world() -> World {
         // The operations (slice 14), in the same batch too. Their posting steps name ledger unit `1`, which the batch is
         // checked against, so the ledger is declared before it (and again after it, below).
         changes.extend(fixture_operations());
+        // The automations, then the triggers that start them (slice 15), in the same batch.
+        changes.extend(fixture_automation_changes(owner));
+        changes.extend(fixture_trigger_changes(owner));
         world = run(
             &world,
             principal(owner),
@@ -2728,6 +2911,16 @@ fn event_text(event: &DomainEvent, changes: &[SchemaChange]) -> String {
             entry_sequence,
             ledger_text(reason)
         ),
+        EventBody::AutomationSuspended {
+            automation,
+            definer,
+            role,
+        } => format!(
+            "automation-suspended automation={} definer={} role={}",
+            automation_number(automation),
+            user_number(definer),
+            role_number(role)
+        ),
         // The model has no such event. The line does not start with `event `, so a kernel that emits one
         // makes the comparison fail instead of being hidden by the filter of `outcome_lines`.
         _ => format!("unmodelled event seq={}", event.seq),
@@ -3007,6 +3200,62 @@ fn aggregate_lines(result: &Result<AggregateResult, DomainError>) -> Vec<String>
     }
 }
 
+/// An automation start as the model's `showEffect` prints it: the trigger, the automation, the event and its
+/// hop, the automation as the caused-by principal, the definer (`p<n>`, or `-`), the definition version, the
+/// run key (or `-`) and the parameters by name (or `-`). The parameter `at` is not bound by the model, so it
+/// is left out.
+fn start_text(start: &AutomationStart) -> String {
+    let params: Vec<String> = start
+        .params
+        .iter()
+        .filter(|(name, _)| name.as_str() != "at")
+        .map(|(name, value)| format!("{name}={}", show_value(value)))
+        .collect();
+    let params = if params.is_empty() {
+        "-".to_string()
+    } else {
+        params.join(",")
+    };
+    let on_behalf_of = start
+        .on_behalf_of
+        .as_ref()
+        .map_or_else(|| "-".to_string(), |p| p.as_str().to_string());
+    format!(
+        "effect start-automation trigger={} automation={} event={} hop={} caused-by=automation:{} on-behalf-of={on_behalf_of} definition={} run-key={} params={params}",
+        trigger_number(&start.trigger),
+        automation_number(&start.automation),
+        start.event_seq,
+        start.hop,
+        automation_number(&start.automation),
+        start.definition_version.0,
+        start.run_key.as_deref().unwrap_or("-"),
+    )
+}
+
+/// An automation decline as the model's `showEffect` prints it: the trigger, the automation, the event and
+/// its hop, and the reason in kebab case. The decline's detail text is not printed.
+fn decline_text(decline: &AutomationDecline) -> String {
+    format!(
+        "effect decline-automation trigger={} automation={} event={} hop={} reason={}",
+        trigger_number(&decline.trigger),
+        automation_number(&decline.automation),
+        decline.event_seq,
+        decline.hop,
+        decline.reason.as_str()
+    )
+}
+
+/// The output line of a kernel effect that the model prints: `effect publish` for a publish, and the run or
+/// the decline of a trigger. The kernel's other effects are not in the model and print nothing.
+fn effect_text(effect: &Effect) -> Option<String> {
+    match effect {
+        Effect::Publish { seq } => Some(format!("effect publish {seq}")),
+        Effect::StartAutomation(start) => Some(start_text(start)),
+        Effect::DeclineAutomation(decline) => Some(decline_text(decline)),
+        _ => None,
+    }
+}
+
 /// Run a scenario file through the Rust kernel and print what the Lean program prints.
 pub fn kernel_output(scenarios: &str) -> String {
     let initial = initial_world();
@@ -3028,6 +3277,20 @@ pub fn kernel_output(scenarios: &str) -> String {
                 world = initial.clone();
             }
             ["op", tenant, who, after_who @ ..] => {
+                // An optional `hop=<n>` token, right after the principal, gives the hop of the event that caused
+                // the intent (slice 15). Without it the hop is none. A hop that is not a number leaves the line unparsed.
+                let (hop, after_who): (Option<u32>, &[&str]) = match after_who {
+                    [token, more @ ..] if token.starts_with("hop=") => {
+                        match token[4..].parse::<u32>() {
+                            Ok(n) => (Some(n), more),
+                            Err(_) => {
+                                out.push(format!("unparsed {line}"));
+                                continue;
+                            }
+                        }
+                    }
+                    _ => (None, after_who),
+                };
                 let (object, rest): (ObjectTypeId, &[&str]) = match after_who {
                     ["type", ty, tail @ ..] => (object_of(ty.parse().expect("object type")), tail),
                     _ => (item(), after_who),
@@ -3042,7 +3305,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                     verified_address: None,
                     idempotency_key: None,
                     language: None,
-                    hop: None,
+                    hop,
                     agent: None,
                 };
                 let intent = match rest {
@@ -3197,8 +3460,7 @@ pub fn kernel_output(scenarios: &str) -> String {
                     Ok((next, transition)) => {
                         world = next;
                         // As the model prints an accepted step: `ok`, the tenant's revision after it, each
-                        // event, then one `effect publish` per event. The kernel's other effects are not
-                        // modelled and are not printed.
+                        // event, then the publish effects, then the trigger effects in the kernel's order.
                         out.push("ok".to_string());
                         let revision = world.tenants.get(&ctx.tenant).map_or(0, |t| t.revision.0);
                         out.push(format!("revision {revision}"));
@@ -3212,10 +3474,20 @@ pub fn kernel_output(scenarios: &str) -> String {
                                 .iter()
                                 .map(|event| event_text(event, &changes)),
                         );
-                        out.extend(transition.effects.iter().filter_map(|effect| match effect {
-                            Effect::Publish { seq } => Some(format!("effect publish {seq}")),
-                            _ => None,
-                        }));
+                        out.extend(
+                            transition
+                                .effects
+                                .iter()
+                                .filter(|effect| matches!(effect, Effect::Publish { .. }))
+                                .filter_map(effect_text),
+                        );
+                        out.extend(
+                            transition
+                                .effects
+                                .iter()
+                                .filter(|effect| !matches!(effect, Effect::Publish { .. }))
+                                .filter_map(effect_text),
+                        );
                     }
                     Err(error) => out.push(format!("err {}", show_error(error.kind))),
                 }

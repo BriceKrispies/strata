@@ -97,6 +97,9 @@ pub struct Op {
     /// a type the tenant does not have. Rendered as `type <n>` unless it is `1`.
     pub object: u64,
     pub kind: OpKind,
+    /// The hop of the event that caused the intent, rendered as `hop=<n>` right after the principal. `None` writes no
+    /// token, which the model and the kernel read as hop zero.
+    pub hop: Option<u64>,
 }
 
 /// The intents, with fields as `(field number, value token)` (`s:oak`, `i:3`, `b:1`, `n`,
@@ -181,11 +184,13 @@ fn expected_text(expected: Option<u64>) -> String {
 
 impl Op {
     pub fn render(&self) -> String {
+        // The hop token comes right after the principal, before any `type <n>`. Reads do not use the head.
+        let hop = self.hop.map_or(String::new(), |n| format!(" hop={n}"));
         let head = if self.object == 1 {
-            format!("op {} {}", self.tenant, self.principal.token())
+            format!("op {} {}{hop}", self.tenant, self.principal.token())
         } else {
             format!(
-                "op {} {} type {}",
+                "op {} {}{hop} type {}",
                 self.tenant,
                 self.principal.token(),
                 self.object
@@ -854,6 +859,7 @@ fn member_ops(rng: &mut Lcg, ms: &mut Members) -> Vec<Op> {
     let home = home_of(tenant);
     let mut ops = Vec::new();
     let mk = |principal: Caller, kind: OpKind| Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -877,6 +883,7 @@ fn member_ops(rng: &mut Lcg, ms: &mut Members) -> Vec<Op> {
         };
         ms.created3 |= at == 3 && who == Caller::System && owner < RESERVED_USER && name != "s:_";
         ops.push(Op {
+            hop: None,
             tenant: at,
             principal: who,
             object: 1,
@@ -1105,6 +1112,7 @@ fn ticket_op(rng: &mut Lcg) -> Op {
         _ => OpKind::Delete(1 + rng.below(3), expected_version(rng, 1)),
     };
     Op {
+        hop: None,
         tenant,
         principal: Caller::User(principal),
         object: 4,
@@ -1169,6 +1177,7 @@ pub fn generate(seed: u64) -> Scenario {
         if tenant != 3 && rng.below(10) == 0 {
             let first = created[t] + 1;
             let owner = |kind| Op {
+                hop: None,
                 tenant,
                 principal: Caller::User(home),
                 object: 1,
@@ -1357,6 +1366,7 @@ pub fn generate(seed: u64) -> Scenario {
             _ => Caller::User(principal),
         };
         ops.push(Op {
+            hop: None,
             tenant,
             principal: caller,
             object,
@@ -1510,6 +1520,7 @@ fn schema_op(
     changes: Vec<String>,
 ) -> Op {
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -1583,6 +1594,7 @@ fn schema_script(rng: &mut Lcg) -> Vec<Op> {
     let ty = rng.pick(&NEW_TYPES);
     let on = |changes: Vec<String>, strict: bool| schema_op(tenant, owner, None, strict, changes);
     let create_in = |object: u64, fields: Vec<(u64, String)>| Op {
+        hop: None,
         tenant,
         principal: owner,
         object,
@@ -1590,6 +1602,7 @@ fn schema_script(rng: &mut Lcg) -> Vec<Op> {
     };
     let item = |fields: Vec<(u64, String)>| create_in(1, fields);
     let patch_item = |id: u64, fields: Vec<(u64, String)>| Op {
+        hop: None,
         tenant,
         principal: owner,
         object: 1,
@@ -1667,6 +1680,7 @@ fn schema_script(rng: &mut Lcg) -> Vec<Op> {
                 true,
             ),
             Op {
+                hop: None,
                 tenant,
                 principal: owner,
                 object: 1,
@@ -1831,6 +1845,7 @@ fn read_op(rng: &mut Lcg) -> Op {
                 .collect(),
         };
         return Op {
+            hop: None,
             tenant,
             principal,
             object,
@@ -1863,6 +1878,7 @@ fn read_op(rng: &mut Lcg) -> Op {
         _ => {}
     }
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -1936,6 +1952,7 @@ fn search_op(rng: &mut Lcg) -> Op {
         _ => {}
     }
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -1975,6 +1992,7 @@ fn aggregate_op(rng: &mut Lcg) -> Op {
         _ => {}
     }
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -2125,6 +2143,7 @@ fn setting_write_op(rng: &mut Lcg, guess: &mut SettingGuess) -> Op {
         guess.held.remove(&key);
     }
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -2141,6 +2160,7 @@ fn setting_read_op(rng: &mut Lcg) -> Op {
     };
     let principal = read_caller(rng, home_of(tenant));
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -2157,12 +2177,14 @@ fn setting_team_setup(rng: &mut Lcg) -> Vec<Op> {
     let member = home + rng.below(4);
     vec![
         Op {
+            hop: None,
             tenant,
             principal: Caller::User(home),
             object: 1,
             kind: OpKind::Team(team, "s:ops".to_string()),
         },
         Op {
+            hop: None,
             tenant,
             principal: Caller::User(home),
             object: 1,
@@ -2317,6 +2339,7 @@ fn ledger_post_op(rng: &mut Lcg) -> Op {
     let month = rng.below(12);
     let now = ledger_time(rng, month);
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -2418,6 +2441,7 @@ fn ledger_tx_op(rng: &mut Lcg) -> Op {
     let month = rng.below(12);
     let now = ledger_time(rng, month);
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -2445,6 +2469,7 @@ fn ledger_tx_repeat(rng: &mut Lcg, op: &Op, now: i64, header: &str, legs: &[Stri
         })
         .collect();
     Op {
+        hop: None,
         tenant: op.tenant,
         principal: op.principal,
         object: op.object,
@@ -2474,6 +2499,7 @@ fn ledger_expire_op(rng: &mut Lcg) -> Op {
     let now = ledger_time(rng, month);
     let cutoff = LEDGER_MONTHS[rng.below(10) as usize];
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -2509,6 +2535,7 @@ fn ledger_read_op(rng: &mut Lcg) -> Op {
     let scope = if rng.below(6) == 0 { "s1" } else { "" }.to_string();
     let own = rng.below(3) == 0;
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -2535,6 +2562,7 @@ fn ledger_repeat(rng: &mut Lcg, op: &Op, now: i64, postings: &[String]) -> Op {
         })
         .collect();
     Op {
+        hop: None,
         tenant: op.tenant,
         principal: op.principal,
         object: op.object,
@@ -2657,6 +2685,7 @@ fn invoke_op(rng: &mut Lcg) -> Op {
     let month = rng.below(12);
     let now = ledger_time(rng, month);
     Op {
+        hop: None,
         tenant,
         principal,
         object: 1,
@@ -2675,6 +2704,7 @@ fn with_invokes(seed: u64, mut ops: Scenario) -> Scenario {
         let op = invoke_op(&mut rng);
         let again = match &op.kind {
             OpKind::Invoke(now, operation, key, inputs) if rng.below(4) == 0 => Some(Op {
+                hop: None,
                 kind: OpKind::Invoke(
                     *now + 3_600_000,
                     operation.clone(),
@@ -2796,15 +2826,162 @@ pub const LEDGER_KINDS: &[&str] = &[
     "read-ledger err not_found",
 ];
 
+// ---------------------------------------------------------------------------------------------
+// Triggers and automations (slice 15)
+// ---------------------------------------------------------------------------------------------
+
+/// The hop of a generated operation (slice 15): most operations name none (hop zero), some name a hop within the
+/// limit, and one in twenty names one past it (9 or 10), which declines the triggers that fire on the operation.
+fn hop_token(rng: &mut Lcg) -> Option<u64> {
+    match rng.below(20) {
+        0..=11 => None,
+        12..=15 => Some(0),
+        16..=18 => Some(1 + rng.below(8)),
+        _ => Some(9 + rng.below(2)),
+    }
+}
+
+/// A short sequence on tenant `tenant` (1 or 2) that fires a trigger on purpose. `first` is the number of the item the
+/// sequence creates, as far as the generator can tell (an approximation, as `generate` keeps). The principals are the
+/// tenant's owner (`home`), editor (`home + 1`) and writer (`home + 2`).
+fn trigger_script(rng: &mut Lcg, tenant: u64, first: u64) -> Vec<Op> {
+    let home = home_of(tenant);
+    let op = |principal: u64, object: u64, hop: Option<u64>, kind: OpKind| Op {
+        tenant,
+        principal: Caller::User(principal),
+        object,
+        kind,
+        hop,
+    };
+    match rng.below(12) {
+        // An item made by a writer, at a hop past the limit or within it: trigger 1 declines `hop-limit` or starts without
+        // a run key, and trigger 8 (no third field) declines `condition-failed`, its run key being null for a created
+        // record. Often the editor deletes the item next, which starts trigger 4 with a run key.
+        0..=2 => {
+            let hop = if rng.below(2) == 0 {
+                9 + rng.below(2)
+            } else {
+                rng.below(4)
+            };
+            let made = op(
+                home + 2,
+                1,
+                Some(hop),
+                OpKind::Create(vec![(1, format!("s:{}", word(rng)))]),
+            );
+            if rng.below(2) == 0 {
+                vec![made, op(home + 1, 1, None, OpKind::Delete(first, None))]
+            } else {
+                vec![made]
+            }
+        }
+        // A part with a positive hop: trigger 2 starts without a run key.
+        3 => vec![op(
+            home + 2,
+            2,
+            Some(1 + rng.below(3)),
+            OpKind::Create(vec![(4, "i:5".to_string())]),
+        )],
+        // An item the editor makes with its third field set, then patches: trigger 3 starts without a run key.
+        4 | 5 => {
+            let made = op(
+                home + 1,
+                1,
+                None,
+                OpKind::Create(vec![(1, format!("s:{}", word(rng))), (3, "b:1".to_string())]),
+            );
+            let patched = op(
+                home + 1,
+                1,
+                None,
+                OpKind::Patch(first, None, vec![(1, format!("s:{}", word(rng)))]),
+            );
+            vec![made, patched]
+        }
+        // A posting to unit 1 by the owner: trigger 5 starts the public automation.
+        6..=8 => {
+            let month = rng.below(12);
+            let posting = format!("1 {home} {} key=k{}", 1 + rng.below(999), rng.below(8));
+            vec![Op {
+                tenant,
+                principal: Caller::User(home),
+                object: 1,
+                kind: OpKind::LedgerPost(ledger_time(rng, month), vec![posting]),
+                hop: None,
+            }]
+        }
+        // A ticket: trigger 6's automation is a draft, so the trigger declines `automation-inactive`.
+        9 | 10 => vec![op(
+            home,
+            4,
+            None,
+            OpKind::Create(vec![(1, "s:open".to_string())]),
+        )],
+        // The owner assigns the editor the owner role, then the editor revokes the owner's: the automations the owner
+        // defined no longer hold authority they may confer, so they are suspended.
+        _ => vec![
+            op(home, 1, None, OpKind::Assign(home + 1, 0)),
+            op(home + 1, 1, None, OpKind::Revoke(home, 0)),
+        ],
+    }
+}
+
+/// Trigger sequences and hop tokens over a scenario (slice 15): a few `trigger_script`s at random points, each on tenant
+/// 1 or 2, and a hop token on each operation that names none yet.
+fn with_triggers(seed: u64, mut ops: Scenario) -> Scenario {
+    let mut rng = Lcg(seed ^ 0x7472_6967_6765_7273);
+    for _ in 0..4 + rng.below(6) {
+        let tenant = if rng.below(3) == 0 { 2 } else { 1 };
+        let from = ops.len() / 3;
+        let at = from + rng.below((ops.len() - from) as u64 + 1) as usize;
+        let created = ops[..at]
+            .iter()
+            .filter(|op| {
+                op.tenant == tenant && op.object == 1 && matches!(op.kind, OpKind::Create(_))
+            })
+            .count() as u64;
+        for (n, op) in trigger_script(&mut rng, tenant, created + 1)
+            .into_iter()
+            .enumerate()
+        {
+            ops.insert(at + n, op);
+        }
+    }
+    for op in &mut ops {
+        if op.hop.is_none() {
+            op.hop = hop_token(&mut rng);
+        }
+    }
+    ops
+}
+
+/// The trigger outcomes a run must reach (slice 15), as `trigger_shapes` counts them: an automation started with a run
+/// key and without one, each decline the kernel gives a trigger (a hop past the limit, a run-as that is suspended, a
+/// condition that fails, a draft automation), and the suspension of an automation whose definer may no longer confer
+/// its run-as. The kinds only are checked, not the parameters of a start. `automation-removed` is left out on purpose:
+/// the kernel refuses to remove an automation that a trigger names, so no run reaches that decline.
+pub const TRIGGER_KINDS: &[&str] = &[
+    "start-automation run-key",
+    "start-automation no-run-key",
+    "decline-automation hop-limit",
+    "decline-automation run-as-suspended",
+    "decline-automation condition-failed",
+    "decline-automation automation-inactive",
+    "event automation-suspended",
+];
+
 /// The scenario of case `seed` with its searches, aggregates, settings and ledger operations placed in (see
 /// `with_queries`, `with_settings` and `with_ledger`). `generate` alone is what the fixture scenarios are made of, so
 /// the fixture does not change.
 pub fn generate_reads(seed: u64) -> Scenario {
-    with_invokes(
+    with_triggers(
         seed,
-        with_ledger(
+        with_invokes(
             seed,
-            with_settings(seed, with_queries(seed, generate(seed))),
+            with_ledger(
+                seed,
+                with_settings(seed, with_queries(seed, generate(seed))),
+            ),
         ),
     )
 }
@@ -2956,6 +3133,7 @@ fn count_outcomes(scenarios: &[Scenario], lean: &[Vec<String>]) -> Outcomes {
             let mut shapes = read_shapes(&op.render(), group);
             shapes.extend(setting_shapes(&op.render(), group));
             shapes.extend(ledger_shapes(&op.render(), group));
+            shapes.extend(trigger_shapes(group));
             for shape in shapes {
                 if !shape.ends_with(" ok") {
                     *counts.entry(shape).or_default() += 1;
@@ -2982,6 +3160,36 @@ pub fn setting_shapes<S: AsRef<str>>(rendered: &str, group: &[S]) -> Vec<String>
         .find_map(|line| line.as_ref().strip_prefix("source "))
         .map(|source| vec![format!("read-setting ok source {source}")])
         .unwrap_or_default()
+}
+
+/// The trigger outcomes of an operation as the coverage counts them (slice 15): each automation start, by whether it
+/// carries a run key (`run-key=-` for none), each decline by its reason, and each automation suspended by a lost role.
+/// These are the effect lines (`effect start-automation`, `effect decline-automation`) and the event line
+/// (`event .. automation-suspended`) of the operation's group, which `op_outcomes` attributes to the operation that
+/// caused them. The parameters are not counted.
+pub fn trigger_shapes<S: AsRef<str>>(group: &[S]) -> Vec<String> {
+    group
+        .iter()
+        .filter_map(|line| {
+            let line = line.as_ref();
+            if line.starts_with("effect start-automation ") {
+                let key = if line.contains(" run-key=- ") {
+                    "no-run-key"
+                } else {
+                    "run-key"
+                };
+                Some(format!("start-automation {key}"))
+            } else if line.starts_with("effect decline-automation ") {
+                line.split_whitespace()
+                    .find_map(|word| word.strip_prefix("reason="))
+                    .map(|reason| format!("decline-automation {reason}"))
+            } else if line.starts_with("event ") && line.contains(" automation-suspended ") {
+                Some("event automation-suspended".to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// [`diff_batch`] that also reports the outcomes counted in the Lean output.
@@ -3274,6 +3482,7 @@ pub fn check_coverage(outcomes: &Outcomes, main_source: &str) -> Result<(), Stri
     wanted.extend(REQUIRED_PER_INTENT.iter().map(|s| s.to_string()));
     wanted.extend(LEDGER_KINDS.iter().map(|s| s.to_string()));
     wanted.extend(INVOKE_KINDS.iter().map(|s| s.to_string()));
+    wanted.extend(TRIGGER_KINDS.iter().map(|s| s.to_string()));
     let seen = |k: &str| outcomes.get(k).copied().unwrap_or(0);
     let thin: Vec<String> = wanted
         .iter()
