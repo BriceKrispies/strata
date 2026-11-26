@@ -183,20 +183,21 @@ def fixtureOperations : List (String × OpDef) :=
   [("note", opNote), ("note_count", opNoteCount), ("retag", opRetag), ("drop", opDrop),
    ("grant", opGrant), ("note_grant", opNoteGrant)]
 
-/-- The automations every scenario's tenants define (slice 15), for the tenant whose owner is `owner`: `1` runs as the
-    writers and is defined by the owner; `2` runs as the editors and carries a run key, the text of the deleted item;
-    `3` runs as `public`, which reads no record; `4` is a draft that starts no run. -/
+/-- The automations every scenario's tenants define (slice 15), for the tenant whose owner is `owner`. The kernel checks a
+    run key against the event parameters only (no record fields), and refuses a run-as that names `public`
+    (`definitions.rs`, `automation_problems`), so: `1` runs as the writers, with no run key; `2` runs as the editors,
+    with the run key `param.seq`; `3` runs as the editors, with the run key `param.transition`, which an event without
+    a transition leaves unbound (so the run key declines); `4` is a draft that starts no run. -/
 def fixtureAutomations (owner : PrincipalId) : List (Nat × AutomationDef) :=
   [(1, { id := 1, runAs := [writerRole], definedBy := some owner }),
-   (2, { id := 2, runAs := [editorRole], definedBy := some owner,
-         runKey := some (.field .old 1) }),
-   (3, { id := 3, runAs := [publicRole], definedBy := some owner }),
+   (2, { id := 2, runAs := [editorRole], definedBy := some owner, runKey := some (.param "seq") }),
+   (3, { id := 3, runAs := [editorRole], definedBy := some owner, runKey := some (.param "transition") }),
    (4, { id := 4, runAs := [writerRole], definedBy := some owner, state := .draft })]
 
 /-- The triggers every scenario's tenants define (slice 15): on an item created (`1`, the writers' automation), on a
     part created whose hop is positive (`2`, condition on `param.hop`), on an item updated (`3`), on an item deleted
-    (`4`, the editors' automation with its run key), on a posting to unit 1 (`5`, the `public` automation, which
-    observes no record), on a ticket created (`6`, a draft automation), on a part updated and paused (`7`), and on an
+    (`4`, the editors' automation with its run key), on a posting to unit 1 (`5`, automation 3, whose run key is unbound
+    for a posting, so it declines), on a ticket created (`6`, a draft automation), on a part updated and paused (`7`), and on an
     item created whose third field is null (`8`). -/
 def fixtureTriggers : List (Nat × TriggerDef) :=
   [(1, { id := 1, on := .recordCreated 1, automation := 1 }),

@@ -1889,8 +1889,9 @@ fn fixture_trigger(
 }
 
 /// The automations of the fixture (slice 15), as the model's `fixtureAutomations` lists them: `1` runs as
-/// the writers, `2` as the editors with the run key of field `1` of the old record, `3` as `public` and
-/// `4` as the writers in the draft state.
+/// the writers, `2` as the editors with the run key `param.seq`, `3` as the editors with the run key
+/// `param.transition` (the kernel checks run keys against event parameters only, and refuses `public` as a
+/// run-as), and `4` as the writers in the draft state.
 fn fixture_automation_changes(owner: u64) -> Vec<SchemaChange> {
     vec![
         SchemaChange::DefineAutomation(fixture_automation(1, owner, &[3], None, None)),
@@ -1898,10 +1899,16 @@ fn fixture_automation_changes(owner: u64) -> Vec<SchemaChange> {
             2,
             owner,
             &[2],
-            Some(Expr::Var(Scope::Old, field_id(1).as_str().into())),
+            Some(Expr::Param("seq".into())),
             None,
         )),
-        SchemaChange::DefineAutomation(fixture_automation(3, owner, &[1], None, None)),
+        SchemaChange::DefineAutomation(fixture_automation(
+            3,
+            owner,
+            &[2],
+            Some(Expr::Param("transition".into())),
+            None,
+        )),
         SchemaChange::DefineAutomation(fixture_automation(
             4,
             owner,
