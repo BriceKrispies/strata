@@ -3405,3 +3405,98 @@ type 2 required=
 tenant 2 next=1 required=1
 type 2 required=
 end
+scenario h-events-tenant-created
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+tenant 3 next=1 required=
+roles 3 0,1
+member 3 300 0
+end
+scenario h-events-record-created
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+type 4 required=
+type 4 record 2 owner=100 v=1 1=s:open 2=i:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-transition-fires
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=2 1=s:closed 2=i:1 3=s:shipped
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-update-fires-no-transition
+ok
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=100 v=2 1=s:ash 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-delete-rewrites-a-referrer
+ok
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 2 owner=100 v=2 1=s:ash 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-lax-change-grandfathers-a-record
+ok
+ok
+state
+tenant 1 next=2 required=1,4
+record 1 owner=100 v=1 1=s:oak 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-change-grandfathers-nothing
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1,2
+record 1 owner=100 v=1 1=s:oak 2=i:1 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-events-membership
+ok
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 2
+member 1 102 3
+member 1 103 3
+team 1 1 s:ops - 3
+tenant 2 next=1 required=1
+type 2 required=
+end
