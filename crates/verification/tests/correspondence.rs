@@ -317,7 +317,12 @@ fn random_sequences_run_the_same_on_the_lean_model_and_the_kernel() {
     let seed = env_number("STRATA_LEAN_DIFF_SEED", DEFAULT_DIFF_SEED);
     // The batch the run compares must exercise every intent kind the model executes.
     let batch: String = (0..cases)
-        .map(|i| lean_diff::render("r", &[lean_diff::generate_reads(lean_diff::case_seed(seed, i))]))
+        .map(|i| {
+            lean_diff::render(
+                "r",
+                &[lean_diff::generate_reads(lean_diff::case_seed(seed, i))],
+            )
+        })
         .collect();
     for kind in lean_diff::GENERATED_INTENTS {
         assert!(
@@ -346,7 +351,12 @@ fn the_generator_produces_every_intent_the_lean_model_executes() {
     );
     // The generator really does produce each kind it claims.
     let produced: String = (0..200)
-        .map(|i| lean_diff::render("g", &[lean_diff::generate_reads(lean_diff::case_seed(1, i))]))
+        .map(|i| {
+            lean_diff::render(
+                "g",
+                &[lean_diff::generate_reads(lean_diff::case_seed(1, i))],
+            )
+        })
         .collect();
     for kind in lean_diff::GENERATED_INTENTS {
         assert!(

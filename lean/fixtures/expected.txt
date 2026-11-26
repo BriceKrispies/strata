@@ -5253,3 +5253,100 @@ type 2 required=
 tenant 2 next=1 required=1
 type 2 required=
 end
+scenario h-trigger-item-created
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=102 v=1 1=s:hello 6=i:7 9=s:p102
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-hop-limit
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 1 owner=102 v=1 1=s:hello 6=i:7 9=s:p102
+record 2 owner=102 v=1 1=s:hello 6=i:7 9=s:p102
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-part-created-with-hop
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 2 record 1 owner=101 v=1 4=i:4 5=b:0
+type 2 record 2 owner=101 v=1 4=i:4 5=b:0
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-item-updated
+ok
+ok
+state
+tenant 1 next=2 required=1
+record 1 owner=102 v=2 1=s:bye
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-item-deleted
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-ledger-posted
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+ledger-account 1 owner=100 unit=1 scope=- balance=500 seq=1 buckets=-
+ledger-entry 1 owner=100 unit=1 scope=- seq=1 amount=500 key=k1 reason=- by=100 at=1767225600000 corrects=-
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-draft-inactive
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=101 v=1 1=s:open 3=s:n
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-paused-part-updated
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 2 record 1 owner=101 v=2 4=i:5
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-trigger-suspended-after-revoking-owner
+ok
+ok
+ok
+ok
+state
+tenant 1 next=3 required=1
+record 1 owner=102 v=1 1=s:after 6=i:7 9=s:p102
+type 2 required=
+type 2 record 2 owner=101 v=1 4=i:5 5=b:0
+roles 1 0,1,2,3
+member 1 101 0,2
+member 1 102 3
+member 1 103 3
+tenant 2 next=1 required=1
+type 2 required=
+end
