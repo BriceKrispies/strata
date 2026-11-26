@@ -648,6 +648,9 @@ theorem stepTenant_preserves_states (t t' : Tenant) (p : Principal) (i : Intent)
   | postLedger now ps =>
     obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h
     exact hs
+  | postLedgerTx now tx =>
+    obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape h
+    exact hs
   | expireLedger now u c =>
     obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h
     exact hs

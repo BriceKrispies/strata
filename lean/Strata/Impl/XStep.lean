@@ -237,6 +237,11 @@ def stepParts (core : ITenant) (ux : MM (TypeId × FieldId × Val))
     match stepTenantI core p (.postLedger now ps) with
     | .error e => .error (e, ⟨core, ux, cx, rx⟩)
     | .ok core' => .ok ⟨core', ux, cx, rx⟩
+  | .postLedgerTx now tx =>
+    -- A posting changes no record, so the indexes are as they were.
+    match stepTenantI core p (.postLedgerTx now tx) with
+    | .error e => .error (e, ⟨core, ux, cx, rx⟩)
+    | .ok core' => .ok ⟨core', ux, cx, rx⟩
   | .expireLedger now u c =>
     -- An expiry changes no record, so the indexes are as they were.
     match stepTenantI core p (.expireLedger now u c) with

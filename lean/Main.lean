@@ -276,8 +276,26 @@ def splitPostings : List String → List (List String)
     | [] => [[t]]
     | g :: gs => (t :: g) :: gs
 
-/-- A ledger intent: `ledger post @<now> <posting> [; <posting>]*` or `ledger expire @<now> <unit> <cutoff>` (slice 13). -/
+/-- One leg of a `tx` line: `<unit> <owner> <amount> [scope=<s>]`. -/
+def parseLeg (tokens : List String) : Option LedgerLeg := do
+  let unitTok :: ownerTok :: amountTok :: opts := tokens | failure
+  let mut scope : String := ""
+  for o in opts do
+    if o.startsWith "scope=" then scope := dropChars o 6
+    else failure
+  pure { owner := ← parseOwner ownerTok, unit := ← unitTok.toNat?, amount := ← amountTok.toInt?, scope := scope }
+
+/-- A ledger intent: `ledger post @<now> <posting> [; <posting>]*`, `ledger expire @<now> <unit> <cutoff>` or
+    `ledger tx @<now> op=<operation> key=<key> [reason=<reason>] <leg> [; <leg>]*` (slice 13). -/
 def parseLedgerOp : List String → Option Intent
+  | "ledger" :: "tx" :: nowTok :: opTok :: keyTok :: rest => do
+    let now ← parseNowInt nowTok
+    guard (opTok.startsWith "op=" && keyTok.startsWith "key=")
+    let (reason, legToks) := match rest with
+      | r :: more => if r.startsWith "reason=" then (dropChars r 7, more) else ("", rest)
+      | [] => ("", [])
+    let legs ← (splitPostings legToks).mapM parseLeg
+    pure (.postLedgerTx now { operation := dropChars opTok 3, key := dropChars keyTok 4, reason := reason, legs := legs })
   | "ledger" :: "post" :: nowTok :: rest => do
     let now ← parseNowInt nowTok
     let ps ← (splitPostings rest).mapM parsePosting
@@ -436,7 +454,7 @@ def ledgerLines (id : Nat) (t : Tenant) : List String :=
   accts.flatMap (fun a =>
     [s!"ledger-account {id} owner={showOwner a.owner} unit={a.unit} scope={ledgerScopeText a.scope} balance={a.balance} seq={a.lastSeq} buckets={ledgerBucketsText a.buckets}"]
     ++ ((t.ledger.journal.filter (fun e => e.inAccount a.owner a.unit a.scope)).map (fun e =>
-        s!"ledger-entry {id} owner={showOwner e.owner} unit={e.unit} scope={ledgerScopeText e.scope} seq={e.sequence} amount={e.amount} key={e.key} reason={ledgerScopeText e.reason} by={match e.causedBy with | some u => toString u | none => "-"} at={e.time} corrects={match e.corrects with | some c => toString c | none => "-"}")))
+        s!"ledger-entry {id} owner={showOwner e.owner} unit={e.unit} scope={ledgerScopeText e.scope} seq={e.sequence} amount={e.amount} key={e.key} reason={ledgerScopeText e.reason} by={match e.causedBy with | some u => toString u | none => "-"} at={e.time} corrects={match e.corrects with | some c => toString c | none => "-"}{if e.txn.isSome then " txn=1" else ""}")))
 
 /-- Insertion sort on a key; the lists here are a handful of elements. -/
 def sortBy {α : Type} (key : α → Nat) : List α → List α

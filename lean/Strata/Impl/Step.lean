@@ -180,6 +180,7 @@ def stepTenantI (t : ITenant) (p : Principal) : Intent → Except Err ITenant
     (writeSettingT t.abs p n lvl team v ev).map (fun s =>
       { t with overrides := s.overrides, settingRevs := s.settingRevs })
   | .postLedger now ps => (postLedgerT t.abs p now ps).map (fun s => { t with ledger := s.ledger })
+  | .postLedgerTx now tx => (postLedgerTxT t.abs p now tx).map (fun s => { t with ledger := s.ledger })
   | .expireLedger now u c => (expireLedgerT t.abs p now u c).map (fun s => { t with ledger := s.ledger })
 
 /-- The tenant a `CreateTenant` makes, as the implementation holds it: no object types, the genesis
@@ -325,6 +326,13 @@ theorem stepTenantI_refines (t : ITenant) (p : Principal) (i : Intent) (hinv : t
     | error e => rfl
     | ok s =>
       obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h
+      rfl
+  | postLedgerTx now tx =>
+    simp only [stepTenantI, stepTenant]
+    cases h : postLedgerTxT t.abs p now tx with
+    | error e => rfl
+    | ok s =>
+      obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape h
       rfl
   | expireLedger now u c =>
     simp only [stepTenantI, stepTenant]

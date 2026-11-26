@@ -71,6 +71,18 @@ theorem stepTenantI_postLedger_shape {core c' : ITenant} {p : Principal} {now : 
     obtain ⟨L, rfl⟩ := postLedgerT_ok_shape hs
     exact ⟨L, h.symm⟩
 
+/-- A transaction changes only the ledger of the tenant (slice 13). -/
+theorem stepTenantI_postLedgerTx_shape {core c' : ITenant} {p : Principal} {now : Int}
+    {tx : LedgerTx} (h : stepTenantI core p (.postLedgerTx now tx) = .ok c') :
+    ∃ L, c' = { core with ledger := L } := by
+  simp only [stepTenantI] at h
+  cases hs : postLedgerTxT core.abs p now tx with
+  | error e => simp [hs, Except.map] at h
+  | ok s =>
+    simp only [hs, Except.map, Except.ok.injEq] at h
+    obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape hs
+    exact ⟨L, h.symm⟩
+
 /-- An expiry changes only the ledger of the tenant, so its result is the tenant with the ledger replaced (slice 13). -/
 theorem stepTenantI_expireLedger_shape {core c' : ITenant} {p : Principal} {now : Int} {u : Nat} {cut : Int}
     (h : stepTenantI core p (.expireLedger now u cut) = .ok c') :
@@ -94,6 +106,23 @@ theorem postLedger_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
   | error e => exact good_error _ _
   | ok c' =>
     obtain ⟨L, rfl⟩ := stepTenantI_postLedger_shape hs
+    refine ⟨rfl, fun e x' h => (by cases h), ?_⟩
+    intro y hy
+    simp only [Except.ok.injEq] at hy
+    subst hy
+    exact hok
+
+/-- A transaction changes no record, so the indexes stay consistent. -/
+theorem postLedgerTx_good (core : ITenant) (ux : MM (TypeId × FieldId × Val))
+    (cx : MM (TypeId × List FieldId × List Val)) (rx : MM Cell)
+    (hok : XTenant.Ok ⟨core, ux, cx, rx⟩) (p : Principal) (now : Int) (tx : LedgerTx) :
+    Good ⟨core, ux, cx, rx⟩ (stepParts core ux cx rx p (.postLedgerTx now tx))
+      (stepTenantI core p (.postLedgerTx now tx)) := by
+  simp only [stepParts]
+  cases hs : stepTenantI core p (.postLedgerTx now tx) with
+  | error e => exact good_error _ _
+  | ok c' =>
+    obtain ⟨L, rfl⟩ := stepTenantI_postLedgerTx_shape hs
     refine ⟨rfl, fun e x' h => (by cases h), ?_⟩
     intro y hy
     simp only [Except.ok.injEq] at hy
@@ -235,6 +264,7 @@ theorem stepTenantXL_good (x : XTenant) (hok : x.Ok) (p : Principal) (i : Intent
   | writeSetting n lvl team v ev => exact setting_good core ux cx rx hok p n lvl team v ev
   | postLedger now ps => exact postLedger_good core ux cx rx hok p now ps
   | expireLedger now u c => exact expireLedger_good core ux cx rx hok p now u c
+  | postLedgerTx now tx => exact postLedgerTx_good core ux cx rx hok p now tx
   | changeSchema ev strict cs => exact changeSchema_good core ux cx rx hok p ev strict cs
 
 /-- The indexed outcome (refusals without the tenant handed back) agrees with stage 1's, and an

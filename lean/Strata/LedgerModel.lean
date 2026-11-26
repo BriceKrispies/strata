@@ -287,14 +287,14 @@ def periodErr (applying : AppliedLimits) (cur : List LedgerPeriodTotal) (counts 
     A replay changes nothing and emits no event; an accepted posting writes the header, appends the entry and emits
     one `LedgerEntryPosted`. Each check is a separate function, so that a refusal is named by the first one that
     fails. -/
-def postDynamic (t : Tenant) (actor : Principal) (now : Int) (L : LedgerState) (q : LedgerPosting) :
-    Except Err (LedgerState × List LedgerPosted) :=
+def postDynamic (t : Tenant) (actor : Principal) (now : Int) (L : LedgerState) (q : LedgerPosting)
+    (txn : Option String := none) : Except Err (LedgerState × List LedgerPosted) :=
   let cur : Option LedgerAccount := L.accounts.find? (fun a => a.is q.owner q.unit q.scope)
   let recorded : Option LedgerEntry :=
     L.journal.find? (fun e => e.inAccount q.owner q.unit q.scope && e.key == q.key)
   match recorded with
   | some e =>
-    if e.amount == q.amount && e.reason == q.reason && e.corrects == q.corrects then .ok (L, [])
+    if e.amount == q.amount && e.reason == q.reason && e.corrects == q.corrects && e.txn == txn then .ok (L, [])
     else .error .versionConflict
   | none =>
     let before : Int := (cur.map (fun a => a.balance)).getD 0
@@ -334,7 +334,7 @@ def postDynamic (t : Tenant) (actor : Principal) (now : Int) (L : LedgerState) (
       let entry : LedgerEntry :=
         { owner := q.owner, unit := q.unit, scope := q.scope, sequence := last + 1,
           amount := q.amount, key := q.key, reason := q.reason, causedBy := actorUser actor,
-          time := now, corrects := q.corrects }
+          time := now, corrects := q.corrects, txn := txn }
       let ev : LedgerPosted :=
         { owner := q.owner, unit := q.unit, scope := q.scope, amount := q.amount, balance := after,
           balanceBefore := before, entrySequence := last + 1, reason := q.reason }
@@ -344,11 +344,11 @@ def postDynamic (t : Tenant) (actor : Principal) (now : Int) (L : LedgerState) (
       .ok ({ L with accounts := accounts, journal := L.journal ++ [entry] }, [ev])
 
 /-- One posting on the state `L` (the kernel's `post_in`): its static checks, then `postDynamic`. -/
-def postOne (t : Tenant) (actor : Principal) (now : Int) (L : LedgerState) (q : LedgerPosting) :
-    Except Err (LedgerState × List LedgerPosted) :=
+def postOne (t : Tenant) (actor : Principal) (now : Int) (L : LedgerState) (q : LedgerPosting)
+    (txn : Option String := none) : Except Err (LedgerState × List LedgerPosted) :=
   match postStaticErr t actor q with
   | some e => .error e
-  | none => postDynamic t actor now L q
+  | none => postDynamic t actor now L q txn
 
 /-- The intent `PostLedger` (CT-281): the caller holds `ledger-post`; one to eight postings, each on the state the
     earlier ones leave; the first refusal refuses all. Returns the ledger and the events in order. -/
@@ -360,6 +360,100 @@ def postLedgerCore (t : Tenant) (actor : Principal) (now : Int) (ps : List Ledge
     List.foldlM (fun (acc : LedgerState × List LedgerPosted) (q : LedgerPosting) =>
         (postOne t actor now acc.1 q).map (fun r => (r.1, acc.2 ++ r.2)))
       (t.ledger, []) ps
+
+/-! ## Transactions (CT-282, LDG-2903 to LDG-2917) -/
+
+/-- One leg of a transaction (the kernel's `LedgerLeg`): the account it posts to and the signed amount. -/
+structure LedgerLeg where
+  owner : LedgerOwner
+  unit : Nat
+  amount : Int
+  scope : String := ""
+  deriving DecidableEq, Repr
+
+/-- A transaction (the kernel's `LedgerTransaction`): the operation that makes it, the idempotency key of the
+    whole, the reason of every entry, and the legs. `on-behalf-of` is read only by the approval of a held
+    transaction and is not part of a posting. -/
+structure LedgerTx where
+  operation : String
+  key : String
+  reason : String
+  legs : List LedgerLeg
+  deriving DecidableEq, Repr
+
+/-- The most legs of a transaction (the kernel's `MAX_LEDGER_TRANSACTION_LEGS`; the setting that lowers it is not
+    declared by the fixture tenants). -/
+def ledgerMaxLegs : Nat := 64
+/-- The longest operation name a header records. -/
+def ledgerMaxOperationBytes : Nat := 128
+/-- The reason of a transfer, which the programme's declaration of the unit bounds (LDG-2916). -/
+def transferReason : String := "transfer"
+
+/-- The identity of a transaction: the canonical text of its key, reason and legs. The kernel names it by a hash of
+    the tenant and the same request, so that two requests have one name exactly when they are the same request. -/
+def txnId (tx : LedgerTx) : String := reprStr (tx.key, tx.reason, tx.legs)
+
+/-- The posting that leg `n` of a transaction asks for: its key is the transaction's key and the leg number. -/
+def legPosting (tx : LedgerTx) (n : Nat) (leg : LedgerLeg) : LedgerPosting :=
+  { owner := leg.owner, unit := leg.unit, amount := leg.amount, key := tx.key ++ ":" ++ toString n,
+    reason := tx.reason, corrects := none, scope := leg.scope }
+
+def txPostings (tx : LedgerTx) : List LedgerPosting := tx.legs.mapIdx (fun n leg => legPosting tx n leg)
+
+/-- The header records who (a person), what, under which key and which correlation (LDG-2906). The correlation of
+    an intent is always set by the harness, as by the kernel's context. -/
+def txHeaderOk (actor : Principal) (tx : LedgerTx) : Bool :=
+  (actorUser actor).isSome && decide (0 < tx.operation.utf8ByteSize) &&
+    !decide (ledgerMaxOperationBytes < tx.operation.utf8ByteSize) && decide (0 < tx.key.utf8ByteSize) &&
+    decide (tx.key.utf8ByteSize + 8 ≤ ledgerMaxKeyBytes)
+
+/-- The sum of the amounts of the legs in unit `u`. -/
+def unitSum (legs : List LedgerLeg) (u : Nat) : Int :=
+  ((legs.filter (fun l => l.unit == u)).map (fun l => l.amount)).sum
+
+/-- Every unit of the legs nets to zero (LDG-2903). -/
+def txBalanced (tx : LedgerTx) : Bool := (tx.legs.map (fun l => l.unit)).all (fun u => unitSum tx.legs u == 0)
+
+/-- A transfer is one debit and one credit between two principals of the tenant (LDG-2916; the fixture declares no
+    minimum or maximum for a transfer). -/
+def transferOk (t : Tenant) (tx : LedgerTx) : Bool :=
+  match tx.legs with
+  | [first, second] =>
+    let sender := if first.amount < 0 then first else second
+    let recipient := if first.amount < 0 then second else first
+    !(decide (0 ≤ sender.amount) || decide (recipient.amount ≤ 0)) &&
+      !(sender.owner == recipient.owner && sender.scope == recipient.scope) &&
+      (match recipient.owner with
+        | .person p => (t.members.map Prod.fst).contains p
+        | .pool _ => false)
+  | _ => false
+
+/-- The legs, each a posting on the state the earlier ones leave, the entries naming the transaction. Returns the
+    ledger, the events and how many legs were replays. -/
+def txLegs (t : Tenant) (actor : Principal) (now : Int) (tx : LedgerTx) :
+    Except Err (LedgerState × List LedgerPosted × Nat) :=
+  List.foldlM (fun (acc : LedgerState × List LedgerPosted × Nat) (q : LedgerPosting) =>
+      (postOne t actor now acc.1 q (some (txnId tx))).map
+        (fun r => (r.1, acc.2.1 ++ r.2, acc.2.2 + (if r.2.isEmpty then 1 else 0))))
+    (t.ledger, [], 0) (txPostings tx)
+
+/-- The intent `PostLedgerTransaction` (CT-282): the caller holds `ledger-post`; the header is complete
+    (`invalidIntent`); at most the most legs, at least two, each unit netting to zero, and a transfer permitted
+    (`constraintViolated`); then each leg a posting on the state the earlier ones leave. A retry replays every leg
+    or none: a transaction found in part is another request (`versionConflict`). -/
+def postTxCore (t : Tenant) (actor : Principal) (now : Int) (tx : LedgerTx) :
+    Except Err (LedgerState × List LedgerPosted) :=
+  if !t.holdsCap actor ledgerCapPost then .error .unauthorized
+  else if !txHeaderOk actor tx then .error .invalidIntent
+  else if decide (ledgerMaxLegs < tx.legs.length) then .error .constraintViolated
+  else if decide (tx.legs.length < 2) then .error .constraintViolated
+  else if !txBalanced tx then .error .constraintViolated
+  else if tx.reason == transferReason && !transferOk t tx then .error .constraintViolated
+  else
+    match txLegs t actor now tx with
+    | .error e => .error e
+    | .ok (L', evs, replays) =>
+      if replays != 0 && replays != tx.legs.length then .error .versionConflict else .ok (L', evs)
 
 /-! ## Expiry (LDG-1545 to LDG-1547) -/
 
@@ -491,6 +585,10 @@ def readLedgerBalance (t : Tenant) (p : Principal) (o : LedgerOwner) (u : Nat) (
 def postLedgerT (t : Tenant) (p : Principal) (now : Int) (ps : List LedgerPosting) : Except Err Tenant :=
   (postLedgerCore t p now ps).map (fun r => { t with ledger := r.1 })
 
+/-- The tenant after a `PostLedgerTransaction` intent that is accepted: its ledger changes, nothing else. -/
+def postLedgerTxT (t : Tenant) (p : Principal) (now : Int) (tx : LedgerTx) : Except Err Tenant :=
+  (postTxCore t p now tx).map (fun r => { t with ledger := r.1 })
+
 /-- The tenant after an `ExpireLedger` intent that is accepted: its ledger changes, nothing else. -/
 def expireLedgerT (t : Tenant) (p : Principal) (now : Int) (u : Nat) (c : Int) : Except Err Tenant :=
   (expireCore t p now u c).map (fun r => { t with ledger := r.1 })
@@ -498,6 +596,12 @@ def expireLedgerT (t : Tenant) (p : Principal) (now : Int) (u : Nat) (c : Int) :
 /-- The events a `PostLedger` intent emits, in order (empty when it is refused). -/
 def postLedgerEvents (t : Tenant) (p : Principal) (now : Int) (ps : List LedgerPosting) : List LedgerPosted :=
   match postLedgerCore t p now ps with
+  | .ok r => r.2
+  | .error _ => []
+
+/-- The events a `PostLedgerTransaction` intent emits, in order (empty when it is refused). -/
+def postLedgerTxEvents (t : Tenant) (p : Principal) (now : Int) (tx : LedgerTx) : List LedgerPosted :=
+  match postTxCore t p now tx with
   | .ok r => r.2
   | .error _ => []
 
@@ -521,6 +625,16 @@ theorem postLedgerT_ok_shape {t t' : Tenant} {p : Principal} {now : Int} {ps : L
     simp only [hc, Except.map, Except.ok.injEq] at h
     exact ⟨r.1, h.symm⟩
 
+/-- An accepted `PostLedgerTransaction` changes the tenant's ledger and nothing else of it. -/
+theorem postLedgerTxT_ok_shape {t t' : Tenant} {p : Principal} {now : Int} {tx : LedgerTx}
+    (h : postLedgerTxT t p now tx = .ok t') : ∃ L, t' = { t with ledger := L } := by
+  unfold postLedgerTxT at h
+  cases hc : postTxCore t p now tx with
+  | error e => simp [hc, Except.map] at h
+  | ok r =>
+    simp only [hc, Except.map, Except.ok.injEq] at h
+    exact ⟨r.1, h.symm⟩
+
 /-- An accepted `ExpireLedger` changes the tenant's ledger and nothing else of it. -/
 theorem expireLedgerT_ok_shape {t t' : Tenant} {p : Principal} {now : Int} {u : Nat} {c : Int}
     (h : expireLedgerT t p now u c = .ok t') : ∃ L, t' = { t with ledger := L } := by
@@ -539,6 +653,15 @@ namespace Strata
 theorem postLedgerT_ok_auth {t t' : Tenant} {p : Principal} {now : Int} {ps : List LedgerPosting}
     (h : postLedgerT t p now ps = .ok t') : t.holdsCap p ledgerCapPost = true := by
   unfold postLedgerT postLedgerCore at h
+  by_cases hc : t.holdsCap p ledgerCapPost = true
+  · exact hc
+  · have hf : t.holdsCap p ledgerCapPost = false := by simpa using hc
+    simp [hf, Except.map] at h
+
+/-- An accepted `PostLedgerTransaction` is by a holder of `ledger-post`. -/
+theorem postLedgerTxT_ok_auth {t t' : Tenant} {p : Principal} {now : Int} {tx : LedgerTx}
+    (h : postLedgerTxT t p now tx = .ok t') : t.holdsCap p ledgerCapPost = true := by
+  unfold postLedgerTxT postTxCore at h
   by_cases hc : t.holdsCap p ledgerCapPost = true
   · exact hc
   · have hf : t.holdsCap p ledgerCapPost = false := by simpa using hc

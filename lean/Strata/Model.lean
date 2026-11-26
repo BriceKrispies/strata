@@ -53,6 +53,8 @@ inductive Intent where
   /-- Expire the credit of a unit whose buckets started at or before `cutoff`, in at most one batch of accounts
       (slice 13). -/
   | expireLedger (now : Int) (unit : Nat) (cutoff : Int)
+  /-- Post a transaction: two or more legs that net to zero for each unit, each a posting, as one commit (slice 13). -/
+  | postLedgerTx (now : Int) (tx : LedgerTx)
   deriving Repr
 
 /-- The user an intent names, if it names one: the owner of a new tenant, the user a role is assigned
@@ -188,6 +190,7 @@ def stepTenant (t : Tenant) (p : Principal) : Intent → Except Err Tenant
   | .writeSetting n lvl team v ev => writeSettingT t p n lvl team v ev
   | .postLedger now ps => postLedgerT t p now ps
   | .expireLedger now u c => expireLedgerT t p now u c
+  | .postLedgerTx now tx => postLedgerTxT t p now tx
 /-- Whether the acting principal is allowed to make this intent at all: the object type exists,
     and the permission holds on the record (or, for a schema change, the owner). -/
 def authorized (t : Tenant) (p : Principal) : Intent → Bool
@@ -219,6 +222,7 @@ def authorized (t : Tenant) (p : Principal) : Intent → Bool
   -- A posting needs `ledger-post`; an expiry is the system's or one with `ledger-configure`'s.
   | .postLedger _ _ => t.holdsCap p ledgerCapPost
   | .expireLedger _ _ _ => p == .system || t.holdsCap p ledgerCapConfigure
+  | .postLedgerTx _ _ => t.holdsCap p ledgerCapPost
 
 /-- The object types a schema intent re-validates, as the kernel's `touched_objects` gives them: the
     type it names, and, for a field, the types the field refers to. Other intents touch none. -/
@@ -410,6 +414,7 @@ def eventBodies (t : Tenant) (p : Principal) : Intent → Tenant → List EventB
   | .writeSetting n lvl team _ _, _ => [.settingChanged n (settingSubjectOf p lvl team)]
   | .postLedger now ps, _ => (postLedgerEvents t p now ps).map EventBody.ledgerEntryPosted
   | .expireLedger now u c, _ => (expireLedgerEvents t p now u c).map EventBody.ledgerEntryPosted
+  | .postLedgerTx now tx, _ => (postLedgerTxEvents t p now tx).map EventBody.ledgerEntryPosted
   | .changeSchema _ _ cs, t' =>
     .schemaChanged (t.schemaVersion + 1) (cs.map Change.line) (changeGrandfathered t.limits t'.types cs) ::
       (rewrittenEvents t t' (cs.flatMap Change.touched) ++ removedEvents t cs)

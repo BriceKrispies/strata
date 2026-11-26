@@ -3056,8 +3056,8 @@ def ledgerBal (L : LedgerState) (o : LedgerOwner) (u : Nat) (s : String) : Int :
 
 /-- A posting conserves the total: an accepted posting moves the total by the amount of the entry it writes (the
     event it emits), and a replay moves it by nothing. -/
-theorem postOne_total {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
-    {evs : List LedgerPosted} (h : postOne t actor now L q = .ok (L', evs)) :
+theorem postOne_total {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting} {txn : Option String}
+    {evs : List LedgerPosted} (h : postOne t actor now L q txn = .ok (L', evs)) :
     ledgerTotal L' = ledgerTotal L + (evs.map (fun e => e.amount)).sum := by
   unfold postOne postDynamic at h
   simp only [] at h
@@ -3097,20 +3097,20 @@ theorem ledger_post_atomic {t : Tenant} {actor : Principal} {now : Int} {ps₁ p
 /-- What an accepted posting (one that writes an entry) establishes: its static checks passed, its key was new on the
     account, and the journal it leaves is the one before with the entry of the posting appended, that entry naming the
     account, the key, the amount, the reason and the correction of the posting. -/
-theorem postOne_accepted {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
-    {evs : List LedgerPosted} (h : postOne t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+theorem postOne_accepted {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting} {txn : Option String}
+    {evs : List LedgerPosted} (h : postOne t actor now L q txn = .ok (L', evs)) (hne : evs ≠ []) :
     postStaticErr t actor q = none ∧
     L.journal.find? (fun e => e.inAccount q.owner q.unit q.scope && e.key == q.key) = none ∧
     ∃ entry : LedgerEntry, L'.journal = L.journal ++ [entry] ∧ entry.owner = q.owner ∧ entry.unit = q.unit ∧
       entry.scope = q.scope ∧ entry.key = q.key ∧ entry.amount = q.amount ∧ entry.reason = q.reason ∧
-      entry.corrects = q.corrects := by
+      entry.corrects = q.corrects ∧ entry.txn = txn := by
   unfold postOne postDynamic at h
   simp only [] at h
   repeat' split at h
   all_goals first
     | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
        obtain ⟨rfl, rfl⟩ := h
-       exact ⟨by assumption, by assumption, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩)
+       exact ⟨by assumption, by assumption, _, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩)
     | (simp only [Except.ok.injEq, Prod.mk.injEq] at h
        obtain ⟨rfl, rfl⟩ := h
        exact absurd rfl hne)
@@ -3122,12 +3122,12 @@ theorem ledger_replay_unchanged {t : Tenant} {actor : Principal} {now : Int} {L 
     {q : LedgerPosting} {evs : List LedgerPosted}
     (h : postOne t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
     postOne t actor now L' q = .ok (L', []) := by
-  obtain ⟨hs, hf, entry, hJ, ho, hu, hsc, hk, ha, hr, hc⟩ := postOne_accepted h hne
+  obtain ⟨hs, hf, entry, hJ, ho, hu, hsc, hk, ha, hr, hc, ht⟩ := postOne_accepted h hne
   unfold postOne
   rw [hs]
   unfold postDynamic
   rw [hJ, List.find?_append, hf, Option.none_or]
-  simp [List.find?, LedgerEntry.inAccount, ho, hu, hsc, hk, ha, hr, hc]
+  simp [List.find?, LedgerEntry.inAccount, ho, hu, hsc, hk, ha, hr, hc, ht]
 
 /-- The entries of an expiry step: each is the debit of the bucket it is keyed by, and that bucket is one the step is
     given. -/
@@ -3242,8 +3242,8 @@ end Strata
 /-! ## Slice 13: the limits of an accepted posting, the frame lemma and the balance invariant -/
 namespace Strata
 
-theorem postDynamic_new {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
-    {evs : List LedgerPosted} (h : postDynamic t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+theorem postDynamic_new {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting} {txn : Option String}
+    {evs : List LedgerPosted} (h : postDynamic t actor now L q txn = .ok (L', evs)) (hne : evs ≠ []) :
     let cur := L.accounts.find? (fun a => a.is q.owner q.unit q.scope)
     let before : Int := (cur.map (fun a => a.balance)).getD 0
     let last : Nat := (cur.map (fun a => a.lastSeq)).getD 0
@@ -3311,8 +3311,8 @@ end Strata
 namespace Strata
 
 /-- The state an accepted, non-replayed posting leaves. -/
-theorem postDynamic_state {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
-    {evs : List LedgerPosted} (h : postDynamic t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+theorem postDynamic_state {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting} {txn : Option String}
+    {evs : List LedgerPosted} (h : postDynamic t actor now L q txn = .ok (L', evs)) (hne : evs ≠ []) :
     ∃ (acct : LedgerAccount) (entry : LedgerEntry),
       acct.is q.owner q.unit q.scope = true ∧
       acct.balance = ((L.accounts.find? (fun a => a.is q.owner q.unit q.scope)).map (fun a => a.balance)).getD 0 + q.amount ∧
@@ -3388,8 +3388,8 @@ theorem find?_map_hit {α : Type} (p : α → Bool) (g : α → α) (l : List α
 
 /-- The pointwise frame: an accepted, non-replayed posting leaves every account other than the posted one as it was,
     and the posted account holds the balance before plus the amount. -/
-theorem postOne_frame {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
-    {evs : List LedgerPosted} (h : postOne t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+theorem postOne_frame {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting} {txn : Option String}
+    {evs : List LedgerPosted} (h : postOne t actor now L q txn = .ok (L', evs)) (hne : evs ≠ []) :
     (∀ o u s, ¬ (o = q.owner ∧ u = q.unit ∧ s = q.scope) →
         L'.accounts.find? (fun a => a.is o u s) = L.accounts.find? (fun a => a.is o u s)) ∧
     ((L'.accounts.find? (fun a => a.is q.owner q.unit q.scope)).map (fun a => a.balance) =
@@ -3455,8 +3455,8 @@ namespace Strata
     it; and the credits of the period of its entry, with the entry, are within the cap per period whenever the posting
     counts toward it (a credit, other than a reversal under an additions-only cap). The balance is the one the posted
     account holds afterwards. -/
-theorem postOne_limits {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
-    {evs : List LedgerPosted} (h : postOne t actor now L q = .ok (L', evs)) (hne : evs ≠ []) :
+theorem postOne_limits {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting} {txn : Option String}
+    {evs : List LedgerPosted} (h : postOne t actor now L q txn = .ok (L', evs)) (hne : evs ≠ []) :
     let cur := L.accounts.find? (fun a => a.is q.owner q.unit q.scope)
     let before : Int := (cur.map (fun a => a.balance)).getD 0
     let applying := applyingLimits t (accountLimit? L q.owner q.unit q.scope) q.unit
@@ -3541,8 +3541,8 @@ theorem pairwise_map_sameKey {l : List LedgerAccount} (g : LedgerAccount → Led
 end Strata
 namespace Strata
 
-theorem postDynamic_replay {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
-    {evs : List LedgerPosted} (h : postDynamic t actor now L q = .ok (L', evs)) (he : evs = []) : L' = L := by
+theorem postDynamic_replay {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting} {txn : Option String}
+    {evs : List LedgerPosted} (h : postDynamic t actor now L q txn = .ok (L', evs)) (he : evs = []) : L' = L := by
   subst he
   unfold postDynamic at h
   simp only [] at h
@@ -3569,8 +3569,8 @@ theorem uniq_of_pairwise {l : List LedgerAccount} (hl : l.Pairwise (fun a b => �
       · exact absurd (sameKey_symm hab) (hl.1 a ha')
       · exact ih hl.2 ha' hb'
 
-theorem postOne_sound {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting}
-    {evs : List LedgerPosted} (h : postOne t actor now L q = .ok (L', evs)) (hL : LedgerSound L) :
+theorem postOne_sound {t : Tenant} {actor : Principal} {now : Int} {L L' : LedgerState} {q : LedgerPosting} {txn : Option String}
+    {evs : List LedgerPosted} (h : postOne t actor now L q txn = .ok (L', evs)) (hL : LedgerSound L) :
     LedgerSound L' := by
   by_cases hne : evs = []
   · have : L' = L := by

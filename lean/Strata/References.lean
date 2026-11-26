@@ -942,6 +942,7 @@ theorem stepTenant_preserves_refs (t t' : Tenant) (p : Principal) (i : Intent)
     (hrefs : t.RefsOk) (hlax : i.laxChange = false) (h : stepTenant t p i = .ok t') : t'.RefsOk := by
   cases i with
   | postLedger now ps => obtain ⟨L, rfl⟩ := postLedgerT_ok_shape h; exact hrefs
+  | postLedgerTx now tx => obtain ⟨L, rfl⟩ := postLedgerTxT_ok_shape h; exact hrefs
   | expireLedger now u c => obtain ⟨L, rfl⟩ := expireLedgerT_ok_shape h; exact hrefs
   | changeSchema ev strict cs =>
     have hs : strict = true := by

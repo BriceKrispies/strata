@@ -113,6 +113,9 @@ structure LedgerEntry where
   causedBy : Option Nat
   time : Int
   corrects : Option Nat
+  /-- The transaction the entry is a leg of, as the canonical text of the request (`txnId`); none for a posting.
+      The kernel names a transaction by a hash of the same request. -/
+  txn : Option String := none
   deriving DecidableEq, Repr
 
 /-- The ledger state of a tenant (the kernel's `LedgerState`): the accounts, the journal, oldest entry first, and

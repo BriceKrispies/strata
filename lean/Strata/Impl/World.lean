@@ -50,6 +50,14 @@ theorem stepTenantI_inv (t : ITenant) (p : Principal) (i : Intent) (t' : ITenant
       simp only [hs, Except.map, Except.ok.injEq] at h
       subst h
       exact hinv
+  | postLedgerTx now tx =>
+    simp only [stepTenantI] at h
+    cases hs : postLedgerTxT t.abs p now tx with
+    | error e => simp [hs, Except.map] at h
+    | ok s =>
+      simp only [hs, Except.map, Except.ok.injEq] at h
+      subst h
+      exact hinv
   | expireLedger now u c =>
     simp only [stepTenantI] at h
     cases hs : expireLedgerT t.abs p now u c with

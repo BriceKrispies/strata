@@ -507,6 +507,10 @@ def decideTenant (h : Header) (n : Nat) (look : TypeId → RecordId → Option R
     match expireCore h.asTenant p now u c with
     | .error e => .error e
     | .ok r => .ok (.ledger r.1)
+  | .postLedgerTx now tx =>
+    match postTxCore h.asTenant p now tx with
+    | .error e => .error e
+    | .ok r => .ok (.ledger r.1)
 
 /-- A decision made through any source of key values. It reads keys of tenant `x` only. -/
 def decideOn (get : Key → Payload) (x : TenantId) (p : Principal) (i : Intent) :
@@ -680,6 +684,9 @@ theorem writeSettingT_header (t : Tenant) (p : Principal) (n : String) (lvl : Se
 theorem postLedgerCore_header (t : Tenant) (p : Principal) (now : Int) (ps : List LedgerPosting) :
     postLedgerCore t.header.asTenant p now ps = postLedgerCore t p now ps := rfl
 
+theorem postTxCore_header (t : Tenant) (p : Principal) (now : Int) (tx : LedgerTx) :
+    postTxCore t.header.asTenant p now tx = postTxCore t p now tx := rfl
+
 theorem expireCore_header (t : Tenant) (p : Principal) (now : Int) (u : Nat) (c : Int) :
     expireCore t.header.asTenant p now u c = expireCore t p now u c := rfl
 
@@ -746,6 +753,12 @@ theorem decideTenant_faithful (t : Tenant) (p : Principal) (i : Intent) :
     simp only [decideTenant, stepTenant, expireCore_header]
     unfold expireLedgerT
     cases hW : expireCore t p now u c with
+    | error e => simp [hW, Except.map]
+    | ok r => simp [hW, Except.map, Delta.apply]
+  | postLedgerTx now tx =>
+    simp only [decideTenant, stepTenant, postTxCore_header]
+    unfold postLedgerTxT
+    cases hW : postTxCore t p now tx with
     | error e => simp [hW, Except.map]
     | ok r => simp [hW, Except.map, Delta.apply]
   | create ty fs =>
