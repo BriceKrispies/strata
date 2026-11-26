@@ -5350,3 +5350,105 @@ member 1 103 3
 tenant 2 next=1 required=1
 type 2 required=
 end
+scenario h-segment-entry-on-create
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 20 required=1
+type 20 record 1 owner=100 v=1 1=s:p200 2=i:12
+type 20 record 2 owner=100 v=1 1=s:p201 2=i:9
+segment-member 1 seg=1 person=p200 version=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-exit-on-update-and-entry-on-delete-of-a-member
+ok
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-hop-limit-declines-the-trigger
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 20 required=1
+type 20 record 1 owner=100 v=1 1=s:p202 2=i:20
+segment-member 1 seg=1 person=p202 version=1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-define-refusals
+err unauthorized
+err unauthorized
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+ok
+state
+tenant 1 next=1 required=1
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-rebuild-after-a-predicate-change
+ok
+ok
+ok
+ok
+ok
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 20 required=1
+type 20 record 1 owner=100 v=1 1=s:p200 2=i:7
+type 20 record 2 owner=100 v=1 1=s:p201 2=i:4
+segment-member 1 seg=1 person=p200 version=2
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-remove-drops-memberships-without-events
+ok
+ok
+ok
+err not_found
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 20 required=1
+type 20 record 1 owner=100 v=2 1=s:p200 2=i:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-segment-member-change-re-evaluates-a-principal-predicate
+ok
+ok
+ok
+state
+tenant 1 next=2 required=1
+type 2 required=
+type 20 required=1
+type 20 record 1 owner=100 v=1 1=s:p101 2=i:9
+roles 1 0,1,2,3
+member 1 100 0
+member 1 101 0,2
+member 1 102 3
+member 1 103 3
+segment-member 1 seg=3 person=p101 version=1
+tenant 2 next=1 required=1
+type 2 required=
+end
