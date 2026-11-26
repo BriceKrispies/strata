@@ -217,7 +217,7 @@ pub enum Generator {
     Fixture,
     /// The generator of `lean_diff`: every intent of `Main.lean` (patch and expected versions
     /// included), references, lists, and the string, list and record bounds, one below, at and
-    /// above. Scenario `n` is `lean_diff::generate` of the case seed `n` of the base seed.
+    /// above. Scenario `n` is `lean_diff::generate_reads` (the scenario of `lean_diff::generate` with search and aggregate reads woven in) of the case seed `n` of the base seed.
     Full,
 }
 
@@ -258,7 +258,7 @@ impl ScenarioStream {
 /// One scenario of the full generator, named `f<n>`.
 fn write_full_scenario(seed: u64, n: usize, out: &mut String) {
     out.push_str(&format!("scenario f{n}\n"));
-    for op in crate::lean_diff::generate(crate::lean_diff::case_seed(seed, n)) {
+    for op in crate::lean_diff::generate_reads(crate::lean_diff::case_seed(seed, n)) {
         out.push_str(&op.render());
         out.push('\n');
     }

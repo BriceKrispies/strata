@@ -3952,3 +3952,264 @@ record 1 owner=200 v=1 1=s:oak 2=i:5 6=i:7 9=s:p200
 record 2 owner=201 v=1 1=s:ash 2=i:6 6=i:7 9=s:p201
 type 2 required=
 end
+scenario h-search-visible-and-hidden-fields
+ok
+ok
+ok
+ok
+ok
+ok
+examined 2
+next -
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 7=l:s:red,s:blue 9=s:p100 10=s:Hidden
+hit 1 3 matched=1 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:shown
+ok
+examined 1
+next -
+ok
+examined 1
+next -
+hit 1 3 matched=10 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:shown
+ok
+examined 1
+next -
+hit 1 1 matched=10 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 7=l:s:red,s:blue 9=s:p100 10=s:Hidden
+ok
+examined 1
+next -
+hit 1 1 matched=7 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 7=l:s:red,s:blue 9=s:p100 10=s:Hidden
+ok
+examined 2
+next -
+hit 4 4 matched=1 owner=100 v=1 1=s:open 2=i:2 3=s:urgent
+hit 4 5 matched=1 owner=100 v=1 1=s:open 2=i:0
+ok
+examined 1
+next -
+hit 4 4 matched=3 owner=100 v=1 1=s:open 2=i:2 3=s:urgent
+ok
+examined 1
+next -
+ok
+examined 2
+next -
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 7=l:s:red,s:blue 9=s:p100 10=s:Hidden
+hit 1 3 matched=1 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:shown
+ok
+examined 1
+next -
+ok
+examined 2
+next -
+ok
+examined 2
+next -
+ok
+examined 0
+next -
+err no_tenant
+state
+tenant 1 next=6 required=1
+record 1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 7=l:s:red,s:blue 9=s:p100 10=s:Hidden
+record 2 owner=100 v=1 1=s:elm 2=i:9 3=b:0 6=i:7 7=l:s:green 9=s:p100 10=s:pine
+record 3 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100 10=s:shown
+type 2 required=
+type 4 required=
+type 4 record 4 owner=100 v=1 1=s:open 2=i:2 3=s:urgent
+type 4 record 5 owner=100 v=1 1=s:open 2=i:0 3=s:quiet
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-search-refusals-and-paging
+ok
+ok
+ok
+ok
+err invalid_intent
+err invalid_intent
+err invalid_intent
+ok
+examined 4
+next -
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+hit 1 2 matched=1 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100
+hit 4 3 matched=3 owner=100 v=1 1=s:open 2=i:2 3=s:oak-note
+hit 4 4 matched=3 owner=100 v=1 1=s:open 2=i:3 3=s:oak-note-two
+err unknown_object
+err invalid_intent
+ok
+examined 0
+next -
+err invalid_intent
+err invalid_intent
+ok
+examined 4
+next -
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+hit 1 2 matched=1 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100
+hit 4 3 matched=3 owner=100 v=1 1=s:open 2=i:2 3=s:oak-note
+hit 4 4 matched=3 owner=100 v=1 1=s:open 2=i:3 3=s:oak-note-two
+ok
+examined 1
+next 1 1
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+ok
+examined 2
+next 1 2
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+hit 1 2 matched=1 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100
+ok
+examined 2
+next -
+hit 4 3 matched=3 owner=100 v=1 1=s:open 2=i:2 3=s:oak-note
+hit 4 4 matched=3 owner=100 v=1 1=s:open 2=i:3 3=s:oak-note-two
+ok
+examined 0
+next -
+ok
+examined 1
+next 1 1
+hit 1 1 matched=1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+err no_tenant
+state
+tenant 1 next=5 required=1
+record 1 owner=100 v=1 1=s:oak-tree 2=i:5 3=b:1 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:oakwood 2=i:7 3=b:1 6=i:7 9=s:p100
+type 2 required=
+type 4 required=
+type 4 record 3 owner=100 v=1 1=s:open 2=i:2 3=s:oak-note
+type 4 record 4 owner=100 v=1 1=s:open 2=i:3 3=s:oak-note-two
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-aggregate-items-by-rank
+ok
+ok
+ok
+ok
+ok
+scanned 4
+group - i:4
+err limit_exceeded scan-bound-exceeded
+ok
+scanned 4
+group - i:21
+ok
+scanned 4
+group - i:5
+ok
+scanned 4
+group - i:9
+ok
+scanned 4
+group - -
+top 2 i:9
+top 4 i:7
+ok
+scanned 4
+group b:0 i:1
+group b:1 i:3
+ok
+scanned 4
+group - i:21
+ok
+scanned 3
+group - i:12
+err invalid_intent
+err unknown_query
+err unknown_query
+err invalid_intent
+ok
+scanned 3
+group - i:3
+ok
+scanned 2
+group - i:2
+ok
+scanned 3
+group - i:14
+err invalid_intent
+ok
+scanned 0
+group - i:0
+ok
+scanned 0
+group - i:0
+err no_tenant
+state
+tenant 1 next=5 required=1
+record 1 owner=100 v=1 1=s:a 2=i:5 3=b:1 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:b 2=i:9 3=b:0 6=i:7 9=s:p100
+record 3 owner=100 v=1 1=s:c 3=b:1 6=i:7 9=s:p100
+record 4 owner=100 v=1 1=s:elm 2=i:7 3=b:1 6=i:7 9=s:p100
+type 2 required=
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-aggregate-hidden-by-field-rule-and-sum-overflow
+ok
+ok
+err limit_exceeded sum-overflow
+ok
+scanned 2
+group - i:2
+ok
+scanned 2
+group - i:9223372036854775807
+ok
+ok
+ok
+scanned 2
+group - i:11
+ok
+scanned 2
+group - i:2
+ok
+scanned 0
+group - i:0
+ok
+scanned 0
+group - -
+ok
+scanned 2
+group - i:8
+ok
+scanned 0
+group - -
+state
+tenant 1 next=5 required=1
+record 1 owner=100 v=1 1=s:a 2=i:9223372036854775807 6=i:7 9=s:p100
+record 2 owner=100 v=1 1=s:b 2=i:9223372036854775807 6=i:7 9=s:p100
+type 2 required=
+type 2 record 3 owner=100 v=1 4=i:3 5=b:1
+type 2 record 4 owner=100 v=1 4=i:8 5=b:1
+tenant 2 next=1 required=1
+type 2 required=
+end
+scenario h-aggregate-tickets-hidden-note
+ok
+ok
+ok
+scanned 2
+group - i:2
+ok
+scanned 2
+group - i:2
+ok
+scanned 1
+group - s:urgent
+ok
+scanned 1
+group - s:urgent
+ok
+scanned 1
+group - s:urgent
+state
+tenant 1 next=3 required=1
+type 2 required=
+type 4 required=
+type 4 record 1 owner=100 v=1 1=s:open 2=i:0 3=s:quiet
+type 4 record 2 owner=100 v=1 1=s:open 2=i:2 3=s:urgent
+tenant 2 next=1 required=1
+type 2 required=
+end
