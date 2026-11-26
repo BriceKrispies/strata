@@ -72,6 +72,11 @@ builds their module, without reading the statements (`specifications/README.md`)
 | | `lax_unique_change_can_break_wf` | The exclusion of the non-strict unique change is necessary: a lax `setUnique` over two records that agree leaves a tenant that is not well formed |
 | | `strict_schema_change_conforms`, `schemaViolated_false` | An accepted strict schema change (`setRequired`, `setUnique`, `defineUnique`, and any strict change refused by the same check) leaves the whole tenant conforming: every record conforms to the resulting schema, and `UniqueRecords` holds for it, including records and unique values a lax change left behind |
 | | `setUnique_records`, `defineUnique_records`, `stepTenant_conform_ids` | A schema change leaves the records as they are, and every accepted step keeps them conforming and their ids below the counter |
+| Schema change in general (slice 11a, `lean/Strata/SchemaChange.lean`, not yet an intent of `step`) | `changeSchemaT_unauthorized`, `changeSchemaT_conflict`, `changeSchemaT_empty`, `changeSchemaT_limit` | The envelope in the kernel's check order: a caller who may not manage the schema is `unauthorized`; an expected version that is not the schema version is `schemaConflict`; no changes is `invalidIntent`, more than 200 is `limitExceeded` |
+| | `applyChanges_cons`, `changeSchemaT_ok`, `applyChanges_singleton`, `changeSchemaT_valid`, `changeSchemaT_rules` | An accepted schema change raises the schema version by exactly one and its object types are the changes applied in order; the schema it leaves satisfies the validity predicate (any `valid`, and the concrete `schemaRulesOk`) |
+| | `changeSchemaT_strict_not_violated`, `changeSchemaT_strict_conforms` | An accepted strict change leaves every record of the touched types conforming to the schema it leaves, and its unique fields and composite constraints holding (the slice 3 result, generalised to the change list) |
+| | `removeField_drops`, `changeSchemaT_removeField`, `lookup_putTypeList_self` | Removing a field defines nothing of it on its type and drops its stored values from every record of the type |
+| | `removeType_refused_with_records`, `removeType_ok_empty`, `removeType_deleted_gone`, `lookup_filter_removed` | Removing an object type with records is refused `migrationRejected` unless the change deletes them; an accepted removal without deletion had no records, and one with deletion leaves no type of that name |
 | Expressions (slice 5) | `and_null_false`, `and_null_true`, `and_null_null`, `and_true_null`, `and_true_true`, `and_true_false`, `or_null_true`, `or_null_false`, `or_false_null`, `or_false_true`, `not_null`, `isNull_null`, `cmp_null_operand`, `cmp_int_lt`, `cmp_str_ge`, `cmp_ref_eq` | The truth tables of the three-valued connectives, comparisons and `not`, decided by evaluation on closed terms: `null` is contagious and the operands of `and`/`or` are Kleene |
 | | `and_false_shortcircuit`, `or_true_shortcircuit`, `and_false_left`, `or_true_left`, `and_null_left_nonfalse`, `and_error_left` | A decisive operand decides before the other is looked at, so an evaluation error there is not seen (`false and x` is `false` whatever `x` is); an error in an operand that is looked at is an error of the connective |
 | | `and_null_error`, `and_int_error`, `or_false_error`, `cmp_kind_error`, `cmp_bool_order_error`, `not_int` | A comparison of two kinds, an ordering of booleans, and a non-boolean connective operand are evaluation errors |
@@ -463,9 +468,9 @@ From `transition::change_schema`, `plan_migration`, `apply_change` and `schema::
 
 | Decision | Refusal | Model | Slice |
 |---|---|---|---|
-| The caller may not manage the schema | `Unauthorized` | covered for owner only (`setRequired`) | 0, 6 |
-| `expected_version` given and not the schema version | `SchemaConflict` | not covered | 11 |
-| No changes; more than 200 | `InvalidIntent`, `LimitExceeded` | not covered | 11 |
+| The caller may not manage the schema | `Unauthorized` | covered for owner only (`setRequired`); the general change in the model (`changeSchemaT`, slice 11a) | 0, 6 |
+| `expected_version` given and not the schema version | `SchemaConflict` | covered in the model (`changeSchemaT_conflict`, slice 11a); not yet an intent of `step` | 11 |
+| No changes; more than 200 | `InvalidIntent`, `LimitExceeded` | covered in the model (`changeSchemaT_empty`, `changeSchemaT_limit`, slice 11a) | 11 |
 | Definition authority: trigger and automation changes need `automations-define` and conferrable run-as roles; settings `setting-define`; separations of duties `separations-define`; ledger `ledger-configure`; products `bundle-install`; an operation's definer must hold the powers its steps use | `Unauthorized` | not covered | 11 (with 12 to 15) |
 | A change to an entity an installed product owns, outside its upgrade or removal | `InvalidSchema` | not covered | 11 |
 | A change that does not apply: its object, field, constraint, role, policy, workflow, query, view, trigger, automation, operation, unique, setting, capability, template, token, product or UI element is missing; an automation still named by a trigger; a built-in role redefined | `InvalidSchema` | not covered | 11 |
@@ -476,7 +481,7 @@ From `transition::change_schema`, `plan_migration`, `apply_change` and `schema::
 | Settings effects, such as a setting retyped while overrides exist | `InvalidSchema` | not covered | 12 |
 | `Reject` and a record violates the new schema, constraints included | `MigrationRejected` | covered for making a field required (`strict`) and for the constraints of the touched types (slice 5); not for a unique field, which slice 3 covers | 0, 3, 5, 11 |
 | `Grandfather`: violating records stay, counted in the event | | covered for making a field required (`lax`), and the count is the number of records of the touched types that violate the schema the change leaves (`violatedCount`, `transition_setRequired`); the count's agreement with the kernel's per-record validation is checked by the differential run, not proved | 0, 9 |
-| An object type removed while it has records and the change does not delete them; a role removed while held | `MigrationRejected`, `InvalidSchema` | not covered | 11 |
+| An object type removed while it has records and the change does not delete them; a role removed while held | `MigrationRejected`, `InvalidSchema` | object type: covered in the model (`removeType_refused_with_records`, slice 11a); role: not covered | 11 |
 | Accepted: the new schema at version + 1, rewritten and deleted records, `SchemaChanged` | | partly: the required flag | 11 |
 
 ### Authorization (`rules::authorize`, `roles_of`, `may_confer`)
@@ -669,7 +674,7 @@ total and computable, adds its intents to `lean/Main.lean` and its properties to
 | **8 (done)** | Workflows: the workflow of an object type (field, initial states, transitions with guards and assignments), the create and update decisions, the state check and the invariant (`lean/Strata/Workflows.lean`); the executable kernels, the codec (Lean and Rust), the harness with the ticket type (id 4), the h- scenarios and the generator cover them (see the slice 8 review note). Approvals are not in this slice: they decide automation steps, which slice 15 adds | 5, 6 |
 | **9 (done)** | Events and revisions: event bodies, sequence numbers, the revision, `Publish` effects, the grandfathered count (`lean/Strata/EventProofs.lean`, see the slice 9 review note) | 1 to 8, for their content |
 | 10 (done, with the proof gaps of the slice 10 review notes) | Reads: visibility, field read rules, record reads, named queries (filter, order, pages) (`lean/Strata/Reads.lean`), text search (`lean/Strata/Search.lean`) and aggregates (`lean/Strata/Aggregates.lean`) are in the model, with the executable versions (`lean/Strata/Impl/Read.lean`, `Impl/Search.lean`, `Impl/Aggregates.lean`), the harness and the generator; the codec of the read declarations is not, and the sum, minimum, maximum and top-list equations over rows are not proved | 5, 6 |
-| 11 | Schema change in general: the change kinds, `SchemaConflict`, the abstract validity predicate, `Reject` and `Grandfather`, object and role removal, and the evolution model's acceptance as the rule for breaking changes | 3 to 8 |
+| 11 (part a done in the model: the envelope, define and remove field, define and remove object type, the validity predicate with its concrete rules, the strict and lax checks, all in `lean/Strata/SchemaChange.lean`; not yet: the intent in `step`, retype with value migration, role and other entity kinds, the events, the executable kernels, the codec of the change list, the harness and the generator restriction, and the evolution model's acceptance as the rule for breaking changes) | 3 to 8 |
 | 12 | Settings | 6, 7 |
 | 13 | Ledger | 6 |
 | 14 | Operations | 1 to 8, 13 |
@@ -1392,6 +1397,54 @@ is `crates/kernel/src/search.rs` and `aggregates.rs`, with `World::search` and `
   permissions and policies by a schema change (slice 11); `hasRole`, the clock, a condition that reads
   through a reference, and the capability-gated changes (slices 11 to 13); reads, whose visibility uses
   the same decision (slice 10).
+
+### Slice 11 review note (part a): what was abstracted
+
+This is the first part of slice 11, the schema change in general, in `lean/Strata/SchemaChange.lean` (the change
+and its check order) and `lean/Strata/SchemaChangeProofs.lean` (its theorems). The intent is not yet in `step`.
+
+- **Not yet an intent.** `changeSchemaT` takes the tenant, the principal, the strictness, the expected version and the
+  change list. `Intent` has no `ChangeSchema` constructor, so `step`, the events, the executable kernels, the codec
+  of intents, the harness and the generator are unchanged. The generator restriction on `require` and `unique` (only
+  fields 1 to 4, no undeclared fields) is still in place: the model's `setRequired` and `setUnique` still carry no field
+  type. The model's `setRequired`, `setUnique` and `defineUnique` are not yet special cases of `changeSchemaT`; each
+  keeps its own decision.
+- **The validity predicate is a parameter.** `changeSchemaT` and `applyChanges` take `valid : List (TypeId × ObjType)
+  → Bool`, so every theorem holds for any predicate that stands for `schema::problems`. The concrete instance,
+  `schemaRulesOk`, covers the rules the model's changes can trigger: a field refers to an object type of the tenant, a
+  unique field is not a list, a composite constraint names declared fields. The other rules of `schema::problems`
+  (counts, expressions, retention, workflows, queries, views, triggers, automations, operations, the other entity kinds)
+  are not modelled.
+- **Check order.** The model asks, in order: the permission (`unauthorized`), the expected version (`schemaConflict`),
+  no changes (`invalidIntent`), more than `maxChanges` (`limitExceeded`), the changes applied in order and the result
+  validated (`applyChanges`: `invalidSchema` for a change that does not apply or a result the predicate refuses,
+  `migrationRejected` for a removed type with records), then a strict change's violation check (`migrationRejected`).
+  The kernel also checks products, ledger removals, pins, the evolution classification, duplicate unique values and the
+  rewrites of dependents before its violation check; none of these is modelled.
+- **Refusal leaves the tenant unchanged structurally.** `changeSchemaT` returns `Except`, and an error carries no
+  tenant, so a refused change cannot leave a changed tenant behind. No separate theorem is stated for that; the
+  world-level statement belongs with the intent.
+- **Redefinition keeps stored values.** A `defineField` on an existing field replaces its definition and keeps the
+  stored values; conformance then decides (`Reject` refuses, `Grandfather` keeps the records and the count of
+  violating records is the grandfathered count, `violatedCount`). The kernel's retype re-encodes stored values (MIG-560)
+  and refuses those that do not round-trip (`MigrationRejected`); that is not modelled.
+- **Removing a field** drops its definition from its type and its values from every record of the type
+  (`removeField_drops`, `changeSchemaT_removeField`). The kernel's dependency rules for a removed field (dependents
+  that read it, pins) are not modelled.
+- **Removing an object type.** A type with records is refused `migrationRejected` unless the change deletes them; a
+  field of another type that still refers to the removed type fails the validity predicate (`invalidSchema`). Records
+  of other types that referred to the removed type's records are not cleared by the model; the validity predicate
+  refuses such a schema, so an accepted removal leaves no such reference.
+- **Events and the grandfathered count** of a change list are not wired to `eventBodies`; `changeGrandfathered`
+  is the count the event would carry.
+- **Error code.** `Err.schemaConflict` is added (tag `19` in `Codec/Boundary.lean`, `schema_conflict` in `Main.lean`),
+  mirrored in `crates/lean-kernel-ffi/src/codec.rs` (`Refusal::SchemaConflict`, tag `19`) and
+  `crates/verification/src/lean.rs` (`ErrorKind::SchemaConflict`). The Rust test decoder in
+  `crates/lean-kernel-ffi/tests/lean_kernel_ffi_it.rs` now names tags `18` and `19` and panics on any other tag, where
+  it previously mapped every other tag to `WorkflowViolation`.
+- **Existing outcomes.** No existing intent changed. `lean/fixtures/expected.txt` is not edited; the outcome lines of the
+  committed scenarios match it under the three modes (`strata_model`, `--impl`, `--indexed`), and the three full outputs
+  are identical.
 
 ## What covers the rest
 
